@@ -8,6 +8,9 @@ pub trait IFileSystem {
   /// Ouvre le fichier.
   fn open<'fs>(&'fs self, path: &str) -> Result<Self::File<'fs>>;
 
+  /// Supprime le fichier/répertoire
+  fn delete(&self, path: &str) -> std::io::Result<()>;
+
   /// Retourne le répertoire à partir du chemin.
   fn directory(&self, pth: &str) -> String;
   
