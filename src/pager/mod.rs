@@ -1,21 +1,23 @@
 use std::{
     cell::RefCell,
-    fs::File,
     io::{self, Read, Seek, Write},
     ptr::NonNull,
 };
 
-use cache::PageCell;
+use cache::{PageCell, PagerCache};
 use page::{MutPage, PageId, RefPage};
 use stress::FsPagerStress;
+use transaction::PagerTransaction;
 
 use crate::vfs::IFileSystem;
 
 pub mod page;
+mod transaction;
 mod cache;
 mod stress;
 
 pub const DEFAULT_PAGER_CACHE_SIZE: usize = 5_000_000;
+pub const PAGER_HEADER_RESERVED: u64 = 100;
 
 #[derive(Debug)]
 pub enum PagerError {
@@ -35,10 +37,8 @@ impl From<io::Error> for PagerError {
 pub type PagerResult<T> = Result<T, PagerError>;
 
 pub trait IPager {
-    /// Flush tout ce qui reste en mémoire.
-    fn flush(&self) -> PagerResult<()>;
-    /// Flush la page.
-    fn flush_page(&self, page: &MutPage<'_>) -> PagerResult<()>;
+    /// Commit les pages modifiées.
+    fn commit(&self) -> PagerResult<()>;
     /// Crée une nouvelle page.
     fn new_page(&mut self) -> PagerResult<MutPage<'_>>;
     /// Récupère une page existante.
@@ -63,35 +63,24 @@ pub struct Pager<Fs: IFileSystem> {
     dirty: RefCell<bool>,
     page_size: usize,
     page_count: usize,
-    cache: cache::PagerCache,
+    cache: PagerCache,
     path: String,
     fs: Fs,
 }
 
 impl<Fs> IPager for Pager<Fs>
 where
-    Fs: IFileSystem,
+    Fs: IFileSystem + Clone,
 {
+    fn commit(&self) -> PagerResult<()>{
+        let tx = PagerTransaction::new(
+            &format!("{0}-tx", self.path), 
+            self.fs.clone(),
+            self.page_size
+        );
 
-    fn flush(&self) -> PagerResult<()> {
-        todo!()
-    }
-
-    /// Flush la page
-    fn flush_page(&self, page: &MutPage<'_>) -> PagerResult<()> {
-        if *self.dirty.borrow() {
-            self.flush_pager_header()?;
-        }
-
-        if page.is_dirty() {
-            let id = page.id();
-            let loc = (self.page_size * id).try_into().unwrap();
-            let mut file = File::open(&self.path)?;
-            file.seek(std::io::SeekFrom::Start(loc))?;
-            file.write_all(page)?;
-            page.drop_dirty_flag();
-        }
-        Ok(())
+        let mut file = self.fs.open(&self.path)?;
+        tx.commit(&mut file, self.cache.iter_pages())
     }
 
     /// Crée une nouvelle page
@@ -157,7 +146,7 @@ where
         }
 
         // Cache success
-        if let Some(page_cell) = self.cache.get(&id)? {
+        if let Some(page_cell) = self.cache.try_get(&id)? {
             return Ok(page_cell);
         }
 

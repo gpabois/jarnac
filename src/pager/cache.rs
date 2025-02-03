@@ -1,7 +1,10 @@
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout}, cell::RefCell, collections::HashMap, mem::MaybeUninit, ptr::NonNull
+    alloc::{alloc_zeroed, dealloc, Layout}, 
+    cell::RefCell, 
+    collections::HashMap, 
+    mem::MaybeUninit, 
+    ptr::NonNull
 };
-
 
 use itertools::Itertools;
 
@@ -35,8 +38,20 @@ impl Drop for PagerCache {
     }
 }
 
+pub(super) struct PagerCacheIter<'cache>{
+    ids: Vec<PageId>,
+    cache: &'cache PagerCache
+}
+
+impl Iterator for PagerCacheIter<'_> {
+    type Item = PagerResult<NonNull<PageCell>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.ids.pop().map(|pid| self.cache.get(&pid))
+    }
+}
+
 impl PagerCache {
-    /// Instantiate a new page cache
     pub fn new<Ps: IPagerStress + 'static>(cache_size: usize, page_size: usize, stress_strategy: Ps) -> Self {
         unsafe {
             let layout = Layout::from_size_align(
@@ -60,14 +75,25 @@ impl PagerCache {
         }
     }
 
+    /// Itère les pages cachées/déchargées
+    pub fn iter_pages(&self) -> PagerCacheIter<'_> {
+        PagerCacheIter { ids: self.pages.borrow().keys().copied().collect(), cache: self }
+    }
+
     /// Libère une entrée du cache
-    pub fn free(&self, id: &PageId) {
+    fn free(&self, id: &PageId) {
       let cell = self.pages.borrow_mut().remove(id).unwrap();
       self.free_list.borrow_mut().push(cell);
     }
 
+
+    pub fn get(&self, pid: &PageId) -> PagerResult<NonNull<PageCell>> {
+        self.try_get(pid).map(|opt| opt.unwrap())
+    }
+    
+
     /// Récupère la page si elle est cachée.
-    pub fn get(&self, pid: &PageId) -> PagerResult<Option<NonNull<PageCell>>> {
+    pub fn try_get(&self, pid: &PageId) -> PagerResult<Option<NonNull<PageCell>>> {
         // La page est en cache, on la renvoie
         if let Some(stored) = self.pages.borrow().get(&pid).copied() {
             return Ok(Some(stored));
@@ -77,7 +103,7 @@ impl PagerCache {
         if self.stress.contains(pid) {
             let mut ptr = self.reserve(pid)?;
             unsafe {
-                let cell = ptr.as_mut();
+                let cell: &mut PageCell = ptr.as_mut();
                 self.stress.retrieve(pid, cell)?;
             }
         }
