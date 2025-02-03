@@ -46,12 +46,6 @@ impl<'pager> RefPage<'pager> {
         }
     }
 
-    pub(super) fn drop_dirty_flag(&self) {
-        unsafe {
-            self.cell.as_ptr().as_mut().unwrap().dirty = false;
-        }
-    }
-
     pub fn is_dirty(&self) -> bool {
         unsafe { self.cell.as_ref().dirty }
     }

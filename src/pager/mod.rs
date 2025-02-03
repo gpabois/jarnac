@@ -7,11 +7,13 @@ use std::{
 
 use cache::PageCell;
 use page::{MutPage, PageId, RefPage};
+use stress::FsPagerStress;
 
 use crate::vfs::IFileSystem;
 
-pub mod cache;
 pub mod page;
+mod cache;
+mod stress;
 
 pub const DEFAULT_PAGER_CACHE_SIZE: usize = 5_000_000;
 
@@ -19,6 +21,7 @@ pub const DEFAULT_PAGER_CACHE_SIZE: usize = 5_000_000;
 pub enum PagerError {
     CacheFull,
     UnexistingPage,
+    PageAlreadyCached,
     PageAlreadyBorrowed,
     IoError(io::Error),
 }
@@ -60,7 +63,7 @@ pub struct Pager<Fs: IFileSystem> {
     dirty: RefCell<bool>,
     page_size: usize,
     page_count: usize,
-    cache: RefCell<cache::PagerCache>,
+    cache: cache::PagerCache,
     path: String,
     fs: Fs,
 }
@@ -69,6 +72,7 @@ impl<Fs> IPager for Pager<Fs>
 where
     Fs: IFileSystem,
 {
+
     fn flush(&self) -> PagerResult<()> {
         todo!()
     }
@@ -92,15 +96,10 @@ where
 
     /// Crée une nouvelle page
     fn new_page<'pager>(&'pager mut self) -> PagerResult<MutPage<'pager>> {
-        let id = self.page_count;
+        let pid = self.page_count;
 
-        // Cache full
-        if self.cache.borrow().is_full() {
-            // Free some cache space
-            self.free_cache_space()?;
-        }
-
-        let mut page = MutPage::try_acquire(self.cache.borrow_mut().reserve(id)?)?;
+        let cell = self.cache.reserve(&pid)?;
+        let mut page = MutPage::try_acquire(cell)?;
         page.fill(0);
 
         self.page_count += 1;
@@ -125,9 +124,21 @@ where
     Fs: IFileSystem,
 {
     /// Crée un nouveau pager
-    pub fn new(fs: Fs, path: &str, page_size: usize, options: PagerOptions) -> Self {
+    pub fn new(fs: Fs, path: &str, page_size: usize, options: PagerOptions) -> Self 
+    where Fs: Clone + 'static
+    {
         let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
-        let cache = RefCell::new(cache::PagerCache::new(cache_size, page_size));
+
+        // Instantie le système de cache
+        let cache = cache::PagerCache::new(
+            cache_size, 
+            page_size,
+            FsPagerStress::new(
+              fs.clone(), 
+              &format!("{path}-pcache"),
+              page_size
+            )
+        );
 
         Self {
             fs,
@@ -146,34 +157,15 @@ where
         }
 
         // Cache success
-        if let Some(page_cell) = self.cache.borrow().get(&id) {
+        if let Some(page_cell) = self.cache.get(&id)? {
             return Ok(page_cell);
         }
 
-        // Cache miss
-        if self.cache.borrow().is_full() {
-            // Free some cache space
-            self.free_cache_space()?;
-        }
-
-        // Load the content of the page
-        let mut page = MutPage::try_acquire(self.cache.borrow_mut().reserve(*id)?)?;
+        // Load the content of the 
+        let cell = self.cache.reserve(id)?;
+        let mut page = MutPage::try_acquire(cell)?;
         self.load_page_content(&mut page)?;
         Ok(page.into_cell())
-    }
-
-    /// Libère de l'espace cache pour stocker de nouvelles pages.
-    fn free_cache_space(&self) -> PagerResult<()> {
-        if let Some(candidate) = self.cache.borrow_mut().find_freeable_candidate() {
-            let page = self.get_page(candidate)?;
-            self.flush_page(&page)?;
-            drop(page);
-
-            self.cache.borrow_mut().free(&candidate);
-            return Ok(());
-        }
-
-        return Err(PagerError::CacheFull);
     }
 
     /// Charge le contenu de la page depuis le système de stockage persistant
@@ -213,15 +205,13 @@ mod tests {
     #[test]
     pub fn test_new_pager() {
         let vfs = Rc::new(InMemoryFs::new());
-        let mut pager = Pager::new(vfs, "test", 4_000, PagerOptions::default());
+        let mut pager = Pager::new(vfs, "test", 4_096, PagerOptions::default());
 
         {
             let mut page = pager.new_page().unwrap();
             let mut cursor = Cursor::new(page.deref_mut());
             cursor.write_all(&0xD00D_u16.to_le_bytes()).unwrap();
         }
-
-        pager.flush();
     }
 }
 

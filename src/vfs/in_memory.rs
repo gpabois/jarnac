@@ -11,6 +11,14 @@ impl IFileSystem for Rc<InMemoryFs> {
   fn open<'fs>(&'fs self, path: &str) -> io::Result<Self::File<'fs>> {
     self.deref().open(path)
   }
+  
+  fn directory(&self, pth: &str) -> String {
+    self.deref().directory(pth)
+  }
+  
+  fn join(&self, lhs: &str, rhs: &str) -> String {
+    self.deref().join(lhs, rhs)  
+  }
 }
 
 impl InMemoryFs {
@@ -31,5 +39,16 @@ impl IFileSystem for InMemoryFs {
       
       map.get_mut(path).map(Cursor::new).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not found"))
     }
+  }
+  
+  fn directory(&self, pth: &str) -> String {
+    let opth: String = pth.to_owned();
+    let mut segments: Vec<_> = opth.split("/").collect();
+    segments.pop();
+    segments.join("/")
+  }
+  
+  fn join(&self, lhs: &str, rhs: &str) -> String {
+    Vec::<String>::from([lhs.to_owned(), rhs.to_owned()]).join("/")
   }
 }

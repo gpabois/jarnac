@@ -1,11 +1,11 @@
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
-    collections::HashMap,
-    mem::MaybeUninit,
-    ptr::NonNull,
+    alloc::{alloc_zeroed, dealloc, Layout}, cell::RefCell, collections::HashMap, mem::MaybeUninit, ptr::NonNull
 };
 
-use super::{page::PageId, PagerError, PagerResult};
+
+use itertools::Itertools;
+
+use super::{page::PageId, stress::{BoxedPagerStress, IPagerStress}, PagerError, PagerResult};
 
 pub(super) struct PagerCache {
     /// The memory layout of the allocated space
@@ -15,13 +15,16 @@ pub(super) struct PagerCache {
     /// The size of the cache
     size: usize,
     /// The tail of allocated space
-    tail: usize,
+    tail: RefCell<usize>,
     /// The size of a page
     page_size: usize,
     /// Free page cells
-    free_list: Vec<NonNull<PageCell>>,
+    free_list: RefCell<Vec<NonNull<PageCell>>>,
     /// Current cached pages
-    stored: HashMap<PageId, NonNull<PageCell>>,
+    pages: RefCell<HashMap<PageId, NonNull<PageCell>>>,
+    /// Stratégie de gestion du stress mémoire
+    /// Employé si le cache est plein
+    stress: BoxedPagerStress
 }
 
 impl Drop for PagerCache {
@@ -34,7 +37,7 @@ impl Drop for PagerCache {
 
 impl PagerCache {
     /// Instantiate a new page cache
-    pub fn new(cache_size: usize, page_size: usize) -> Self {
+    pub fn new<Ps: IPagerStress + 'static>(cache_size: usize, page_size: usize, stress_strategy: Ps) -> Self {
         unsafe {
             let layout = Layout::from_size_align(
                 cache_size,
@@ -48,76 +51,116 @@ impl PagerCache {
                 layout,
                 ptr,
                 size: cache_size,
-                tail: 0,
+                tail: RefCell::new(0),
                 page_size,
-                free_list: Vec::default(),
-                stored: HashMap::default(),
+                free_list: RefCell::default(),
+                pages: RefCell::default(),
+                stress: BoxedPagerStress::new(stress_strategy)
             };
         }
     }
-    /// Le cache est plein.
-    pub fn is_full(&self) -> bool {
-        self.tail >= self.size && self.free_list.len() == 0
-    }
-
-    /// Trouve un candidat à la libération
-    pub(super) fn find_freeable_candidate(&self) -> Option<PageId> {
-        self.stored
-            .values()
-            .map(|cell| unsafe { cell.as_ref() })
-            .filter(|cell| cell.rw_counter == 0)
-            .map(|cell| cell.id)
-            .next()
-    }
 
     /// Libère une entrée du cache
-    pub fn free(&mut self, id: &PageId) {
-        let cell = self.stored.remove(id).unwrap();
-        self.free_list.push(cell);
+    pub fn free(&self, id: &PageId) {
+      let cell = self.pages.borrow_mut().remove(id).unwrap();
+      self.free_list.borrow_mut().push(cell);
     }
 
     /// Récupère la page si elle est cachée.
-    pub fn get(&self, id: &PageId) -> Option<NonNull<PageCell>> {
-        self.stored.get(id).copied()
-    }
-
-    /// Réserve de l'espace pour stocker une page.
-    pub fn reserve(&mut self, id: PageId) -> PagerResult<NonNull<PageCell>> {
-        if let Some(stored) = self.stored.get(&id).copied() {
-            return Ok(stored);
+    pub fn get(&self, pid: &PageId) -> PagerResult<Option<NonNull<PageCell>>> {
+        // La page est en cache, on la renvoie
+        if let Some(stored) = self.pages.borrow().get(&pid).copied() {
+            return Ok(Some(stored));
         }
 
-        if let Some(mut free) = self.free_list.pop() {
+        // La page a été déchargée, on va essayer de la récupérer.
+        if self.stress.contains(pid) {
+            let mut ptr = self.reserve(pid)?;
+            unsafe {
+                let cell = ptr.as_mut();
+                self.stress.retrieve(pid, cell)?;
+            }
+        }
+
+        return Ok(None)
+    }
+
+    /// Libère de la place :
+    /// soit en libérant une entrée du cache contenant une page propre.
+    /// soit en déchargeant le stress mémoire quelque part d'autre.
+    fn free_some_space(&self) -> PagerResult<NonNull<PageCell>> {
+        // On trouve une page propre non empruntée
+        if let Some(cleaned) = self.pages.borrow().values().filter(|cell| unsafe {cell.as_ref().dirty  == false && cell.as_ref().rw_counter == 0}).sorted_by_key(|cell| unsafe {cell.as_ref().use_counter}).copied().next() {
+            unsafe {
+                self.free(&cleaned.as_ref().id);
+            }
+
+            return Ok(cleaned)
+        }
+        // on va décharger une page en mémoire
+        if let Some(mut dischargeable) = self.pages.borrow().values().filter(|cell| unsafe {cell.as_ref().rw_counter == 0}).sorted_by_key(|cell| unsafe {cell.as_ref().use_counter}).copied().next() {
+            unsafe {
+                let cell = dischargeable.as_mut();
+                self.stress.discharge(&cell.id, cell)?;
+                self.free(&cell.id);
+            }
+
+            return Ok(dischargeable);
+        }
+
+        return Err(PagerError::CacheFull);
+    }
+
+    /// Réserve de l'espace dans le cache pour stocker une page.
+    pub fn reserve(&self, pid: &PageId) -> PagerResult<NonNull<PageCell>> {
+        // Déjà caché
+        if self.pages.borrow().contains_key(pid) {
+            return Err(PagerError::PageAlreadyCached)
+        }      
+
+        // On a un slot de libre
+        if let Some(mut free) = self.free_list.borrow_mut().pop() {
             unsafe {
                 let cell = free.as_mut();
                 cell.dirty = false;
                 cell.use_counter = 0;
                 cell.rw_counter = 0;
-                self.stored.insert(id, free);
+                self.pages.borrow_mut().insert(*pid, free);
                 return Ok(free);
             }
         }
 
         let new_tail = self.page_size + size_of::<PageCell>();
 
+        // Le cache est plein, on est dans un cas de stress mémoire
         if new_tail >= self.size {
-            return Err(PagerError::CacheFull);
+            unsafe {
+                let mut ptr = self.free_some_space()?;
+                let cell = ptr.as_mut();
+                cell.content.as_mut().fill(0);
+                cell.id = *pid;
+                cell.dirty = false;
+                cell.rw_counter = 0;
+                cell.use_counter = 0;
+                return Ok(ptr)
+            }
         }
 
+        // On ajoute une nouvelle entrée dans le cache
         unsafe {
-            let ptr = self.ptr.add(self.size);
+            let ptr = self.ptr.add(*self.tail.borrow());
             let mut cell_ptr = ptr.cast::<MaybeUninit<PageCell>>();
             let content =
                 NonNull::slice_from_raw_parts(ptr.add(size_of::<PageCell>()), self.page_size);
             let cell_ptr = NonNull::new_unchecked(cell_ptr.as_mut().write(PageCell {
-                id,
+                id: *pid,
                 content,
                 dirty: false,
                 use_counter: 0,
                 rw_counter: 0,
             }));
-            self.stored.insert(id, cell_ptr);
-
+            self.pages.borrow_mut().insert(*pid, cell_ptr);
+            *self.tail.borrow_mut() = new_tail;
             return Ok(cell_ptr);
         }
     }
