@@ -1,12 +1,44 @@
 use std::{
-    marker::PhantomData,
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
+    fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}, ptr::NonNull
 };
 
-use super::{cache::PageCell, PagerResult};
+use super::{cache::PageCell, error::PagerError, PagerResult};
 
-pub type PageId = usize;
+pub type PageId = u64;
+pub type PageLocation = u64;
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageKind {
+    Free = 0x00
+}
+
+impl Display for PageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PageKind::Free => write!(f, "free"),
+        }
+    }
+}
+
+impl PageKind {
+    pub fn assert(&self, to: PageKind) -> PagerResult<()> {
+        (*self == to).then(|| ()).ok_or_else(|| PagerError::WrongPageKind {expected: to, got: *self})
+    }
+}
+
+impl TryFrom<u8> for PageKind {
+    type Error = PagerError;
+    
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Free),
+            _ => Err(PagerError::InvalidPageKind)
+        }
+    }
+
+    
+}
 
 pub struct RefPage<'pager> {
     _pht: PhantomData<&'pager ()>,
@@ -33,7 +65,7 @@ impl<'pager> RefPage<'pager> {
     pub(super) fn try_acquire(mut cell: NonNull<PageCell>) -> PagerResult<Self> {
         unsafe {
             if cell.as_ref().rw_counter < 0 {
-                return Err(crate::pager::PagerError::PageAlreadyBorrowed);
+                return Err(PagerError::PageAlreadyBorrowed);
             }
 
             cell.as_mut().rw_counter += 1;
@@ -90,7 +122,7 @@ impl<'pager> MutPage<'pager> {
     pub(super) fn try_acquire(mut cell: NonNull<PageCell>) -> PagerResult<Self> {
         unsafe {
             if cell.as_ref().rw_counter != 0 {
-                return Err(crate::pager::PagerError::PageAlreadyBorrowed);
+                return Err(PagerError::PageAlreadyBorrowed);
             }
 
             cell.as_mut().rw_counter = -1;
@@ -100,12 +132,6 @@ impl<'pager> MutPage<'pager> {
                 _pht: PhantomData,
                 cell,
             })
-        }
-    }
-
-    pub(super) fn drop_dirty_flag(&self) {
-        unsafe {
-            self.cell.as_ptr().as_mut().unwrap().dirty = false;
         }
     }
 

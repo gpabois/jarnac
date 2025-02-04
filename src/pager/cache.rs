@@ -8,7 +8,7 @@ use std::{
 
 use itertools::Itertools;
 
-use super::{page::PageId, stress::{BoxedPagerStress, IPagerStress}, PagerError, PagerResult};
+use super::{page::PageId, stress::{BoxedPagerStress, IPagerStress}, error::PagerError, PagerResult};
 
 pub(super) struct PagerCache {
     /// The memory layout of the allocated space
@@ -181,6 +181,7 @@ impl PagerCache {
             let cell_ptr = NonNull::new_unchecked(cell_ptr.as_mut().write(PageCell {
                 id: *pid,
                 content,
+                new: false,
                 dirty: false,
                 use_counter: 0,
                 rw_counter: 0,
@@ -197,6 +198,7 @@ pub(super) struct PageCell {
     pub id: PageId,
     pub content: NonNull<[u8]>,
     pub dirty: bool,
+    pub new: bool,
     pub use_counter: usize,
     pub rw_counter: isize,
 }

@@ -8,6 +8,9 @@ pub trait IFileSystem {
   /// Ouvre le fichier.
   fn open<'fs>(&'fs self, path: &str) -> Result<Self::File<'fs>>;
 
+  /// Le noeud du système de fichier existe.
+  fn exists(&self, path: &str) -> bool;
+
   /// Supprime le fichier/répertoire
   fn delete(&self, path: &str) -> std::io::Result<()>;
 
