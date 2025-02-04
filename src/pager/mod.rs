@@ -1,5 +1,5 @@
 use std::{
-    alloc::{alloc, dealloc, Layout}, cell::{Ref, RefCell}, io::{self, Cursor, Read, Seek, Write}, ops::Deref, ptr::NonNull
+    alloc::{alloc, dealloc, Layout}, cell::RefCell, io::{self, Cursor, Read, Seek, Write}, ops::Deref, ptr::NonNull
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -178,6 +178,13 @@ impl PagerHeader {
         Ok(())
     }
 
+    pub fn inc_page_count(&mut self) {
+        self.page_count += 1;
+        let mut cursor = self.cursor();
+        cursor.seek(io::SeekFrom::Start(Self::PAGE_COUNT_LOC)).unwrap();
+        cursor.write_u64::<LittleEndian>(self.page_count).unwrap();
+    }
+
     pub fn set_free_head(&mut self, head: Option<PageId>) {
         let mut cursor = self.cursor();
         cursor.seek(io::SeekFrom::Start(Self::PAGE_FREE_HEAD_LOC)).unwrap();
@@ -300,7 +307,7 @@ where
         let mut page = MutPage::try_acquire(cell)?;
         page.fill(0);
 
-        self.header.borrow_mut().page_count += 1;
+        self.header.borrow_mut().inc_page_count();
 
         return Ok(page);
     }
@@ -385,7 +392,7 @@ where
     fn get_page_cell(&self, id: &PageId) -> PagerResult<NonNull<PageCell>> {
         // Unexisting page
         if *id >= self.page_count() {
-            return Err(PagerError::UnexistingPage);
+            return Err(PagerError::UnexistingPage(*id));
         }
 
         // Cache success
@@ -463,16 +470,24 @@ mod tests {
     #[test]
     pub fn test_commit() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::new());
-        let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
+        let pager = Pager::new(vfs.clone(), "test", 4_096, PagerOptions::default())?;
         
         let mut page = pager.new_page()?;
-        let _pid = page.id();
+        let pid = page.id();
         let expected: u64 = 123456;
         
         Cursor::new(page.deref_mut()).write_u64::<LittleEndian>(expected)?;
         drop(page);
 
         pager.commit()?;
+        drop(pager);
+
+        let pager = Pager::open(vfs, "test", PagerOptions::default())?;
+        let page = pager.get_page(&pid)?;
+        let got = Cursor::new(page.deref()).read_u64::<LittleEndian>()?;
+        drop(page);
+
+        assert_eq!(expected, got);
 
         Ok(())
     }

@@ -1,11 +1,11 @@
 use std::{error::Error, fmt::Display, io};
 
-use super::page::PageKind;
+use super::page::{PageId, PageKind};
 
 #[derive(Debug)]
 pub enum PagerError {
     CacheFull,
-    UnexistingPage,
+    UnexistingPage(PageId),
     PageAlreadyCached,
     PageAlreadyBorrowed,
     InvalidPageKind,
@@ -18,7 +18,7 @@ impl Display for PagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PagerError::CacheFull => write!(f, "pager cache is full"),
-            PagerError::UnexistingPage => write!(f, "page does not exist"),
+            PagerError::UnexistingPage(id) => write!(f, "page {id} does not exist"),
             PagerError::PageAlreadyCached => write!(f, "page is already cached"),
             PagerError::PageAlreadyBorrowed => write!(f, "page is already borrowed"),
             PagerError::InvalidPageKind => write!(f, "unknown page kind"),
