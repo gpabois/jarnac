@@ -11,10 +11,8 @@ use super::{page::PageId, PageCell, PagerResult};
 pub trait IPagerStress {
   /// Décharge une page de la mémoire
   fn discharge(&self, pid: &PageId, src: &PageCell) -> PagerResult<()>;
-
   /// Récupère une page en mémoire
   fn retrieve(&self, pid: &PageId, dest: &mut PageCell) -> PagerResult<()>;
-
   /// Contient une page déchargée
   fn contains(&self, pid: &PageId) -> bool;
 }
