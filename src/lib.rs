@@ -1,2 +1,2 @@
-pub mod vfs;
+pub mod fs;
 pub mod pager;

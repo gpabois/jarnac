@@ -2,7 +2,7 @@ use std::{io::{self, Read, Seek, Write}, iter};
 
 use byteorder::{LittleEndian, WriteBytesExt};
 
-use crate::vfs::IFileSystem;
+use crate::fs::{FileOpenOptions, IFileSystem};
 
 use super::{page::PageId, PAGER_HEADER_LOC, PAGER_HEADER_SIZE, PAGER_PAGES_BASE};
 
@@ -10,21 +10,26 @@ const PAGER_LOGS_HEADER_SIZE: u64 = 16;
 const PAGER_LOGS_PAGER_HEADER_LOC: u64 = PAGER_LOGS_HEADER_SIZE;
 const PAGER_LOGS_PAGES_BASE_LOC: u64 = PAGER_LOGS_PAGER_HEADER_LOC + PAGER_HEADER_SIZE;
 
+/// Journal du système de pagination.
+/// 
+/// Le journal stocke les versions initiales des pages
+/// modifiées lors d'une transaction sur le fichier paginé.
+/// Cela permet de revenir en arrière en cas d'erreur.
 pub struct PagerLogs<'fs, Fs: IFileSystem + 'fs>(Fs::File<'fs>);
 
 impl<'fs, Fs> PagerLogs<'fs, Fs> where Fs: IFileSystem + 'fs {
     /// Ouvre le journal
-    pub fn open(path: &str, fs: &'fs Fs) -> io::Result<Self> {
-        fs.open(path).map(Self)
+    pub fn open(path: &Fs::Path, fs: &'fs Fs) -> io::Result<Self> {
+        fs.open(path, FileOpenOptions::new().create(true).read(true).write(true)).map(Self)
     }
 
-    /// Annule les modifications du pager.
+    /// Annule les modifications appliquées au fichier paginé.
     pub fn rollback<Dest: Write + Seek>(&mut self, dest: &mut Dest) -> io::Result<()> {
         self.restore_page_header(dest)?;
         self.restore_pages(dest)
     }
 
-    /// Ecrit l'entête du pager dans le journal
+    /// Ecrit l'entête du système de dans le journal
     pub fn log_pager_header<Source: Read + Seek>(&mut self, src: &mut Source) -> io::Result<()> {
         let mut buf: Box<[u8]> = Box::from(
             iter::repeat(0u8)

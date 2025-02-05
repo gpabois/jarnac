@@ -1,8 +1,8 @@
 use std::{
-    fmt::Display, marker::PhantomData, ops::{Deref, DerefMut}, ptr::NonNull
+    fmt::Display, io::Cursor, marker::PhantomData, ops::{Deref, DerefMut}, ptr::NonNull
 };
 
-use super::{cache::PageCell, error::PagerError, PagerResult};
+use super::{cache::{CachedPage, CachedPageData}, error::{PagerError, PagerErrorKind}, PagerResult};
 
 pub type PageId = u64;
 pub type PageLocation = u64;
@@ -23,7 +23,9 @@ impl Display for PageKind {
 
 impl PageKind {
     pub fn assert(&self, to: PageKind) -> PagerResult<()> {
-        (*self == to).then(|| ()).ok_or_else(|| PagerError::WrongPageKind {expected: to, got: *self})
+        (*self == to)
+            .then(|| ())
+            .ok_or_else(|| PagerError::new(PagerErrorKind::WrongPageKind {expected: to, got: *self}))
     }
 }
 
@@ -33,7 +35,7 @@ impl TryFrom<u8> for PageKind {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Free),
-            _ => Err(PagerError::InvalidPageKind)
+            _ => Err(PagerError::new(PagerErrorKind::InvalidPageKind))
         }
     }
 
@@ -42,54 +44,58 @@ impl TryFrom<u8> for PageKind {
 
 pub struct RefPage<'pager> {
     _pht: PhantomData<&'pager ()>,
-    cell: NonNull<PageCell>,
+    ptr: NonNull<CachedPageData>,
 }
 
 impl Deref for RefPage<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        unsafe { self.cell.as_ref().content.as_ref() }
+        unsafe { self.ptr.as_ref().content.as_ref() }
     }
 }
 
 impl Drop for RefPage<'_> {
     fn drop(&mut self) {
         unsafe {
-            self.cell.as_mut().rw_counter -= 1;
+            self.ptr.as_mut().rw_counter -= 1;
         }
     }
 }
 
 impl<'pager> RefPage<'pager> {
-    pub(super) fn try_acquire(mut cell: NonNull<PageCell>) -> PagerResult<Self> {
+    pub(super) fn try_acquire(mut cpage: CachedPage<'pager>) -> PagerResult<Self> {
         unsafe {
-            if cell.as_ref().rw_counter < 0 {
-                return Err(PagerError::PageAlreadyBorrowed);
+            if cpage.rw_counter < 0 {
+                return Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed));
             }
 
-            cell.as_mut().rw_counter += 1;
-            cell.as_mut().use_counter += 1;
+            cpage.rw_counter += 1;
+            cpage.use_counter += 1;
 
             Ok(Self {
                 _pht: PhantomData,
-                cell,
+                ptr: cpage.leak(),
             })
         }
     }
 
+    pub fn open_cursor(&self) -> Cursor<& [u8]> {
+        Cursor::new(self.deref())
+    }
+
     pub fn is_dirty(&self) -> bool {
-        unsafe { self.cell.as_ref().dirty }
+        unsafe { self.ptr.as_ref().is_dirty() }
     }
 
     pub fn id(&self) -> PageId {
-        unsafe { self.cell.as_ref().id }
+        unsafe { self.ptr.as_ref().pid }
     }
 }
 
 pub struct MutPage<'pager> {
     _pht: PhantomData<&'pager ()>,
-    cell: NonNull<PageCell>,
+    cell: NonNull<CachedPageData>,
 }
 
 impl Deref for MutPage<'_> {
@@ -104,7 +110,7 @@ impl DerefMut for MutPage<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             let mut_cell = self.cell.as_mut();
-            mut_cell.dirty = true;
+            mut_cell.set_diry();
             mut_cell.content.as_mut()
         }
     }
@@ -119,32 +125,35 @@ impl Drop for MutPage<'_> {
 }
 
 impl<'pager> MutPage<'pager> {
-    pub(super) fn try_acquire(mut cell: NonNull<PageCell>) -> PagerResult<Self> {
+    pub(super) fn try_acquire(mut cpage: CachedPage<'pager>) -> PagerResult<Self> {
         unsafe {
-            if cell.as_ref().rw_counter != 0 {
-                return Err(PagerError::PageAlreadyBorrowed);
+            if cpage.rw_counter != 0 {
+                return Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed));
             }
 
-            cell.as_mut().rw_counter = -1;
-            cell.as_mut().use_counter += 1;
+            cpage.rw_counter = -1;
+            cpage.use_counter += 1;
 
             Ok(Self {
                 _pht: PhantomData,
-                cell,
+                cell: cpage.leak(),
             })
         }
     }
 
-    pub(super) fn into_cell(self) -> NonNull<PageCell> {
-        let cell = self.cell;
-        cell
-    }
-
     pub fn is_dirty(&self) -> bool {
-        unsafe { self.cell.as_ref().dirty }
+        unsafe { self.cell.as_ref().is_dirty() }
     }
 
     pub fn id(&self) -> PageId {
-        unsafe { self.cell.as_ref().id }
+        unsafe { self.cell.as_ref().pid }
+    }
+
+    pub fn open_mut_cursor(&mut self) -> Cursor<&mut [u8]> {
+        Cursor::new(self.deref_mut())
+    }
+
+    pub fn open_cursor(&self) -> Cursor<& [u8]> {
+        Cursor::new(self.deref())
     }
 }

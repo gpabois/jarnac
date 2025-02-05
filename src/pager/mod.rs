@@ -3,13 +3,13 @@ use std::{
 };
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use cache::{PageCell, PagerCache};
+use cache::{CachedPage, PagerCache};
 use free::{pop_free_page, push_free_page};
 use page::{MutPage, PageId, PageLocation, RefPage};
 use stress::FsPagerStress;
 use transaction::PagerTransaction;
 
-use crate::vfs::IFileSystem;
+use crate::fs::{FileOpenOptions, FilePtr, IFileSystem, IPath};
 
 pub mod page;
 pub mod error;
@@ -20,7 +20,7 @@ mod transaction;
 mod cache;
 mod stress;
 
-use error::PagerError;
+use error::{PagerError, PagerErrorKind};
 
 pub const MAGIC_NUMBER: u16 = 0xD334;
 
@@ -53,17 +53,23 @@ pub(self) trait IPagerInternals: IPager {
     fn page_size(&self) -> usize;
     /// Ecrit l'entête du fichier dans le flux
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()>;
+    /// Itère sur les pages cachées
+    fn iter_dirty_pages(&self) -> impl Iterator<Item=CachedPage<'_>>;
 }
 
 pub trait IPager {
     /// Crée une nouvelle page.
-    fn new_page(&self) -> PagerResult<MutPage<'_>>;
+    fn new_page(&self) -> PagerResult<PageId>;
+    
     /// Supprime une page
     fn delete_page(&self, id: &PageId) -> PagerResult<()>;
+    
     /// Récupère une page existante.
     fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>>;
+    
     /// Récupère une page modifiable existante.
     fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>>;
+    
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
 }
@@ -246,8 +252,7 @@ impl PagerHeader {
 pub struct Pager<Fs: IFileSystem> {
     header: RefCell<PagerHeader>,
     cache: PagerCache,
-    path: String,
-    fs: Fs,
+    file: FilePtr<Fs>
 }
 
 impl<Fs> IPagerInternals for Pager<Fs> 
@@ -277,6 +282,13 @@ where Fs: IFileSystem + Clone + 'static
         self.header.borrow().write(stream)
     }
     
+    fn iter_dirty_pages(&self) -> impl Iterator<Item=CachedPage<'_>> {
+        self.cache
+            .iter()
+            .map(|cell| cell.unwrap())
+            .filter(|cell| cell.is_dirty())
+    }
+    
 }
 
 impl<Fs> IPager for Pager<Fs>
@@ -284,45 +296,37 @@ where
     Fs: IFileSystem + Clone + 'static,
 {
     fn commit(&self) -> PagerResult<()>{
-
         // crée une transaction
         let tx = PagerTransaction::new(
-            &format!("{0}-tx", self.path), 
-            self.fs.clone(),
+            self.file.path.modify_stem(|stem| format!("{stem}-tx")),
+            self.file.fs.clone(),
             self
         );
 
-        let mut file = self.fs.open(&self.path)?;
-        
-        tx.commit(&mut file, self.cache.iter_pages())
+        let mut file = self.file.open(FileOpenOptions::new().write(true).read(true))?;
+        tx.commit(&mut file)
     }
 
-    fn new_page<'pager>(&'pager self) -> PagerResult<MutPage<'pager>> {
+    fn new_page<'pager>(&'pager self) -> PagerResult<PageId> {
         let pid = pop_free_page(self)?.unwrap_or_else(|| self.page_count());
+        let mut cpage = self.cache.alloc(&pid)?;
 
-        let mut cell = self.cache.reserve(&pid)?;
-        unsafe {
-            cell.as_mut().new = true;
-        }
-        let mut page = MutPage::try_acquire(cell)?;
-        page.fill(0);
-
+        cpage.set_new();
         self.header.borrow_mut().inc_page_count();
 
-        return Ok(page);
+        return Ok(pid);
     }
 
     fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>> {
-        self.get_page_cell(id).and_then(RefPage::try_acquire)
+        self.get_cached_page(id).and_then(RefPage::try_acquire)
     }
 
     fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>> {
-        self.get_page_cell(id).and_then(MutPage::try_acquire)
+        self.get_cached_page(id).and_then(MutPage::try_acquire)
     }
     
     fn delete_page(&self, pid: &PageId) -> PagerResult<()> {
-        push_free_page(self, pid)?;
-        Ok(())
+        push_free_page(self, pid)
     }
 }
 
@@ -331,8 +335,9 @@ where
     Fs: IFileSystem + Clone + 'static,
 {
     /// Crée un nouveau fichier paginé
-    pub fn new(fs: Fs, path: &str, page_size: usize, options: PagerOptions) -> PagerResult<Self> 
+    pub fn new<Path: Into<Fs::Path>>(fs: Fs, path: Path, page_size: usize, options: PagerOptions) -> PagerResult<Self> 
     {
+        let file = FilePtr::new(fs, path);
         let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
         // Instantie le système de cache
@@ -340,81 +345,89 @@ where
             cache_size, 
             page_size,
             FsPagerStress::new(
-              fs.clone(), 
-              &format!("{path}-pcache"),
+              file.fs.clone(), 
+              file.path.modify_stem(|stem| format!("{stem}-pcache")),
               page_size
             )
         );
 
-        // Initialise le fichier paginé
+        // Initialise le fichier paginé, il ne doit pas déjà exister !
+        if file.exists() {
+            return Err(
+                io::Error::new(io::ErrorKind::AlreadyExists, format!("file {0} already exists", file.path.to_string())).into()
+            )
+        }
+
         let header = PagerHeader::new(page_size);
-        let mut file = fs.open(path)?;
-        file.write_u16::<LittleEndian>(MAGIC_NUMBER)?;
-        header.write(&mut file)?;
-        drop(file);
+        let mut stream = file.open(FileOpenOptions::new().write(true).create(true))?;
+        stream.write_u16::<LittleEndian>(MAGIC_NUMBER)?;
+        header.write(&mut stream)?;
+        drop(stream);
 
         Ok(Self {
-            fs,
+            file,
             cache,
             header: RefCell::new(header),
-            path: path.to_owned(),
         })
     }
 
     /// Ouvre un fichier paginé
-    pub fn open(fs: Fs, path: &str, options: PagerOptions) -> PagerResult<Self> {
+    pub fn open<Path: Into<Fs::Path>>(fs: Fs, path: Path, options: PagerOptions) -> PagerResult<Self> {
+        let file = FilePtr::new(fs, path);
         let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
-        let mut file = fs.open(path)?;
-        assert_eq!(file.read_u16::<LittleEndian>()?, MAGIC_NUMBER);
+        
+        // On récupère l'entête du fichier paginé.
+        let header = {
+            let mut stream = file.open(FileOpenOptions::new().read(true))?;
+            assert_eq!(stream.read_u16::<LittleEndian>()?, MAGIC_NUMBER);
+    
+            PagerHeader::read(&mut stream)
+        }?;
 
-        let header = PagerHeader::read(&mut file)?;
-        drop(file);
-
-        // Instantie le système de cache
+        // Instantie le cache
         let cache = cache::PagerCache::new(
             cache_size, 
             header.page_size,
             FsPagerStress::new(
-              fs.clone(), 
-              &format!("{path}-pcache"),
+              file.fs.clone(), 
+              file.path.modify_stem(|stem| format!("{stem}-pcache")),
               header.page_size
             )
         );
 
         Ok(Self {
-            fs,
+            file,
             cache,
             header: RefCell::new(header),
-            path: path.to_owned(),
         })
     }
 
-    fn get_page_cell(&self, id: &PageId) -> PagerResult<NonNull<PageCell>> {
-        // Unexisting page
-        if *id >= self.page_count() {
-            return Err(PagerError::UnexistingPage(*id));
+    fn get_cached_page<'pager>(&'pager self, pid: &PageId) -> PagerResult<CachedPage<'pager>> {
+        // La page n'existe pas
+        if *pid >= self.page_count() {
+            return Err(PagerError::new(PagerErrorKind::UnexistingPage(*pid)));
         }
 
-        // Cache success
-        if let Some(page_cell) = self.cache.try_get(&id)? {
-            return Ok(page_cell);
+        // La page a été cachée au préalable
+        if let Some(cached) = self.cache.try_get(&pid)? {
+            return Ok(cached);
         }
 
-        // Load the content of the 
-        let cell = self.cache.reserve(id)?;
-        let mut page = MutPage::try_acquire(cell)?;
-        self.load_page_content(&mut page)?;
-        Ok(page.into_cell())
+        // On va charger la page depuis le fichier paginé,
+        // et la mettre en cache;
+        let mut cpage = self.cache.alloc(pid)?;
+        self.load_page_content(&mut cpage)?;
+        Ok(cpage)
     }
 
     /// Charge le contenu de la page depuis le système de stockage persistant
-    fn load_page_content(&self, page: &mut MutPage<'_>) -> PagerResult<()> {
+    fn load_page_content(&self, page: &mut CachedPage<'_>) -> PagerResult<()> {
         let pid = page.id();
         let loc = self.page_location(&pid);
 
-        let mut file = self.fs.open(&self.path)?;
+        let mut file = self.file.open(FileOpenOptions::new().read(true))?;
         file.seek(std::io::SeekFrom::Start(loc))?;
-        file.read_exact(page)?;
+        file.read_exact(page.borrow_mut_content())?;
 
         Ok(())
     }
@@ -423,13 +436,14 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc
+        error::Error, rc::Rc
     };
 
-    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+    use byteorder::{LittleEndian, ReadBytesExt};
+    use byteorder::WriteBytesExt;
 
     use super::{Pager, PagerOptions};
-    use crate::{pager::IPager, vfs::in_memory::InMemoryFs};
+    use crate::{pager::IPager, fs::in_memory::InMemoryFs};
 
     #[test]
     pub fn test_new_page() -> Result<(), Box<dyn Error>> {
@@ -437,12 +451,12 @@ mod tests {
         let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
 
         {
-            let mut page = pager.new_page().unwrap();
-            assert_eq!(page.id(), 0);
-            drop(page);
+            let pid = pager.new_page().unwrap();
+            assert_eq!(pid, 0);
 
-            page = pager.new_page().unwrap();
-            assert_eq!(page.id(), 1);
+            let cpage = pager.get_cached_page(&pid)?;
+            assert!(cpage.is_new());
+            assert_eq!(cpage.id(), pid);
         }
 
         Ok(())
@@ -453,15 +467,15 @@ mod tests {
         let vfs = Rc::new(InMemoryFs::new());
         let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
         
-        let mut page = pager.new_page()?;
-        let pid = page.id();
+        let pid = pager.new_page()?;
+        let mut page = pager.get_mut_page(&pid)?;
         let expected: u64 = 123456;
         
-        Cursor::new(page.deref_mut()).write_u64::<LittleEndian>(expected)?;
+        page.open_mut_cursor().write_u64::<LittleEndian>(expected)?;
         drop(page);
 
         let page = pager.get_page(&pid)?;
-        let got = Cursor::new(page.deref()).read_u64::<LittleEndian>()?;
+        let got = page.open_cursor().read_u64::<LittleEndian>()?;
 
         assert_eq!(expected, got);
         Ok(())
@@ -470,22 +484,36 @@ mod tests {
     #[test]
     pub fn test_commit() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::new());
-        let pager = Pager::new(vfs.clone(), "test", 4_096, PagerOptions::default())?;
+        let pager = Pager::new(
+            vfs.clone(), 
+            "test", 
+            4_096, 
+            PagerOptions::default()
+        )?;
         
-        let mut page = pager.new_page()?;
-        let pid = page.id();
+        let pid = pager.new_page()?;
         let expected: u64 = 123456;
         
-        Cursor::new(page.deref_mut()).write_u64::<LittleEndian>(expected)?;
-        drop(page);
+        pager.get_mut_page(&pid)?
+            .open_mut_cursor()
+            .write_u64::<LittleEndian>(expected)?;
 
-        pager.commit()?;
+        assert!(pager.get_cached_page(&pid)?.is_new());
+
+        pager
+        .commit()
+        .inspect_err(|err| {
+            println!("{}", err.backtrace)
+        })?;
+
         drop(pager);
 
         let pager = Pager::open(vfs, "test", PagerOptions::default())?;
-        let page = pager.get_page(&pid)?;
-        let got = Cursor::new(page.deref()).read_u64::<LittleEndian>()?;
-        drop(page);
+
+        let got = pager
+            .get_page(&pid)?
+            .open_cursor()
+            .read_u64::<LittleEndian>()?;
 
         assert_eq!(expected, got);
 
