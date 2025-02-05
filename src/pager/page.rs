@@ -110,7 +110,7 @@ impl DerefMut for MutPage<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe {
             let mut_cell = self.cell.as_mut();
-            mut_cell.set_diry();
+            mut_cell.set_dirty();
             mut_cell.content.as_mut()
         }
     }

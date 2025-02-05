@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, io::{Read, Seek, Write}};
+use std::{cell::RefCell, collections::HashMap, io::{Read, Seek, Write}, ops::Deref, rc::Rc};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
@@ -18,6 +18,20 @@ pub trait IPagerStress {
   fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()>;
   /// Vérifie si la page est déchargée.
   fn contains(&self, pid: &PageId) -> bool;
+}
+
+impl<U> IPagerStress for Rc<U> where U: IPagerStress {
+    fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()> {
+        self.deref().discharge(src)
+    }
+
+    fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
+        self.deref().retrieve(dest)
+    }
+
+    fn contains(&self, pid: &PageId) -> bool {
+        self.deref().contains(pid)
+    }
 }
 
 /// Indirection permettant de s'abstraire du type concret de la stratégie de gestion du stress mémoire.
@@ -90,9 +104,7 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         let addr: u64 = (self.page_size * offset).try_into().unwrap();
         file.seek(std::io::SeekFrom::Start(addr))?;
         dest.flags  = file.read_u8()?;
-        unsafe {
-            file.read_exact(dest.content.as_mut())?;
-        }
+        file.read_exact(dest.borrow_mut_content())?;
         
         self.freelist.borrow_mut().push(offset);
         self.pages.borrow_mut().remove(&dest.id());
