@@ -17,7 +17,7 @@ use crate::fs::{FileOpenOptions, FilePtr, IFileSystem, IPath};
 
 mod cache;
 pub mod error;
-mod free;
+pub mod free;
 mod logs;
 pub mod overflow;
 pub mod page;
@@ -513,6 +513,15 @@ mod tests {
             .write_u64::<LittleEndian>(expected)?;
 
         assert!(pager.get_cached_page(&pid)?.is_new());
+        assert_eq!(
+            pager
+                .get_cached_page(&pid)?
+                .borrow()
+                .open_cursor()
+                .read_u64::<LittleEndian>()?,
+            expected,
+            "le contenu de la page doit être 123456"
+        );
 
         pager
             .commit()
