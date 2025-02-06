@@ -78,6 +78,6 @@ pub fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> PagerResult<Optio
         return Ok(Some(next));
     }
 
-    return Ok(None);
+    Ok(None)
 }
 

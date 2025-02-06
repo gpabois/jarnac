@@ -1,8 +1,16 @@
 use std::{
-    fmt::Display, io::Cursor, marker::PhantomData, ops::{Deref, DerefMut}, ptr::NonNull
+    fmt::Display,
+    io::Cursor,
+    marker::PhantomData,
+    ops::{Deref, DerefMut},
+    ptr::NonNull,
 };
 
-use super::{cache::{CachedPage, CachedPageData}, error::{PagerError, PagerErrorKind}, PagerResult};
+use super::{
+    cache::{CachedPage, CachedPageData},
+    error::{PagerError, PagerErrorKind},
+    PagerResult,
+};
 
 pub type PageId = u64;
 pub type PageLocation = u64;
@@ -10,7 +18,7 @@ pub type PageLocation = u64;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageKind {
-    Free = 0x00
+    Free = 0x00,
 }
 
 impl Display for PageKind {
@@ -23,23 +31,24 @@ impl Display for PageKind {
 
 impl PageKind {
     pub fn assert(&self, to: PageKind) -> PagerResult<()> {
-        (*self == to)
-            .then(|| ())
-            .ok_or_else(|| PagerError::new(PagerErrorKind::WrongPageKind {expected: to, got: *self}))
+        (*self == to).then(|| ()).ok_or_else(|| {
+            PagerError::new(PagerErrorKind::WrongPageKind {
+                expected: to,
+                got: *self,
+            })
+        })
     }
 }
 
 impl TryFrom<u8> for PageKind {
     type Error = PagerError;
-    
+
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Free),
-            _ => Err(PagerError::new(PagerErrorKind::InvalidPageKind))
+            _ => Err(PagerError::new(PagerErrorKind::InvalidPageKind)),
         }
     }
-
-    
 }
 
 pub struct RefPage<'pager> {
@@ -80,7 +89,7 @@ impl<'pager> RefPage<'pager> {
         }
     }
 
-    pub fn open_cursor(&self) -> Cursor<& [u8]> {
+    pub fn open_cursor(&self) -> Cursor<&[u8]> {
         Cursor::new(self.deref())
     }
 
@@ -153,7 +162,7 @@ impl<'pager> MutPage<'pager> {
         Cursor::new(self.deref_mut())
     }
 
-    pub fn open_cursor(&self) -> Cursor<& [u8]> {
+    pub fn open_cursor(&self) -> Cursor<&[u8]> {
         Cursor::new(self.deref())
     }
 }

@@ -2,7 +2,7 @@ use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     borrow::BorrowMut,
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt::Debug,
     io::Cursor,
     marker::PhantomData,
@@ -33,6 +33,8 @@ pub(super) struct PagerCache {
     page_size: usize,
     /// Free page cells
     free_list: RefCell<Vec<NonNull<CachedPageData>>>,
+    /// stored
+    stored: RefCell<HashSet<PageId>>,
     /// Current cached pages that are in memory.
     in_memory: RefCell<HashMap<PageId, NonNull<CachedPageData>>>,
     /// Stratégie de gestion du stress mémoire
@@ -82,6 +84,7 @@ impl PagerCache {
                 size: cache_size,
                 tail: RefCell::new(0),
                 page_size,
+                stored: RefCell::default(),
                 free_list: RefCell::default(),
                 in_memory: RefCell::default(),
                 stress: BoxedPagerStress::new(stress_strategy),
@@ -96,23 +99,9 @@ impl PagerCache {
             return Err(PagerError::new(PagerErrorKind::PageAlreadyCached(*pid)));
         }
 
-        self.alloc_in_memory(pid)
-    }
-
-    /// Libère une entrée du cache
-    /// L'opération échoue si la page est toujours empruntée.
-    pub fn free(&self, id: &PageId) -> PagerResult<()> {
-        if let Some(cached) = self.in_memory.borrow_mut().remove(id).map(CachedPage::new) {
-            if cached.is_borrowed() {
-                return Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed));
-            }
-
-            unsafe {
-                self.free_list.borrow_mut().push(cached.leak());
-            }
-        }
-
-        Ok(())
+        self.alloc_in_memory(pid).inspect(|_| {
+            self.stored.borrow_mut().insert(*pid);
+        })
     }
 
     /// Itère les pages cachées.
@@ -121,7 +110,7 @@ impl PagerCache {
     /// Voir [Self::free_some_space] pour plus d'explications.
     pub fn iter(&self) -> PagerCacheIter<'_> {
         PagerCacheIter {
-            ids: self.in_memory.borrow().keys().copied().collect(),
+            ids: self.stored.borrow().iter().copied().collect(),
             cache: self,
         }
     }
