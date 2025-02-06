@@ -1,10 +1,15 @@
-use std::{backtrace::Backtrace, error::Error, fmt::{Debug, Display}, io};
+use std::{
+    backtrace::Backtrace,
+    error::Error,
+    fmt::{Debug, Display},
+    io,
+};
 
 use super::page::{PageId, PageKind};
 
 pub struct PagerError {
     pub backtrace: Backtrace,
-    kind: PagerErrorKind
+    kind: PagerErrorKind,
 }
 
 impl Display for PagerError {
@@ -15,7 +20,9 @@ impl Display for PagerError {
 
 impl Debug for PagerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PagerError").field("kind", &self.kind).finish()
+        f.debug_struct("PagerError")
+            .field("kind", &self.kind)
+            .finish()
     }
 }
 
@@ -23,7 +30,7 @@ impl PagerError {
     pub fn new(kind: PagerErrorKind) -> Self {
         Self {
             kind,
-            backtrace: Backtrace::capture()
+            backtrace: Backtrace::capture(),
         }
     }
 }
@@ -31,7 +38,7 @@ impl PagerError {
 impl Error for PagerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         if let PagerErrorKind::IoError(error) = &self.kind {
-            return Some(error)
+            return Some(error);
         }
 
         None
@@ -54,7 +61,7 @@ pub enum PagerErrorKind {
     PageCurrentlyBorrowed,
     InvalidPageKind,
     InvalidFormat,
-    WrongPageKind{expected: PageKind, got: PageKind},
+    WrongPageKind { expected: PageKind, got: PageKind },
     IoError(io::Error),
 }
 
@@ -67,10 +74,11 @@ impl Display for PagerErrorKind {
             PagerErrorKind::PageCurrentlyBorrowed => write!(f, "page is already borrowed"),
             PagerErrorKind::InvalidPageKind => write!(f, "unknown page kind"),
             PagerErrorKind::InvalidFormat => write!(f, "invalid pager format"),
-            PagerErrorKind::WrongPageKind { expected, got } => write!(f, "wrong page kind, expecting {0}, got {1}", expected, got),
+            PagerErrorKind::WrongPageKind { expected, got } => {
+                write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)
+            }
             PagerErrorKind::IoError(_) => write!(f, "an io error occured"),
             PagerErrorKind::PageNotCached(id) => write!(f, "page {id} not cached"),
         }
     }
 }
-

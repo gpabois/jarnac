@@ -2,6 +2,7 @@ use std::{
     borrow::Borrow,
     cell::{RefCell, UnsafeCell},
     collections::HashMap,
+    fmt::Display,
     io::{self, Cursor, ErrorKind, Read, Seek, Write},
     ops::Deref,
     pin::Pin,
@@ -20,9 +21,9 @@ impl From<&str> for InMemoryPath {
     }
 }
 
-impl ToString for InMemoryPath {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl Display for InMemoryPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -115,6 +116,7 @@ impl Write for InMemoryFile<'_> {
     }
 }
 
+#[derive(Default)]
 pub struct InMemoryFs(RefCell<HashMap<String, FileData>>);
 
 impl IFileSystem for Rc<InMemoryFs> {
@@ -138,12 +140,6 @@ impl IFileSystem for Rc<InMemoryFs> {
     }
 }
 
-impl InMemoryFs {
-    pub fn new() -> Self {
-        Self(RefCell::new(HashMap::default()))
-    }
-}
-
 impl IFileSystem for InMemoryFs {
     type File<'fs> = InMemoryFile<'fs>;
     type Path = InMemoryPath;
@@ -155,13 +151,13 @@ impl IFileSystem for InMemoryFs {
     ) -> std::io::Result<Self::File<'fs>> {
         let mut map = self.0.borrow_mut();
 
-        if map.contains_key(path.as_ref()) == false {
+        if !map.contains_key(path.as_ref()) {
             if options.is_create() {
                 map.insert(path.to_string(), FileData::default());
             } else {
                 return Err(io::Error::new(
                     ErrorKind::NotFound,
-                    format!("file {0} does not exist", path.to_string()),
+                    format!("file {path} does not exist"),
                 ));
             }
         }

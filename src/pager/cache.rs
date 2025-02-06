@@ -1,10 +1,8 @@
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
-    borrow::BorrowMut,
     cell::RefCell,
     collections::{HashMap, HashSet},
     fmt::Debug,
-    io::Cursor,
     marker::PhantomData,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
@@ -15,7 +13,7 @@ use itertools::Itertools;
 
 use super::{
     error::{PagerError, PagerErrorKind},
-    page::PageId,
+    page::{MutPage, PageId, RefPage},
     stress::{BoxedPagerStress, IPagerStress},
     PagerResult,
 };
@@ -157,13 +155,12 @@ impl PagerCache {
 
         // On a un slot de libre
         if let Some(mut free) = self.free_list.borrow_mut().pop().map(CachedPage::new) {
-            unsafe {
-                free.flags = 0;
-                free.use_counter = 0;
-                free.rw_counter = 0;
-                self.in_memory.borrow_mut().insert(*pid, free.leak());
-                return Ok(free);
-            }
+            free.flags = 0;
+            free.use_counter = 0;
+            free.rw_counter = 0;
+            free.ref_counter = 1;
+            self.in_memory.borrow_mut().insert(*pid, free.ptr);
+            return Ok(free);
         }
 
         let current_tail = *self.tail.borrow();
@@ -188,12 +185,14 @@ impl PagerCache {
         // Le cache est plein, on est dans un cas de stress mémoire
         // On va essayer de trouver de la place.
         let mut pcached = self.manage_stress()?;
-        pcached.borrow_mut_content().fill(0);
         pcached.pid = *pid;
         pcached.flags = 0;
         pcached.rw_counter = 0;
         pcached.use_counter = 0;
-        self.in_memory.borrow_mut().insert(*pid, pcached.data);
+        pcached.ref_counter = 1;
+        pcached.borrow_mut(true).fill(0);
+
+        self.in_memory.borrow_mut().insert(*pid, pcached.ptr);
         Ok(pcached)
     }
 
@@ -211,7 +210,7 @@ impl PagerCache {
             .values()
             .copied()
             .map(CachedPage::new)
-            .filter(|page| !page.is_dirty() && !page.is_borrowed())
+            .filter(|page| !page.is_dirty() && page.ref_counter <= 1)
             .sorted_by_key(|page| page.use_counter)
             .next();
 
@@ -227,7 +226,7 @@ impl PagerCache {
             .values()
             .copied()
             .map(CachedPage::new)
-            .filter(|page| !page.is_borrowed())
+            .filter(|page| page.ref_counter <= 1)
             .sorted_by_key(|page| page.use_counter)
             .next();
 
@@ -242,36 +241,57 @@ impl PagerCache {
     }
 }
 
-#[derive(Clone, Copy)]
 pub struct CachedPage<'cache> {
     _pht: PhantomData<&'cache ()>,
-    data: NonNull<CachedPageData>,
+    ptr: NonNull<CachedPageData>,
+}
+
+impl Clone for CachedPage<'_> {
+    fn clone(&self) -> Self {
+        Self::new(self.ptr)
+    }
 }
 
 impl Debug for CachedPage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CachedPage")
-            .field("data", &self.data)
+            .field("data", &self.ptr)
             .finish()
+    }
+}
+
+impl Drop for CachedPage<'_> {
+    fn drop(&mut self) {
+        self.ref_counter -= 1
     }
 }
 
 impl CachedPage<'_> {
     pub(super) fn new(data: NonNull<CachedPageData>) -> Self {
-        Self {
+        let mut page = Self {
             _pht: PhantomData,
-            data,
-        }
+            ptr: data,
+        };
+        page.ref_counter += 1;
+        page
     }
 
-    pub unsafe fn leak(self) -> NonNull<CachedPageData> {
-        self.data
+    pub fn borrow(&self) -> RefPage<'_> {
+        RefPage::new(self.clone())
+    }
+
+    pub fn borrow_mut(&self, dry: bool) -> MutPage<'_> {
+        self.try_borrow_mut(dry).expect("page is already borrowed")
+    }
+
+    pub fn try_borrow_mut(&self, dry: bool) -> PagerResult<MutPage<'_>> {
+        MutPage::try_new_with_options(self.clone(), dry)
     }
 }
 
 impl DerefMut for CachedPage<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.data.as_mut() }
+        unsafe { self.ptr.as_mut() }
     }
 }
 
@@ -279,7 +299,7 @@ impl Deref for CachedPage<'_> {
     type Target = CachedPageData;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { self.data.as_ref() }
+        unsafe { self.ptr.as_ref() }
     }
 }
 
@@ -290,6 +310,7 @@ pub struct CachedPageData {
     pub flags: u8,
     pub use_counter: usize,
     pub rw_counter: isize,
+    pub ref_counter: usize,
 }
 
 impl Debug for CachedPageData {
@@ -308,36 +329,6 @@ impl CachedPageData {
     const DIRTY_FLAGS: u8 = 0b1;
     const NEW_FLAGS: u8 = 0b11;
 
-    /// Accède aux données modifiables de la page
-    ///
-    /// Attention cela ne passe pas la page en statut dirty.
-    /// Il faut utiliser [Self::open_mut_cursor] avec dirty = true.
-    pub fn borrow_mut_content(&mut self) -> &mut [u8] {
-        unsafe { self.content.as_mut() }
-    }
-
-    /// Ouvre un curseur pour modifier le contenu de la page cachée
-    ///
-    /// Deux possibilitées :
-    /// - modifier la page qui devra être commit (dirty = true) ;
-    /// - modifier le contenu de la page sans devoir être commit (dirty = false).
-    ///
-    /// La seconde possibilité est à réserver au cas de chargement/déchargement de la page de la mémoire.
-    pub fn open_mut_cursor(&mut self, dirty: bool) -> Cursor<&mut [u8]> {
-        if dirty {
-            self.set_dirty();
-        }
-        Cursor::new(self.borrow_mut_content())
-    }
-
-    pub fn open_cursor(&self) -> Cursor<&[u8]> {
-        Cursor::new(self.borrow_content())
-    }
-
-    pub fn borrow_content(&self) -> &[u8] {
-        unsafe { self.content.as_ref() }
-    }
-
     pub fn new(pid: PageId, content: NonNull<[u8]>) -> Self {
         Self {
             pid,
@@ -345,6 +336,7 @@ impl CachedPageData {
             flags: 0,
             use_counter: 0,
             rw_counter: 0,
+            ref_counter: 0,
         }
     }
 
@@ -372,9 +364,6 @@ impl CachedPageData {
         self.flags & Self::DIRTY_FLAGS == Self::DIRTY_FLAGS
     }
 
-    pub fn is_borrowed(&self) -> bool {
-        self.rw_counter != 0
-    }
     pub fn is_mut_borrowed(&self) -> bool {
         self.rw_counter < 0
     }
@@ -387,6 +376,7 @@ mod tests {
         collections::HashMap,
         error::Error,
         io::{Cursor, Write},
+        ops::Deref,
         rc::Rc,
     };
 
@@ -404,7 +394,7 @@ mod tests {
         fn discharge(&self, src: &super::CachedPage<'_>) -> crate::pager::PagerResult<()> {
             println!("décharge {0}", src.id());
             let mut buf = Vec::<u8>::new();
-            buf.write_all(src.borrow_content())?;
+            buf.write_all(src.borrow().deref())?;
             self.0.borrow_mut().insert(src.id(), buf);
             Ok(())
         }
@@ -412,7 +402,8 @@ mod tests {
         fn retrieve(&self, dest: &mut super::CachedPage<'_>) -> crate::pager::PagerResult<()> {
             let pid = dest.id();
             println!("récupère {pid}");
-            dest.open_mut_cursor(false)
+            dest.borrow_mut(false)
+                .open_mut_cursor()
                 .write_all(self.0.borrow().get(&pid).unwrap())?;
             self.0.borrow_mut().remove(&dest.id());
             Ok(())
@@ -431,16 +422,20 @@ mod tests {
         let single_page_cache_size = size_of::<CachedPageData>() + 4_096;
         let cache = PagerCache::new(single_page_cache_size, 4_096, stress.clone());
 
-        println!("create page n° 100");
-        // On va allouer une page
-        let mut pcache = cache.alloc(&100).unwrap();
-        // l'écriture va passer la page en état dirty
-        // ce qui le force à devoir être déchargé de la mémoire.
-        pcache
-            .open_mut_cursor(true)
-            .write_u64::<LittleEndian>(0x1234)?;
+        {
+            println!("create page n° 100");
+            // On va allouer une page
+            let pcache = cache.alloc(&100).unwrap();
+            // l'écriture va passer la page en état dirty
+            // ce qui le force à devoir être déchargé de la mémoire.
+            pcache
+                .borrow_mut(false)
+                .open_mut_cursor()
+                .write_u64::<LittleEndian>(0x1234)?;
 
-        assert!(pcache.is_dirty(), "la page n° 100 doit être dirty");
+            assert!(pcache.is_dirty(), "la page n° 100 doit être dirty");
+            drop(pcache);
+        }
 
         // On vérifie que le cache est bien plein et qu'on est en situation
         // de stress mémoire.
@@ -449,14 +444,18 @@ mod tests {
             "le cache doit être plein"
         );
 
-        println!("create page n° 110");
-        // On va allouer une seconde page
-        // normalement la taille de cache est insuffisante pour stocker deux pages
-        // le cache doit alors décharger la première page.
-        let mut pcache = cache.alloc(&110).unwrap();
-        pcache
-            .open_mut_cursor(true)
-            .write_u64::<LittleEndian>(0x5678)?;
+        {
+            println!("create page n° 110");
+            // On va allouer une seconde page
+            // normalement la taille de cache est insuffisante pour stocker deux pages
+            // le cache doit alors décharger la première page.
+            let pcache = cache.alloc(&110).unwrap();
+            pcache
+                .borrow_mut(false)
+                .open_mut_cursor()
+                .write_u64::<LittleEndian>(0x5678)?;
+            drop(pcache);
+        }
 
         // On teste que la page 100 a été déchargée correctement.
         assert!(
@@ -475,7 +474,7 @@ mod tests {
 
         // on va récupérer la page 100 en mémoire
         let pcache = cache.get(&100)?;
-        let got = pcache.open_cursor().read_u64::<LittleEndian>()?;
+        let got = pcache.borrow().open_cursor().read_u64::<LittleEndian>()?;
 
         assert!(
             !stress.contains(&100),

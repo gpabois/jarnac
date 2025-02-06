@@ -3,7 +3,7 @@ use std::{
     alloc::{alloc, dealloc, Layout},
     cell::RefCell,
     io::{self, Cursor, Read, Seek, Write},
-    ops::Deref,
+    ops::{Deref, DerefMut},
     ptr::NonNull,
 };
 
@@ -328,11 +328,11 @@ where
     }
 
     fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>> {
-        self.get_cached_page(id).and_then(RefPage::try_acquire)
+        self.get_cached_page(id).and_then(RefPage::try_new)
     }
 
     fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>> {
-        self.get_cached_page(id).and_then(MutPage::try_acquire)
+        self.get_cached_page(id).and_then(MutPage::try_new)
     }
 
     fn delete_page(&self, pid: &PageId) -> PagerResult<()> {
@@ -447,7 +447,7 @@ where
 
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
         file.seek(std::io::SeekFrom::Start(loc))?;
-        file.read_exact(page.borrow_mut_content())?;
+        file.read_exact(page.borrow_mut(true).deref_mut())?;
 
         Ok(())
     }
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     pub fn test_new_page() -> Result<(), Box<dyn Error>> {
-        let vfs = Rc::new(InMemoryFs::new());
+        let vfs = Rc::new(InMemoryFs::default());
         let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
 
         {
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     pub fn test_read_write_page() -> Result<(), Box<dyn Error>> {
-        let vfs = Rc::new(InMemoryFs::new());
+        let vfs = Rc::new(InMemoryFs::default());
         let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
 
         let pid = pager.new_page()?;
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     pub fn test_commit() -> Result<(), Box<dyn Error>> {
-        let vfs = Rc::new(InMemoryFs::new());
+        let vfs = Rc::new(InMemoryFs::default());
         let pager = Pager::new(vfs.clone(), "test", 4_096, PagerOptions::default())?;
 
         let pid = pager.new_page()?;

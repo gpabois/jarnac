@@ -3,54 +3,54 @@ use std::io::{self, Read, Result, Seek, Write};
 pub mod in_memory;
 
 pub trait IPath: Clone + PartialEq + ToString {
-  /// Retourne le répertoire à partir du chemin.
-  fn parent(&self) -> Self;
-  
-  /// Joint deux bouts de chemin ensemble
-  fn join(&self, rhs: Self) -> Self;
+    /// Retourne le répertoire à partir du chemin.
+    fn parent(&self) -> Self;
 
-  /// Ajoute un chemin
-  fn append(&self, path: &str) -> Self;
+    /// Joint deux bouts de chemin ensemble
+    fn join(&self, rhs: Self) -> Self;
 
-  /// Retourne le dernier élément du chemin
-  fn tail(&self) -> String;
+    /// Ajoute un chemin
+    fn append(&self, path: &str) -> Self;
 
-  /// Modifie le stem du chemin
-  fn modify_stem<F: FnOnce(&str) -> String>(&self, modifier: F) -> Self {
-    let parent = self.parent();
-    let extension = self.extension().unwrap_or_else(|| "".to_owned());
-    let stem = modifier(&self.stem());
+    /// Retourne le dernier élément du chemin
+    fn tail(&self) -> String;
 
-    parent.append(&format!("{stem}{extension}"))
-  }
+    /// Modifie le stem du chemin
+    fn modify_stem<F: FnOnce(&str) -> String>(&self, modifier: F) -> Self {
+        let parent = self.parent();
+        let extension = self.extension().unwrap_or_else(|| "".to_owned());
+        let stem = modifier(&self.stem());
 
-  /// Retourne le nom du fichier sans l'extension.
-  fn stem(&self) -> String {
-    let tail = self.tail();
-    let mut parts = tail.split(".").collect::<Vec<_>>();
-    
-    if parts.len() <= 1 {
-        return parts.join(".")
+        parent.append(&format!("{stem}{extension}"))
     }
 
-    parts.pop();
-    parts.join(".")
-  }
+    /// Retourne le nom du fichier sans l'extension.
+    fn stem(&self) -> String {
+        let tail = self.tail();
+        let mut parts = tail.split(".").collect::<Vec<_>>();
 
-  /// Retourne l'extension du fichier s'il existe.
-  fn extension(&self) -> Option<String> {
-    let tail = self.tail();
-    let parts = tail.split(".").collect::<Vec<_>>();
+        if parts.len() <= 1 {
+            return parts.join(".");
+        }
 
-    if parts.len() <= 1 {
-        return None
+        parts.pop();
+        parts.join(".")
     }
 
-    Some(parts.last().unwrap().to_string())
-  }
+    /// Retourne l'extension du fichier s'il existe.
+    fn extension(&self) -> Option<String> {
+        let tail = self.tail();
+        let parts = tail.split(".").collect::<Vec<_>>();
+
+        if parts.len() <= 1 {
+            return None;
+        }
+
+        Some(parts.last().unwrap().to_string())
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
 pub struct FileOpenOptions(u8);
 
 impl FileOpenOptions {
@@ -87,7 +87,7 @@ impl FileOpenOptions {
             Self(self.0 | Self::READ_FLAG)
         } else {
             Self(self.0 & !Self::READ_FLAG)
-        }       
+        }
     }
 
     pub fn write(self, value: bool) -> Self {
@@ -95,44 +95,47 @@ impl FileOpenOptions {
             Self(self.0 | Self::WRITE_FLAG)
         } else {
             Self(self.0 & !Self::WRITE_FLAG)
-        }       
+        }
     }
 }
 
-
 /// Interface vers un système de fichier.
 pub trait IFileSystem {
-  type File<'fs>: Seek + Write + Read where Self: 'fs;
-  type Path: IPath;
+    type File<'fs>: Seek + Write + Read
+    where
+        Self: 'fs;
+    type Path: IPath;
 
-  /// Ouvre le fichier.
-  fn open<'fs>(&'fs self, path: &Self::Path, options: FileOpenOptions) -> Result<Self::File<'fs>>;
+    /// Ouvre le fichier.
+    fn open<'fs>(&'fs self, path: &Self::Path, options: FileOpenOptions)
+        -> Result<Self::File<'fs>>;
 
-  /// Le noeud du système de fichier existe.
-  fn exists(&self, path: &Self::Path) -> bool;
+    /// Le noeud du système de fichier existe.
+    fn exists(&self, path: &Self::Path) -> bool;
 
-  /// Supprime le fichier/répertoire
-  fn rm(&self, path: &Self::Path) -> std::io::Result<()>;
+    /// Supprime le fichier/répertoire
+    fn rm(&self, path: &Self::Path) -> std::io::Result<()>;
 }
-
 
 /// Un pointeur vers un fichier dans un système de fichier.
-/// 
+///
 /// Permet d'éviter d'avoir un tuple (path, fs) à répercuter partout ailleurs.
-pub struct FilePtr<Fs> 
-where Fs: IFileSystem
+pub struct FilePtr<Fs>
+where
+    Fs: IFileSystem,
 {
     pub path: Fs::Path,
-    pub fs: Fs
+    pub fs: Fs,
 }
 
-impl<Fs> FilePtr<Fs> 
-where Fs: IFileSystem
+impl<Fs> FilePtr<Fs>
+where
+    Fs: IFileSystem,
 {
     pub fn new<Path: Into<Fs::Path>>(fs: Fs, path: Path) -> Self {
         Self {
             path: path.into(),
-            fs
+            fs,
         }
     }
 
@@ -144,3 +147,4 @@ where Fs: IFileSystem
         self.fs.exists(&self.path)
     }
 }
+

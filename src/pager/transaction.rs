@@ -1,6 +1,7 @@
 use std::{
     io::{self, Read, Seek, Write},
     iter,
+    ops::Deref,
 };
 
 use crate::fs::IFileSystem;
@@ -43,9 +44,9 @@ where
 
         self.pager
             .iter_dirty_pages()
-            .map(|mut cpage| {
+            .try_for_each(|mut cpage| {
                 // On filtre les pages propres
-                if cpage.is_dirty() == false {
+                if !cpage.is_dirty() {
                     return Ok(());
                 }
 
@@ -65,12 +66,11 @@ where
                 }
 
                 file.seek(io::SeekFrom::Start(loc))?;
-                file.write_all(cpage.borrow_content())?;
+                file.write_all(cpage.borrow().deref())?;
                 cpage.clear_flags();
 
                 Ok(())
             })
-            .collect::<PagerResult<()>>()
             .and_then(|_| {
                 file.seek(io::SeekFrom::Start(0))?;
                 self.pager.write_header(file)?;
