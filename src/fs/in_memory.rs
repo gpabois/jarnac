@@ -1,4 +1,13 @@
-use std::{borrow::Borrow, cell::{RefCell, UnsafeCell}, collections::HashMap, io::{self, Cursor, ErrorKind, Read, Seek, Write}, ops::Deref, pin::Pin, ptr::NonNull, rc::Rc};
+use std::{
+    borrow::Borrow,
+    cell::{RefCell, UnsafeCell},
+    collections::HashMap,
+    io::{self, Cursor, ErrorKind, Read, Seek, Write},
+    ops::Deref,
+    pin::Pin,
+    ptr::NonNull,
+    rc::Rc,
+};
 
 use super::{FileOpenOptions, IFileSystem, IPath};
 
@@ -38,7 +47,7 @@ impl Borrow<str> for InMemoryPath {
 }
 
 impl InMemoryPath {
-    fn segments(&self) -> impl Iterator<Item=&str> {
+    fn segments(&self) -> impl Iterator<Item = &str> {
         self.0.split("/")
     }
 }
@@ -55,13 +64,13 @@ impl IPath for InMemoryPath {
         segments.extend(rhs.segments());
         Self(segments.join("/"))
     }
-    
+
     fn append(&self, path: &str) -> Self {
         let mut segments = self.segments().collect::<Vec<_>>();
         segments.push(path);
         Self(segments.join("/"))
     }
-    
+
     fn tail(&self) -> String {
         let mut segments = self.segments().collect::<Vec<_>>();
         segments.pop().unwrap_or_default().to_string()
@@ -112,55 +121,63 @@ impl IFileSystem for Rc<InMemoryFs> {
     type File<'fs> = <InMemoryFs as IFileSystem>::File<'fs>;
     type Path = InMemoryPath;
 
-    fn open<'fs>(&'fs self, path: &Self::Path, options: FileOpenOptions) -> io::Result<Self::File<'fs>> {
+    fn open<'fs>(
+        &'fs self,
+        path: &Self::Path,
+        options: FileOpenOptions,
+    ) -> io::Result<Self::File<'fs>> {
         self.deref().open(path, options)
     }
 
     fn rm(&self, path: &Self::Path) -> io::Result<()> {
         self.deref().rm(path)
     }
-       
+
     fn exists(&self, path: &Self::Path) -> bool {
         self.deref().exists(path)
     }
 }
 
 impl InMemoryFs {
-  pub fn new() -> Self {
-    Self(RefCell::new(HashMap::default()))
-  }
+    pub fn new() -> Self {
+        Self(RefCell::new(HashMap::default()))
+    }
 }
 
 impl IFileSystem for InMemoryFs {
     type File<'fs> = InMemoryFile<'fs>;
     type Path = InMemoryPath;
 
-    fn open<'fs>(&'fs self, path: &Self::Path, options: FileOpenOptions) -> std::io::Result<Self::File<'fs>> {
-        let mut map =  self.0.borrow_mut();
-        
+    fn open<'fs>(
+        &'fs self,
+        path: &Self::Path,
+        options: FileOpenOptions,
+    ) -> std::io::Result<Self::File<'fs>> {
+        let mut map = self.0.borrow_mut();
+
         if map.contains_key(path.as_ref()) == false {
             if options.is_create() {
                 map.insert(path.to_string(), FileData::default());
-            }
-            else {
-                return Err(
-                    io::Error::new(
-                        ErrorKind::NotFound, 
-                        format!("file {0} does not exist", path.to_string())
-                    )
-                )
+            } else {
+                return Err(io::Error::new(
+                    ErrorKind::NotFound,
+                    format!("file {0} does not exist", path.to_string()),
+                ));
             }
         }
-        
-        map.get(path.as_ref()).map(|data|  unsafe {InMemoryFile(Cursor::new(data.get_mut_ptr().as_mut())) }).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))
+
+        map.get(path.as_ref())
+            .map(|data| unsafe { InMemoryFile(Cursor::new(data.get_mut_ptr().as_mut())) })
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "file not found"))
     }
-    
+
     fn rm(&self, path: &Self::Path) -> std::io::Result<()> {
         self.0.borrow_mut().remove(path.as_ref());
         Ok(())
     }
-    
+
     fn exists(&self, path: &Self::Path) -> bool {
         self.0.borrow().contains_key(path.as_ref())
     }
 }
+

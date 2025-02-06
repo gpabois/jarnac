@@ -2,20 +2,23 @@ use std::io::Cursor;
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use super::{page::{PageId, PageKind}, IPagerInternals, PagerResult};
+use super::{
+    page::{PageId, PageKind},
+    IPagerInternals, PagerResult,
+};
 
 /// Représente les données stockée dans une page libre.
 pub struct FreePage {
-    next: Option<PageId>
+    next: Option<PageId>,
 }
 
 impl FreePage {
     pub fn new(next: Option<PageId>) -> Self {
-        Self {next}
+        Self { next }
     }
-    
+
     /// Lit les données d'une page libre.
-    /// 
+    ///
     /// L'opération peut échouer si :
     /// - le type de la page n'est pas *free* ;
     /// - le slice est d'une taille insuffisante.
@@ -29,23 +32,22 @@ impl FreePage {
         } else {
             None
         };
-        
+
         Ok(Self { next })
     }
 
     /// Lit les données depuis une page
-    /// 
+    ///
     /// L'opération peut échouer si :
     /// - le slice est d'une taille insuffisante pour stocker les données.
     pub fn write(&self, page: &mut [u8]) -> PagerResult<()> {
         let mut cursor = Cursor::new(page);
         cursor.write_u8(PageKind::Free as u8)?;
-        
+
         if let Some(next) = self.next {
             cursor.write_u8(1)?;
             cursor.write_u64::<LittleEndian>(next)?;
-        }
-        else {
+        } else {
             cursor.write_u8(0)?;
             cursor.write_u64::<LittleEndian>(0)?;
         }
@@ -73,9 +75,9 @@ pub fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> PagerResult<Optio
     if let Some(next) = pager.free_head() {
         let new_head = FreePage::read(&pager.get_page(&next)?)?.next;
         pager.set_free_head(new_head);
-        return Ok(Some(next))
+        return Ok(Some(next));
     }
 
     return Ok(None);
-
 }
+
