@@ -16,13 +16,15 @@ pub type PageLocation = u64;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PageKind {
-    Free = 0x00,
+    Free = 0,
+    Overflow = 1,
 }
 
 impl Display for PageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PageKind::Free => write!(f, "free"),
+            PageKind::Overflow => write!(f, "overflow"),
         }
     }
 }
@@ -44,6 +46,7 @@ impl TryFrom<u8> for PageKind {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Free),
+            1 => Ok(Self::Overflow),
             _ => Err(PagerError::new(PagerErrorKind::InvalidPageKind)),
         }
     }
