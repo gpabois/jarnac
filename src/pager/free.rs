@@ -27,7 +27,7 @@ where
     /// L'opération peut échouer si :
     /// - le type de la page n'est pas *free* ;
     /// - le slice est d'une taille insuffisante.
-    pub fn read(page: P) -> PagerResult<Self> {
+    pub fn load(page: P) -> PagerResult<Self> {
         let mut cursor = Cursor::new(page.deref());
         let kind: PageKind = cursor.read_u8()?.try_into()?;
         kind.assert(PageKind::Free)?;
@@ -107,7 +107,7 @@ pub(super) fn push_free_page<Pager: IPagerInternals>(
 /// Dépile une page libre dans la liste chaînée
 pub(super) fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> PagerResult<Option<PageId>> {
     if let Some(next) = pager.free_head() {
-        let new_head = FreePage::read(pager.get_page(&next)?)?.next;
+        let new_head = FreePage::load(pager.get_page(&next)?)?.next;
         pager.set_free_head(new_head);
         return Ok(Some(next));
     }
