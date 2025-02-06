@@ -74,6 +74,13 @@ pub trait IPager {
     /// Récupère une page modifiable existante.
     fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>>;
 
+    /// Nombre de pages stockées.
+    fn len(&self) -> u64;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
 }
@@ -216,7 +223,7 @@ impl PagerHeader {
 
     pub fn page_location(&self, pid: &PageId) -> PageLocation {
         let ps: u64 = self.page_size.try_into().unwrap();
-        PAGER_HEADER_SIZE + (ps * (*pid))
+        PAGER_PAGES_BASE + (ps * (*pid))
     }
 
     /// Ecris l'entête dans un fichier paginé
@@ -337,6 +344,10 @@ where
 
     fn delete_page(&self, pid: &PageId) -> PagerResult<()> {
         push_free_page(self, pid)
+    }
+
+    fn len(&self) -> u64 {
+        self.header.borrow().page_count
     }
 }
 
@@ -530,6 +541,7 @@ mod tests {
         drop(pager);
 
         let pager = Pager::open(vfs, "test", PagerOptions::default())?;
+        assert_eq!(pager.len(), 1);
 
         let got = pager
             .get_page(&pid)?

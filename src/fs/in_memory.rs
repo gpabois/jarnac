@@ -177,3 +177,36 @@ impl IFileSystem for InMemoryFs {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+
+    use crate::fs::{FileOpenOptions, IFileSystem};
+
+    use super::{InMemoryFs, InMemoryPath};
+
+    #[test]
+    fn test_read_write() -> Result<(), Box<dyn Error>> {
+        let fs = InMemoryFs::default();
+
+        fs.open(
+            &InMemoryPath::from("test"),
+            FileOpenOptions::default().create(true).write(true),
+        )?
+        .write_u64::<LittleEndian>(0x1234)?;
+
+        assert_eq!(
+            fs.open(
+                &InMemoryPath::from("test"),
+                FileOpenOptions::default().read(true)
+            )?
+            .read_u64::<LittleEndian>()?,
+            0x1234
+        );
+
+        Ok(())
+    }
+}
+
