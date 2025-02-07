@@ -200,6 +200,16 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
         prev_ov_pid = Some(pid);
     }
 
+    // Si il reste des pages de débordement, on va les libérer, ça sert à rien de les garder.
+    if let Some(tail) = prev_ov_pid {
+        pager
+            .get_mut_page(&tail)
+            .and_then(OverflowPage::load)?.next.into_iter()
+            .try_for_each(|rem|  {
+                free_overflow_pages(rem, pager)
+            })?;
+    }
+
     Ok(DynamicSizedDataHeader {
         total_size: total_size.try_into().unwrap(),
         in_page_size: in_page_size.try_into().unwrap(),
@@ -210,11 +220,8 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
 #[cfg(test)]
 mod tests {
     use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc};
-
     use rand::RngCore;
-
     use crate::{fs::in_memory::InMemoryFs, pager::{overflow::read_dynamic_sized_data, Pager, PagerOptions}};
-
     use super::write_dynamic_sized_data;
 
     #[test]
