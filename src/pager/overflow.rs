@@ -25,7 +25,7 @@ pub struct OverflowPage<Page> {
 }
 
 impl<Page> OverflowPage<Page> {
-    const OVERFLOW_HEADER_SIZE: usize = 10;
+    const OVERFLOW_HEADER_SIZE: usize = 18;
     const OVERFLOW_BASE: usize = Self::OVERFLOW_HEADER_SIZE;
 }
 
@@ -39,6 +39,8 @@ where
         kind.assert(PageKind::Overflow)?;
 
         let in_page_size = cursor.read_u64::<LittleEndian>()?;
+        let usize_in_page_size: usize =in_page_size.try_into().unwrap();
+        assert!(usize_in_page_size <= page.deref().len() - Self::OVERFLOW_BASE, "{usize_in_page_size} > {0}", page.deref().len() - Self::OVERFLOW_BASE);
 
         let mut next: Option<PageId> = None;
         if cursor.read_u8()? == 1 {
@@ -94,7 +96,8 @@ where
     pub fn set_next(&mut self, next: Option<PageId>) -> std::io::Result<()> {
         self.next = next;
         let mut cursor = Cursor::new(self.page.deref_mut());
-        cursor.seek(std::io::SeekFrom::Start(5))?;
+        
+        cursor.seek(std::io::SeekFrom::Start(9))?;
         if let Some(next) = self.next {
             cursor.write_u8(1)?;
             cursor.write_u64::<LittleEndian>(next)?;
@@ -107,6 +110,7 @@ where
     }
 
     fn set_in_page_size(&mut self, size: usize) -> std::io::Result<()> {
+        assert!(size <= self.page.len() - Self::OVERFLOW_BASE);
         self.in_page_size = size.try_into().unwrap();
         let mut cursor = Cursor::new(self.page.deref_mut());
         cursor.seek(std::io::SeekFrom::Start(1))?;
@@ -191,9 +195,9 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
                 .get_mut_page(&prev_ov_pid)
                 .and_then(OverflowPage::load)?;
             prev_ov_page.set_next(Some(pid))?;
-        } else {
-            prev_ov_pid = Some(pid);
         }
+
+        prev_ov_pid = Some(pid);
     }
 
     Ok(DynamicSizedDataHeader {
@@ -201,4 +205,54 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
         in_page_size: in_page_size.try_into().unwrap(),
         ov_head,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc};
+
+    use rand::RngCore;
+
+    use crate::{fs::in_memory::InMemoryFs, pager::{overflow::read_dynamic_sized_data, Pager, PagerOptions}};
+
+    use super::write_dynamic_sized_data;
+
+    #[test]
+    pub fn test_overflow() -> Result<(), Box<dyn Error>>{
+        let fs = Rc::new(InMemoryFs::default());
+        let pager = Pager::new(fs, "test", 4_096, PagerOptions::default())?;
+
+        let mut data = unsafe {
+            let mut data = Box::<[u8; 1_000_000]>::new_uninit().assume_init();
+            rand::rng().fill_bytes(data.deref_mut());
+            data
+        };
+
+        let expected = data.clone();
+        
+        let mut dest: [u8;100] = [0;100];
+
+        let dsd_header: crate::pager::overflow::DynamicSizedDataHeader = write_dynamic_sized_data(data.deref(), &mut dest, &pager)?;
+        assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
+        assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
+        assert!(dsd_header.ov_head == Some(0), "il doit y avoir eu du débordement");
+
+        // Efface les données stockées dans le tampon.
+        data.deref_mut().fill(0);
+
+        read_dynamic_sized_data(
+            &dsd_header, 
+            &mut Cursor::new(data.deref_mut().as_mut_slice()), 
+            &dest, 
+            &pager
+        )?;
+
+        assert_eq!(
+            data.as_slice(), 
+            expected.as_slice(),
+            "la donnée récupérée doit être identique à celle stockée"
+        );
+
+        Ok(())
+    }
 }
