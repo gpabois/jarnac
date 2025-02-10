@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.numThreads": null,
+    "rust-analyzer.procMacro.ignored": {
+        "zerocopy_derive": ["KnownLayout"]
+    },
+}

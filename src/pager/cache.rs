@@ -13,7 +13,7 @@ use itertools::Itertools;
 
 use super::{
     error::{PagerError, PagerErrorKind},
-    page::{MutPage, PageId, RefPage},
+    page::{MutPage, PageId, PageSize, RefPage},
     stress::{BoxedPagerStress, IPagerStress},
     PagerResult,
 };
@@ -28,7 +28,7 @@ pub(super) struct PagerCache {
     /// The tail of allocated space
     tail: RefCell<usize>,
     /// The size of a page
-    page_size: usize,
+    page_size: PageSize,
     /// Free page cells
     free_list: RefCell<Vec<NonNull<CachedPageData>>>,
     /// stored
@@ -57,20 +57,23 @@ impl<'cache> Iterator for PagerCacheIter<'cache> {
     type Item = PagerResult<CachedPage<'cache>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.ids.pop().map(|pid| self.cache.get(&pid))
+        self.ids.pop().map(|pid| self.cache.get(pid))
     }
 }
 
 impl PagerCache {
     pub fn new<Ps: IPagerStress + 'static>(
         cache_size: usize,
-        page_size: usize,
+        page_size: PageSize,
         stress_strategy: Ps,
     ) -> Self {
         unsafe {
+
+            let align: usize = (page_size + size_of::<CachedPageData>()).next_power_of_two();
+            
             let layout = Layout::from_size_align(
                 cache_size,
-                (page_size + size_of::<CachedPageData>()).next_power_of_two(),
+                align,
             )
             .unwrap();
 
@@ -91,13 +94,14 @@ impl PagerCache {
     }
 
     /// Alloue de l'espace dans le cache pour stocker une page.
-    pub fn alloc<'cache>(&'cache self, pid: &PageId) -> PagerResult<CachedPage<'cache>> {
+    pub fn alloc<'cache>(&'cache self, pid: &PageId) -> PagerResult<CachedPage<'cache>> 
+    {       
         // Déjà caché
-        if self.in_memory.borrow().contains_key(pid) || self.stress.contains(pid) {
+        if self.in_memory.borrow().contains_key(&pid) || self.stress.contains(&pid) {
             return Err(PagerError::new(PagerErrorKind::PageAlreadyCached(*pid)));
         }
 
-        self.alloc_in_memory(pid).inspect(|_| {
+        self.alloc_in_memory(&pid).inspect(|_| {
             self.stored.borrow_mut().insert(*pid);
         })
     }
@@ -114,9 +118,12 @@ impl PagerCache {
     }
 
     /// Récupère la page si elle est cachée, panique si elle n'existe pas.
-    pub fn get(&self, pid: &PageId) -> PagerResult<CachedPage> {
-        self.try_get(pid)
-            .and_then(|opt| opt.ok_or_else(|| PagerError::new(PagerErrorKind::PageNotCached(*pid))))
+    pub fn get<Pid>(&self, pid: Pid) -> PagerResult<CachedPage> 
+    where PageId: From<Pid>
+    {
+        let pid = PageId::from(pid);
+        self.try_get(&pid)
+            .and_then(|opt| opt.ok_or_else(|| PagerError::new(PagerErrorKind::PageNotCached(pid))))
     }
 
     /// Récupère la page si elle est cachée.
@@ -164,7 +171,7 @@ impl PagerCache {
         }
 
         let current_tail = *self.tail.borrow();
-        let size = size_of::<CachedPageData>() + self.page_size;
+        let size =  self.page_size + size_of::<CachedPageData>();
 
         // On ajoute une nouvelle entrée dans le cache comme on a de la place.
         if current_tail + size <= self.size {
@@ -172,7 +179,7 @@ impl PagerCache {
                 let ptr = self.ptr.add(current_tail);
                 let mut cell_ptr = ptr.cast::<MaybeUninit<CachedPageData>>();
                 let content_ptr = ptr.add(size_of::<CachedPageData>());
-                let content = NonNull::slice_from_raw_parts(content_ptr, self.page_size);
+                let content = NonNull::slice_from_raw_parts(content_ptr, self.page_size.into());
                 let cell_ptr = NonNull::new_unchecked(
                     cell_ptr.as_mut().write(CachedPageData::new(*pid, content)),
                 );
@@ -382,7 +389,7 @@ mod tests {
 
     use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-    use crate::pager::{cache::CachedPageData, page::PageId, stress::IPagerStress};
+    use crate::pager::{cache::CachedPageData, page::{PageId, PageSize}, stress::IPagerStress};
 
     use super::PagerCache;
 
@@ -420,12 +427,12 @@ mod tests {
         let stress = Rc::new(StressStub::default());
         // taille du cache suffisant pour une seule page.
         let single_page_cache_size = size_of::<CachedPageData>() + 4_096;
-        let cache = PagerCache::new(single_page_cache_size, 4_096, stress.clone());
+        let cache = PagerCache::new(single_page_cache_size, PageSize::new(4_096), stress.clone());
 
         {
             println!("create page n° 100");
             // On va allouer une page
-            let pcache = cache.alloc(&100).unwrap();
+            let pcache = cache.alloc(&PageId::from(100)).unwrap();
             // l'écriture va passer la page en état dirty
             // ce qui le force à devoir être déchargé de la mémoire.
             pcache
@@ -449,7 +456,7 @@ mod tests {
             // On va allouer une seconde page
             // normalement la taille de cache est insuffisante pour stocker deux pages
             // le cache doit alors décharger la première page.
-            let pcache = cache.alloc(&110).unwrap();
+            let pcache = cache.alloc(&PageId::from(110)).unwrap();
             pcache
                 .borrow_mut(false)
                 .open_mut_cursor()
@@ -459,13 +466,13 @@ mod tests {
 
         // On teste que la page 100 a été déchargée correctement.
         assert!(
-            stress.contains(&100),
+            stress.contains(&PageId::from(100)),
             "la page n° 100 doit être déchargée du cache"
         );
 
         println!("retrieve page n° 100 in memory");
         assert_eq!(
-            Cursor::new(stress.0.borrow().get(&100).unwrap())
+            Cursor::new(stress.0.borrow().get(&PageId::from(100)).unwrap())
                 .read_u64::<LittleEndian>()
                 .unwrap(),
             0x1234u64,
@@ -473,16 +480,16 @@ mod tests {
         );
 
         // on va récupérer la page 100 en mémoire
-        let pcache = cache.get(&100)?;
+        let pcache = cache.get(100)?;
         let got = pcache.borrow().open_cursor().read_u64::<LittleEndian>()?;
 
         assert!(
-            !stress.contains(&100),
+            !stress.contains(&PageId::from(100)),
             "la page n° 100 doit être récupérée de la mémoire"
         );
 
         assert!(
-            stress.contains(&110),
+            stress.contains(&PageId::from(110)),
             "la page n° 110 doit être déchargée de la mémoire"
         );
 

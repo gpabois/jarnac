@@ -1,6 +1,8 @@
+pub mod numeric;
+
 use std::{
     collections::HashMap,
-    fmt::{Binary, Display},
+    fmt::Display,
 };
 
 use serde::{de::Visitor, Deserialize};

@@ -38,7 +38,7 @@ where
 
         let mut buf: Box<[u8]> = Box::from(
             iter::repeat(0u8)
-                .take(self.pager.page_size())
+                .take(self.pager.page_size().into())
                 .collect::<Vec<_>>(),
         );
 
@@ -55,17 +55,18 @@ where
                     return Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed));
                 }
 
+                
                 let loc = self.pager.page_location(&cpage.pid);
 
                 // Si la page n'est pas nouvelle, alors elle existe déjà dans le fichier paginé
                 // donc on sauvegarde la version originale de la page.
                 if !cpage.is_new() {
-                    file.seek(io::SeekFrom::Start(loc))?;
+                    file.seek(io::SeekFrom::Start(loc.into()))?;
                     file.read_exact(&mut buf)?;
                     logs.log_page(&cpage.id(), &buf)?;
                 }
 
-                file.seek(io::SeekFrom::Start(loc))?;
+                file.seek(io::SeekFrom::Start(loc.into()))?;
                 file.write_all(cpage.borrow().deref())?;
                 cpage.clear_flags();
 

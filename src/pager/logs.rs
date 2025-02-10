@@ -63,7 +63,7 @@ where
 
         self.0
             .seek(io::SeekFrom::Start(PAGER_LOGS_PAGES_BASE_LOC + loc))?;
-        self.0.write_u64::<LittleEndian>(*pid)?;
+        self.0.write_u64::<LittleEndian>((*pid).into())?;
         self.0.write_all(page)
     }
 }

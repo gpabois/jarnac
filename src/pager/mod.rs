@@ -9,7 +9,7 @@ use std::{
 
 use cache::{CachedPage, PagerCache};
 use free::{pop_free_page, push_free_page};
-use page::{MutPage, PageId, PageLocation, RefPage};
+use page::{MutPage, PageId, PageLocation, PageSize, RefPage};
 use stress::FsPagerStress;
 use transaction::PagerTransaction;
 
@@ -19,7 +19,7 @@ mod cache;
 pub mod error;
 pub mod free;
 mod logs;
-pub mod overflow;
+pub mod spill;
 pub mod page;
 mod stress;
 mod transaction;
@@ -53,8 +53,6 @@ trait IPagerInternals: IPager {
     fn page_location(&self, pid: &PageId) -> PageLocation;
     /// Retourne le nombre de pages
     fn page_count(&self) -> u64;
-    /// Retourne la taille d'une page
-    fn page_size(&self) -> usize;
     /// Ecrit l'entête du fichier dans le flux
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()>;
     /// Itère sur les pages cachées
@@ -80,6 +78,8 @@ pub trait IPager {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Reoturne la taille d'une page
+    fn page_size(&self) -> PageSize;
 
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
@@ -99,7 +99,7 @@ impl PagerOptions {
 
 pub struct PagerHeader {
     /// Taille d'une page
-    pub(super) page_size: usize,
+    pub(super) page_size: PageSize,
     /// Nombre de pages stockées dans le pager
     pub(super) page_count: u64,
     /// Début de la liste chaînée des pages libres
@@ -118,16 +118,17 @@ impl Drop for PagerHeader {
 }
 
 impl PagerHeader {
-    pub fn new(page_size: usize) -> Self {
+    pub fn new(page_size: PageSize) -> Self {
         unsafe {
             let layout = Layout::array::<u8>(PAGER_HEADER_SIZE.try_into().unwrap()).unwrap();
+            
             let data = NonNull::slice_from_raw_parts(
                 NonNull::new(alloc(layout)).unwrap(),
                 PAGER_HEADER_SIZE.try_into().unwrap(),
             );
 
             let header = Self {
-                page_size,
+                page_size: page_size.into(),
                 page_count: 0,
                 free_head: None,
                 layout,
@@ -170,7 +171,7 @@ impl PagerHeader {
 
             let mut cursor = self.cursor();
             cursor
-                .write_u64::<LittleEndian>(self.page_size.try_into().unwrap())
+                .write_u64::<LittleEndian>(self.page_size.into())
                 .unwrap();
         }
     }
@@ -178,11 +179,11 @@ impl PagerHeader {
     /// Réhydrate les attributs de l'entête depuis les données brutes
     fn hydrate(&mut self) -> io::Result<()> {
         let mut cursor = self.cursor();
-        let page_size: usize = cursor.read_u64::<LittleEndian>()?.try_into().unwrap();
+        let page_size = cursor.read_u64::<LittleEndian>()?.into();
         let page_count = cursor.read_u64::<LittleEndian>()?;
 
         let free_head = if cursor.read_u8()? == 1 {
-            Some(cursor.read_u64::<LittleEndian>()?)
+            Some(cursor.read_u64::<LittleEndian>()?.into())
         } else {
             cursor.read_u64::<LittleEndian>()?;
             None
@@ -212,7 +213,7 @@ impl PagerHeader {
 
         if let Some(free_head) = head {
             cursor.write_u8(1).unwrap();
-            cursor.write_u64::<LittleEndian>(free_head).unwrap();
+            cursor.write_u64::<LittleEndian>(free_head.into()).unwrap();
         } else {
             cursor.write_u8(0).unwrap();
             cursor.write_u64::<LittleEndian>(0).unwrap();
@@ -222,8 +223,7 @@ impl PagerHeader {
     }
 
     pub fn page_location(&self, pid: &PageId) -> PageLocation {
-        let ps: u64 = self.page_size.try_into().unwrap();
-        PAGER_PAGES_BASE + (ps * (*pid))
+        pid.get_location(PAGER_PAGES_BASE, &self.page_size)
     }
 
     /// Ecris l'entête dans un fichier paginé
@@ -250,11 +250,12 @@ impl PagerHeader {
             stream.read_exact(data.as_mut())?;
 
             let mut header = Self {
-                page_count: 0,
-                page_size: 0,
-                free_head: None,
                 data,
                 layout,
+                page_count: Default::default(),
+                page_size: Default::default(),
+                free_head: Default::default(),
+                
             };
 
             header.hydrate()?;
@@ -290,9 +291,6 @@ where
         self.header.borrow().free_head
     }
 
-    fn page_size(&self) -> usize {
-        self.header.borrow().page_size
-    }
 
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()> {
         self.header.borrow().write(stream)
@@ -310,6 +308,10 @@ impl<Fs> IPager for Pager<Fs>
 where
     Fs: IFileSystem + Clone + 'static,
 {
+    fn page_size(&self) -> PageSize {
+        self.header.borrow().page_size
+    }
+
     fn commit(&self) -> PagerResult<()> {
         // crée une transaction
         let tx = PagerTransaction::new(
@@ -325,7 +327,7 @@ where
     }
 
     fn new_page(&self) -> PagerResult<PageId> {
-        let pid = pop_free_page(self)?.unwrap_or_else(|| self.page_count());
+        let pid = pop_free_page(self)?.unwrap_or_else(|| PageId::new(self.page_count() + 1));
         let mut cpage = self.cache.alloc(&pid)?;
 
         cpage.set_new();
@@ -359,7 +361,7 @@ where
     pub fn new<Path: Into<Fs::Path>>(
         fs: Fs,
         path: Path,
-        page_size: usize,
+        page_size: PageSize,
         options: PagerOptions,
     ) -> PagerResult<Self> {
         let file = FilePtr::new(fs, path);
@@ -435,7 +437,7 @@ where
 
     fn get_cached_page<'pager>(&'pager self, pid: &PageId) -> PagerResult<CachedPage<'pager>> {
         // La page n'existe pas
-        if *pid >= self.page_count() {
+        if *pid > self.page_count() {
             return Err(PagerError::new(PagerErrorKind::UnexistingPage(*pid)));
         }
 
@@ -457,7 +459,7 @@ where
         let loc = self.page_location(&pid);
 
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
-        file.seek(std::io::SeekFrom::Start(loc))?;
+        file.seek(std::io::SeekFrom::Start(loc.into()))?;
         file.read_exact(page.borrow_mut(true).deref_mut())?;
 
         Ok(())
@@ -471,17 +473,18 @@ mod tests {
     use byteorder::WriteBytesExt;
     use byteorder::{LittleEndian, ReadBytesExt};
 
+    use super::page::PageSize;
     use super::{Pager, PagerOptions};
     use crate::{fs::in_memory::InMemoryFs, pager::IPager};
 
     #[test]
     pub fn test_new_page() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
+        let pager = Pager::new(vfs, "test", PageSize::new(4_096), PagerOptions::default())?;
 
         {
             let pid = pager.new_page().unwrap();
-            assert_eq!(pid, 0);
+            assert_eq!(pid, 1);
 
             let cpage = pager.get_cached_page(&pid)?;
             assert!(cpage.is_new());
@@ -494,7 +497,7 @@ mod tests {
     #[test]
     pub fn test_read_write_page() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(vfs, "test", 4_096, PagerOptions::default())?;
+        let pager = Pager::new(vfs, "test", PageSize::new(4_096), PagerOptions::default())?;
 
         let pid = pager.new_page()?;
         let mut page = pager.get_mut_page(&pid)?;
@@ -513,7 +516,7 @@ mod tests {
     #[test]
     pub fn test_commit() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(vfs.clone(), "test", 4_096, PagerOptions::default())?;
+        let pager = Pager::new(vfs.clone(), "test", PageSize::new(4_096), PagerOptions::default())?;
 
         let pid = pager.new_page()?;
         let expected: u64 = 123456;

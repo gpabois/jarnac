@@ -10,7 +10,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use crate::fs::{FileOpenOptions, FilePtr, IFileSystem};
 
-use super::{cache::CachedPage, page::PageId, PagerResult};
+use super::{cache::CachedPage, page::{PageId, PageSize}, PagerResult};
 
 /// Gestion du *stress mémoire* sur le système de pagination.
 ///
@@ -38,7 +38,9 @@ where
         self.deref().retrieve(dest)
     }
 
-    fn contains(&self, pid: &PageId) -> bool {
+    fn contains(&self, pid: &PageId) -> bool 
+    
+    {
         self.deref().contains(pid)
     }
 }
@@ -72,15 +74,15 @@ pub struct FsPagerStress<Fs: IFileSystem> {
     /// Pointeur vers le fichier responsable de stocker les données déchargées
     file: FilePtr<Fs>,
     /// Taille d'une page
-    page_size: usize,
+    page_size: PageSize,
     /// Pages stockées
-    pages: RefCell<HashMap<PageId, usize>>,
+    pages: RefCell<HashMap<PageId, u64>>,
     /// Espaces libres
-    freelist: RefCell<Vec<usize>>,
+    freelist: RefCell<Vec<u64>>,
 }
 
 impl<Fs: IFileSystem> FsPagerStress<Fs> {
-    pub fn new<Path: Into<Fs::Path>>(fs: Fs, path: Path, page_size: usize) -> Self {
+    pub fn new<Path: Into<Fs::Path>>(fs: Fs, path: Path, page_size: PageSize) -> Self {
         let file = FilePtr::new(fs, path);
 
         Self {
@@ -98,11 +100,13 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
             .freelist
             .borrow_mut()
             .pop()
-            .unwrap_or_else(|| self.pages.borrow().len());
+            .unwrap_or_else(|| self.pages.borrow().len().try_into().unwrap());
+        
         let mut file = self
             .file
             .open(FileOpenOptions::new().create(true).write(true))?;
-        let addr: u64 = (self.page_size * offset).try_into().unwrap();
+
+        let addr = self.page_size * offset;
         file.seek(std::io::SeekFrom::Start(addr))?;
         file.write_u8(src.flags)?;
         unsafe {
@@ -113,10 +117,10 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
     }
 
     fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
-        let offset = self.pages.borrow().get(&dest.id()).copied().unwrap();
+        let offset: u64 = self.pages.borrow().get(&dest.id()).copied().unwrap().try_into().unwrap();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
-        let addr: u64 = (self.page_size * offset).try_into().unwrap();
+        let addr: u64 = self.page_size * offset;
         file.seek(std::io::SeekFrom::Start(addr))?;
         dest.flags = file.read_u8()?;
         file.read_exact(dest.borrow_mut(true).deref_mut())?;

@@ -55,6 +55,8 @@ dependencies = [
  "itertools",
  "rand",
  "serde",
+ "zerocopy 0.8.17",
+ "zerocopy-derive 0.8.17",
 ]
 
 [[package]]
