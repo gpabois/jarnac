@@ -4,7 +4,7 @@ use std::{borrow::Cow, ops::DerefMut, u64};
 use zerocopy::{try_transmute_ref, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
-use crate::{pager::{page::{OptionalPageId, PageId, PageKind, PageSize}, spill::{read_dynamic_sized_data, DynamicSizedDataHeader}, IPager, PagerResult}, value::numeric::NumericSpec};
+use crate::{pager::{page::{OptionalPageId, PageId, PageKind, PageSize}, spill::{read_dynamic_sized_data, DynamicSizedDataHeader}, IPager, PagerResult}, value::numeric::{IntoNumericSpec, NumericSpec}};
 
 /// Calcule les paramètres des arbres B+
 fn compute_b_plus_tree_parameters(page_size: PageSize, key_spec: NumericSpec, data_size: Option<u64>) -> BPlusTreeHeader {
@@ -73,7 +73,8 @@ impl<'pager, Pager> BPlusTree<'pager, Pager> where Pager: IPager {
     /// key_size: puissance de 2 (2^key_size), maximum 3
     /// key_signed: la clé est signée +/-
     /// data_size: la taille de la donnée à stocker, None si la taille est dynamique ou indéfinie. 
-    pub fn new (pager: &'pager Pager, key_spec: NumericSpec, data_size: Option<u64>) -> PagerResult<Self> {
+    pub fn new<Key: IntoNumericSpec>(pager: &'pager Pager, data_size: Option<u64>) -> PagerResult<Self> {
+        let key_spec = Key::into_numeric_spec();
         let header = compute_b_plus_tree_parameters(pager.page_size(), key_spec, data_size);
         let pid = pager.new_page()?;
         let mut page = pager.get_mut_page(&pid)?;
