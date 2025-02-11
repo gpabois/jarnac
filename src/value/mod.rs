@@ -1,9 +1,6 @@
 pub mod numeric;
 
-use std::{
-    collections::HashMap,
-    fmt::Display,
-};
+use std::{collections::HashMap, fmt::Display};
 
 use serde::{de::Visitor, Deserialize};
 

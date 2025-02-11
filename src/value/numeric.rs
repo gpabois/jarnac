@@ -10,7 +10,7 @@ enum NumericRefInner<'data> {
     Int8(&'data Int8),
     Int16(&'data Int16),
     Int32(&'data Int32),
-    Int64(&'data Int64)
+    Int64(&'data Int64),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -27,7 +27,7 @@ impl NumericSpec {
     pub fn from<NS: IntoNumericSpec>() -> Self {
         NS::into_numeric_spec()
     }
-    
+
     fn new(size: u8, signed: bool) -> Self {
         let signed: u8 = signed.into();
         Self(size & 0b111 | (signed * 128))
@@ -52,7 +52,7 @@ impl NumericSpec {
             (2, true) => NumericRefInner::Int16(Int16::ref_from_bytes(data).unwrap()),
             (3, true) => NumericRefInner::Int32(Int32::ref_from_bytes(data).unwrap()),
             (4, true) => NumericRefInner::Int64(Int64::ref_from_bytes(data).unwrap()),
-            _ => unreachable!()
+            _ => unreachable!(),
         })
     }
 }
@@ -84,7 +84,6 @@ impl IntoNumericSpec for Uint32 {
     }
 }
 
-
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Uint64(u64);
 
@@ -93,7 +92,6 @@ impl IntoNumericSpec for Uint64 {
         NumericSpec::new(4, false)
     }
 }
-
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Int8(i8);
@@ -104,7 +102,6 @@ impl IntoNumericSpec for Int8 {
     }
 }
 
-
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Int16(i16);
 
@@ -113,7 +110,6 @@ impl IntoNumericSpec for Int16 {
         NumericSpec::new(2, false)
     }
 }
-
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Int32(i32);
@@ -132,3 +128,4 @@ impl IntoNumericSpec for Int64 {
         NumericSpec::new(4, false)
     }
 }
+

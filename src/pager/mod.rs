@@ -16,11 +16,12 @@ use transaction::PagerTransaction;
 use crate::fs::{FileOpenOptions, FilePtr, IFileSystem, IPath};
 
 mod cache;
+pub mod cell;
 pub mod error;
 pub mod free;
 mod logs;
-pub mod spill;
 pub mod page;
+pub mod spill;
 mod stress;
 mod transaction;
 
@@ -121,7 +122,7 @@ impl PagerHeader {
     pub fn new(page_size: PageSize) -> Self {
         unsafe {
             let layout = Layout::array::<u8>(PAGER_HEADER_SIZE.try_into().unwrap()).unwrap();
-            
+
             let data = NonNull::slice_from_raw_parts(
                 NonNull::new(alloc(layout)).unwrap(),
                 PAGER_HEADER_SIZE.try_into().unwrap(),
@@ -255,7 +256,6 @@ impl PagerHeader {
                 page_count: Default::default(),
                 page_size: Default::default(),
                 free_head: Default::default(),
-                
             };
 
             header.hydrate()?;
@@ -290,7 +290,6 @@ where
     fn free_head(&self) -> Option<PageId> {
         self.header.borrow().free_head
     }
-
 
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()> {
         self.header.borrow().write(stream)
@@ -516,7 +515,12 @@ mod tests {
     #[test]
     pub fn test_commit() -> Result<(), Box<dyn Error>> {
         let vfs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(vfs.clone(), "test", PageSize::new(4_096), PagerOptions::default())?;
+        let pager = Pager::new(
+            vfs.clone(),
+            "test",
+            PageSize::new(4_096),
+            PagerOptions::default(),
+        )?;
 
         let pid = pager.new_page()?;
         let expected: u64 = 123456;
