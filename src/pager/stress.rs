@@ -75,10 +75,10 @@ pub struct FsPagerStress<Fs: IFileSystem> {
     file: FilePtr<Fs>,
     /// Taille d'une page
     page_size: PageSize,
-    /// Pages stockées
-    pages: RefCell<HashMap<PageId, u64>>,
+    /// Pages stockées sous la forme pager's pid vers stress's pid.
+    pages: RefCell<HashMap<PageId, PageId>>,
     /// Espaces libres
-    freelist: RefCell<Vec<u64>>,
+    freelist: RefCell<Vec<PageId>>,
 }
 
 impl<Fs: IFileSystem> FsPagerStress<Fs> {
@@ -96,36 +96,37 @@ impl<Fs: IFileSystem> FsPagerStress<Fs> {
 
 impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
     fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()> {
-        let offset = self
+        let pid: PageId = self
             .freelist
             .borrow_mut()
             .pop()
-            .unwrap_or_else(|| self.pages.borrow().len().try_into().unwrap());
-        
+            .unwrap_or_else(|| PageId::from(self.pages.borrow().len()));
+
         let mut file = self
             .file
             .open(FileOpenOptions::new().create(true).write(true))?;
 
-        let addr = self.page_size * offset;
-        file.seek(std::io::SeekFrom::Start(addr))?;
+        let addr = pid *self.page_size;
+        file.seek(std::io::SeekFrom::Start(addr.into()))?;
         file.write_u8(src.flags)?;
         unsafe {
             file.write_all(src.content.as_ref())?;
         }
-        self.pages.borrow_mut().insert(src.id(), offset);
+        self.pages.borrow_mut().insert(src.id(), pid);
+
         Ok(())
     }
 
     fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
-        let offset: u64 = self.pages.borrow().get(&dest.id()).copied().unwrap().try_into().unwrap();
+        let pid = self.pages.borrow().get(&dest.id()).copied().map(PageId::from).unwrap();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
-        let addr: u64 = self.page_size * offset;
-        file.seek(std::io::SeekFrom::Start(addr))?;
+        let addr = pid * self.page_size;
+        file.seek(std::io::SeekFrom::Start(addr.into()))?;
         dest.flags = file.read_u8()?;
         file.read_exact(dest.borrow_mut(true).deref_mut())?;
 
-        self.freelist.borrow_mut().push(offset);
+        self.freelist.borrow_mut().push(pid);
         self.pages.borrow_mut().remove(&dest.id());
 
         Ok(())

@@ -1,94 +1,120 @@
-use std::borrow::Cow;
+//! Arbre B+
+//! 
+//! Le système permet d'indexer une valeur de taille variable ou fixe avec une clé signée/non-signée d'une taille d'au plus 64 bits (cf [crate::value::numeric]).
+use std::{borrow::Cow, cmp::Ordering, marker::PhantomData, ops::{Deref, DerefMut}};
 
-use zerocopy::TryFromBytes;
+use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        page::{OptionalPageId, PageId, PageKind, PageSize},
-        spill::{read_dynamic_sized_data, DynamicSizedDataHeader},
-        IPager, PagerResult,
+        cell::{CellHeader, CellPageHeader}, 
+        page::{MutPage, OptionalPageId, PageId, PageKind, PageSize}, 
+        spill::{read_dynamic_sized_data, DynamicSizedDataHeader}, 
+        IPager, PagerResult
     },
-    value::numeric::{IntoNumericSpec, NumericSpec},
+    value::numeric::{IntoNumericSpec, Numeric, NumericSpec},
 };
+
+pub type BPTreeKey = Numeric;
 
 /// Calcule les paramètres des arbres B+
 fn compute_b_plus_tree_parameters(
     page_size: PageSize,
     key_spec: NumericSpec,
-    data_size: Option<u64>,
+    data_size: Option<u16>,
 ) -> BPlusTreeHeader {
     let key_size = key_spec.size();
-    let u_key_size: usize = usize::from(key_size);
+    let u32_key_size = u16::from(key_size);
+
+    let u32_btree_interior_page_header_size = u16::try_from(size_of::<BPTreeInteriorPageHeader>()).unwrap();
+    let u32_btree_leaf_page_header_size = u16::try_from(size_of::<BPTreeLeafPageHeader>()).unwrap();
+    let u32_page_id_size = u16::try_from(size_of::<PageId>()).unwrap();
+    let u32_dsd = u16::try_from(size_of::<DynamicSizedDataHeader>()).unwrap();
+
+    // taille d'une cellule d'un noeud intérieur.
+    let interior_cell_size = u32_key_size + u32_page_id_size;
+    // taille de l'entête d'une cellule de la feuille
+    let leaf_cell_header_size = u32_dsd + u32_key_size;
 
     // deux choses à calculer :
     // 1. la taille d'une cellule stockant les clés pour les noeuds intermédiaires ;
     // 2. la taille d'une cellule stockant les clés/valeurs pour les feuilles ;
 
-    // taille maximale de l'espace des cellules des noeuds intérieurs
-    let node_cell_size_space = page_size - size_of::<BTreeNodeHeader>();
+    // Taille maximale de l'espace des cellules des noeuds intérieurs
+    let interior_cell_size_space = page_size - u32_btree_interior_page_header_size;
 
     // On détermine K le nombre de clés possibles dans un noeud.
     // K1: Nombre de clés en calculant sur la base de la taille réservée aux cellules des noeuds intérieurs.
     // K2: Nombre de clés en calculant sur la base de la taille réservée aux cellules des feuilles.
-    let k1 = usize::div_ceil(
-        node_cell_size_space - size_of::<PageId>(),
-        u_key_size + size_of::<PageId>(),
+    let k1 = u16::div_ceil(
+        interior_cell_size_space,
+        interior_cell_size,
     );
+
     // On démarre hypothèse K = K1.
     let mut k = k1;
 
-    let node_leaf_size_space =
-        page_size - (size_of::<BTreeNodeHeader>() + size_of::<BTreeLeafHeader>());
+    let node_leaf_size_space = page_size - u32_btree_leaf_page_header_size;
 
     // Deux grands cas : on a passé une taille de données, donc on peut voir lequel des deux K est le plus utile.
     // Pas de taille donnée, donc on prend K = K1, et on calcule la taille maximale admissible des données
     // Une taille donnée, et là :
     // - Si K2 < 2, ça ne vaut pas le coups, on recalcule en prenant K1
     // - Si K2 >= 2, alors on doit vérifier qu'on ne dépasse pas la taille allouée pour les cellules des noeuds intérieurs.
-    if let Some(data_size) = data_size {
-        let u_data_size = usize::try_from(data_size).unwrap();
-        let k2 = usize::div_ceil(node_leaf_size_space, u_key_size + u_data_size);
+    let data_size = if let Some(data_size) = data_size {
+        let k2 = u16::div_ceil(node_leaf_size_space, u32_key_size + data_size);
+        
         // On a un K >= 2, on peut tenter le coup, l'avantage est de ne pas avoir de débordement possible.
         // On doit juste vérifier que ça tiendra avec les noeuds intérieurs
         if k2 >= 2 {
-            if node_cell_size_space < k2 * u_key_size + (k2 + 1) * size_of::<PageId>() {
-                usize::div_ceil(
-                    node_leaf_size_space - k * (u_key_size + size_of::<DynamicSizedDataHeader>()),
+            // Avec K=K2, on recalcule l'espace que ça va occuper pour les noeuds intérieurs.
+            // Si cela excède la taille maximale, on retient K=K1, 
+            // et on recalcule la taille de la valeur stockable en cellule avant débordement.
+            // Sinon
+            if interior_cell_size_space < k2 * interior_cell_size {
+                u16::div_ceil(
+                    node_leaf_size_space - k * leaf_cell_header_size,
                     k,
                 )
             } else {
                 k = k2;
-                u_data_size
+                data_size
             }
         } else {
-            usize::div_ceil(
-                node_leaf_size_space - k * (u_key_size + size_of::<DynamicSizedDataHeader>()),
+            u16::div_ceil(
+                node_leaf_size_space - k * leaf_cell_header_size,
                 k,
             )
         }
     } else {
-        usize::div_ceil(
-            node_leaf_size_space - k * (u_key_size + size_of::<DynamicSizedDataHeader>()),
+        u16::div_ceil(
+            node_leaf_size_space - k * leaf_cell_header_size,
             k,
         )
     };
 
+    let interior_cell_size = k * interior_cell_size;
+    let leaf_cell_size = k * (leaf_cell_header_size + data_size);
+
     BPlusTreeHeader {
         kind: BPlusTreePageKind::Kind,
+        interior_cell_size,
+        leaf_cell_size,
         key_spec,
-        k: u64::try_from(k).unwrap(),
+        data_size,
+        k: u16::try_from(k).unwrap(),
         root: None.into(),
     }
 }
 
 /// Arbre B+
-pub struct BPlusTree<'pager, Pager: IPager> {
+pub struct BPlusTree<'pager, Pager: IPager, Page: 'pager> {
     pager: &'pager Pager,
-    pid: PageId,
+    page: Page,
 }
 
-impl<'pager, Pager> BPlusTree<'pager, Pager>
+impl<'pager, Pager> BPlusTree<'pager, Pager, MutPage<'pager>>
 where
     Pager: IPager,
 {
@@ -99,47 +125,166 @@ where
     /// data_size: la taille de la donnée à stocker, None si la taille est dynamique ou indéfinie.
     pub fn new<Key: IntoNumericSpec>(
         pager: &'pager Pager,
-        data_size: Option<u64>,
+        data_size: Option<u16>,
     ) -> PagerResult<Self> {
         let key_spec = Key::into_numeric_spec();
         let header = compute_b_plus_tree_parameters(pager.page_size(), key_spec, data_size);
+        
         let pid = pager.new_page()?;
         let mut page = pager.get_mut_page(&pid)?;
-
+        page.fill(0);
         page[0] = PageKind::BPlusTree as u8;
 
         let bp_page = BPlusTreePage::try_mut_from_bytes(&mut page).unwrap();
         bp_page.header = header;
 
-        Ok(Self { pager, pid })
+        Ok(Self { pager, page })
     }
 
-    /// Recherche une feuille
-    fn search_leaf(&self, key: &[u8]) -> PagerResult<Option<PageId>> {
-        let page = self.pager.get_page(&self.pid)?;
-        let bp_page = BPlusTreePage::try_ref_from_bytes(&page).unwrap();
+}
 
-        let current = bp_page.header.root;
-        let key_ref = bp_page.header.key_spec.into_ref(key);
+impl<'pager, Pager, Page> AsRef<BPlusTreePage> for BPlusTree<'pager, Pager, Page> 
+where
+    Pager: IPager,
+    Page: Deref<Target=[u8]> + 'pager {
+    
+    fn as_ref(&self) -> &BPlusTreePage {
+        BPlusTreePage::try_ref_from_bytes(&self.page).unwrap()
+    }
+}
+
+impl<'pager, Pager, Page> AsMut<BPlusTreePage> for BPlusTree<'pager, Pager, Page> 
+where
+    Pager: IPager,
+    Page: DerefMut<Target=[u8]> + 'pager {
+    
+    fn as_mut(&mut self) -> &mut BPlusTreePage {
+        BPlusTreePage::try_mut_from_bytes(&mut self.page).unwrap()
+    }
+}
+
+
+impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
+where
+    Pager: IPager,
+    Page: Deref<Target=[u8]> + 'pager
+{
+
+    pub fn node_kind(&self, pid: &PageId) -> PagerResult<BPTreeNodeKind> {
+        let page = self.pager.get_page(pid)?;
+        let node_page = BPTreeNodePage::try_ref_from_bytes(&page)?;
+        Ok(node_page.kind)
+    }
+
+    pub fn search(&self, key: &BPTreeKey) -> PagerResult<Option<&'pager BPlusTreeValue>> {
+        let maybe_pid = self.search_leaf(key)?;
+
+        Ok(match maybe_pid {
+            Some(pid) => {
+                let page = self.pager.get_page(&pid)?;
+                let leaf  = BPTreeLeafPage::try_ref_from_bytes(&page).unwrap();
+                
+                let cell = leaf
+                    .iter(&self.as_ref().header.key_spec)
+                    .filter(|cell| cell == key)
+                    .next();
+
+                None
+            },
+            None => None
+        })
+    }
+
+    /// Recherche une feuille contenant potentiellement la clé
+    fn search_leaf(&self, key: &BPTreeKey) -> PagerResult<Option<PageId>> {
+        let bp_page = self.as_ref();
+
+        let mut current: Option<PageId> = bp_page.header.root.into();
+        
+        // Le type de la clé passée en argument doit être celle supportée par l'arbre.
+        assert_eq!(key.into_numeric_spec(), bp_page.header.key_spec, "invalid key type");
 
         while let Some(pid) = current.as_ref() {
-            let page = self.pager.get_page(pid)?;
-            let node = BPTreeNode::try_ref_from_bytes(&page).unwrap();
-
-            if node.header.kind == BTreeAllowedNodeKinds::Leaf {
+            if self.node_kind(pid)? == BPTreeNodeKind::Leaf {
                 return Ok(Some(*pid));
             } else {
+                let page = self.pager.get_page(pid)?;
+                let interior= BPTreeInteriorPage::try_ref_from_bytes(&page)?;
+                current = Some(interior.search_child(&key))
             }
         }
 
         Ok(None)
     }
 
+}
+
+impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
+where
+    Pager: IPager,
+    Page: DerefMut<Target=[u8]> + 'pager
+{
+    pub fn insert(&mut self, key: Numeric, value: &[u8]) -> PagerResult<()> {
+        let pid = match self.search_leaf(&key)? {
+            Some(pid) => {
+                pid
+            },
+            None => {
+                let leaf_pid = self.insert_leaf()?;
+                self.as_mut().header.root = Some(leaf_pid).into();
+                leaf_pid
+            }
+        };
+
+
+        Ok(())
+    }
+
+    /// Divise un noeud
+    /// 
+    /// Cette opération est utilisée lors d'une insertion si le noeud est plein.
+    fn split(&mut self, pid: &PageId) -> PagerResult<()> {
+        match self.node_kind(pid)? {
+            BPTreeNodeKind::Interior => {
+                let mut page = self.pager.get_mut_page(&pid)?;
+                let interior = BPTreeInteriorPage::try_mut_from_bytes(&mut page)?;
+                
+                // on ne divise pas un noeud qui n'est pas plein.
+                if !interior.is_full() {
+                    return Ok(())
+                }
+
+                Ok(())
+            },
+            BPTreeNodeKind::Leaf => {
+                let mut page = self.pager.get_mut_page(&pid)?;
+                let leaf = BPTreeInteriorPage::try_mut_from_bytes(&mut page)?;
+                
+                // on ne divise pas un noeud qui n'est pas plein.
+                if !leaf.is_full() {
+                    return Ok(())
+                }
+
+                Ok(())
+            },
+        }
+    }
+    
+
     /// Insère une nouvelle feuille dans l'arbre.
     fn insert_leaf(&mut self) -> PagerResult<PageId> {
         let pid = self.pager.new_page()?;
+
         let mut page = self.pager.get_mut_page(&pid)?;
+        page.fill(0);
         page[0] = PageKind::BPlusTreeLeaf as u8;
+        
+        let leaf = BPTreeLeafPage::try_mut_from_bytes(&mut page).unwrap();
+        leaf.header.cell_spec = CellPageHeader::new(
+            self.as_ref().header.interior_cell_size.into(), 
+            self.as_ref().header.k.try_into().unwrap()
+        );
+
         Ok(pid)
     }
 
@@ -148,6 +293,13 @@ where
         let pid = self.pager.new_page()?;
         let mut page = self.pager.get_mut_page(&pid)?;
         page[0] = PageKind::BPlusTreeInterior as u8;
+
+        let interior = BPTreeInteriorPage::try_mut_from_bytes(&mut page).unwrap();
+        interior.header.cell_spec = CellPageHeader::new(
+            self.as_ref().header.leaf_cell_size.into(),
+            self.as_ref().header.k.try_into().unwrap()
+        );
+
         Ok(pid)
     }
 }
@@ -162,14 +314,16 @@ enum BPlusTreePageKind {
 #[repr(C)]
 pub struct BPlusTreeHeader {
     kind: BPlusTreePageKind,
-    /// (10000)(111: taille de la clé)
-    /// 8, 16, 32, 64, 128 respectivement définit comme
-    /// 0, 1, 2, 3, 4
-    /// Le bit de poids le plus fort définit si la clé est
-    /// une valeur signée ou non.
+    /// Spécification de la clé (signée, taille, etc.)
     key_spec: NumericSpec,
+    /// Taille d'une cellule d'une feuille
+    leaf_cell_size: u16,
+    /// Taille d'une cellule d'un noeud intérieur
+    interior_cell_size: u16,
+    /// La taille de la donnée stockable dans une cellule d'une feuille
+    data_size: u16,
     /// Nombre maximum de clés dans l'arbre B+
-    k: u64,
+    k: u16,
     /// Pointeur vers la racine
     root: OptionalPageId,
 }
@@ -182,66 +336,165 @@ pub struct BPlusTreePage {
     body: [u8],
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable, PartialEq, Eq)]
+#[derive(TryFromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
-enum BTreeAllowedNodeKinds {
+enum BPTreeNodeKind {
+    #[allow(dead_code)]
     Interior = PageKind::BPlusTreeInterior as u8,
+    #[allow(dead_code)]
     Leaf = PageKind::BPlusTreeLeaf as u8,
 }
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
-/// L'entête d'un noeud d'un arbre B+
-pub struct BTreeNodeHeader {
-    kind: BTreeAllowedNodeKinds,
-    cell_count: u16,
-}
-
-/// Données permettant d'accéder aux cellules d'un noeud d'un arbre B+
-pub struct BPTreeCellSpec {
-    /// Taille d'une page
-    page_size: PageSize,
-    /// Nombre de clés maximum
-    k: u64,
-    /// Spec de la clé
-    key_spec: NumericSpec,
+pub struct BPTreeNodePage {
+    kind: BPTreeNodeKind,
+    body: [u8]
 }
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
-/// Représentation englobant les noeuds intermédiaires et les feuilles
-pub struct BPTreeNode {
-    header: BTreeNodeHeader,
+/// L'entête d'un noeud d'un arbre B+
+pub struct BPTreeInteriorPageHeader {
+    kind: BPTreeNodeKind,
+    cell_spec: CellPageHeader
+}
+
+#[derive(TryFromBytes, KnownLayout, Immutable)]
+#[repr(C)]
+/// Noeud intérieur
+pub struct BPTreeInteriorPage {
+    header: BPTreeInteriorPageHeader,
+    /// Pointeur le plus à droite
+    tail: OptionalPageId,
+    /// Contient les cellules du noeud. (cf [crate::pager::cell])
     cells: [u8],
 }
 
-impl BPTreeNode {}
+impl BPTreeInteriorPage {
+    pub fn is_full(&self) -> bool {
+        self.header.cell_spec.is_full()
+    }
+}
+
+#[derive(FromBytes, KnownLayout, Immutable)]
+#[repr(C)]
+/// Cellule d'un noeud intérieur.
+pub struct BPTreeInteriorCell {
+    cell: CellHeader,
+    left: OptionalPageId,
+    parent: OptionalPageId,
+    key: [u8]
+}
+
+impl BPTreeInteriorCell {
+    /// Récupère la valeur de la clé à partir d'une tranche binaire.
+    pub fn from_key_byte_slice(&self, spec: &NumericSpec) -> Numeric {
+        spec.from_byte_slice(&self.key)
+    }
+}
+
+impl BPTreeInteriorPage {
+    /// Itère sur les cellules du noeud.
+    pub fn iter(&self) -> impl Iterator<Item=&BPTreeInteriorCell> {
+        self.header.cell_spec.iter_cells_bytes(&self.cells).map(|bytes| BPTreeInteriorCell::ref_from_bytes(&bytes).unwrap())
+    }
+
+    /// Recherche le noeud enfant à partir de la clé passée en référence.
+    pub fn search_child(&self, key: &Numeric) -> PageId {
+        let spec = &key.into_numeric_spec();
+        let maybe_child: Option<PageId> = self.iter()
+        .filter(
+            |cell| cell.from_key_byte_slice(&spec).partial_cmp(key).map(Ordering::is_le).unwrap_or_default()
+        )
+        .last()
+        .map(|cell| cell.left)
+        .unwrap_or_else(|| self.tail)
+        .into();
+
+        maybe_child.expect("should have a child to perform the search")
+    }
+}
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
-pub struct BTreeLeafHeader {
-    previous: OptionalPageId,
+#[repr(C)]
+/// En-tête d'une [feuille](self::BPTreeLeafPage).
+pub struct BPTreeLeafPageHeader {
+    kind: BPTreeNodeKind,
+    cell_spec: CellPageHeader,
+    parent: OptionalPageId,
+    prev: OptionalPageId,
     next: OptionalPageId,
 }
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 /// Page d'une feuille d'un arbre B+
-pub struct BTreeLeafPage {
-    common: BTreeNodeHeader,
-    leaf: BTreeLeafHeader,
+pub struct BPTreeLeafPage {
+    header: BPTreeLeafPageHeader,
     cells: [u8],
 }
 
+impl BPTreeLeafPage {
+    pub fn is_full(&self) -> bool {
+        self.header.cell_spec.is_full()
+    }
+
+    pub fn iter<'a>(&'a self, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<'a, &'a BPlusTreeValue>> {
+        self
+            .header
+            .cell_spec
+            .iter_cells_bytes(&self.cells)
+            .map(|bytes| BPlusTreeCell::ref_from_bytes(key_spec, bytes))
+    }
+
+}
+
+/// Cellule d'une feuille contenant une paire clé/valeur.
+pub struct BPlusTreeCell<'a, ValuePart: 'a>{
+    _pht: PhantomData<&'a()>,
+    key: Numeric,
+    value_part: ValuePart
+}
+
+impl<ValuePart> PartialEq<Numeric> for BPlusTreeCell<'_, ValuePart> {
+    fn eq(&self, other: &Numeric) -> bool {
+        self.key.eq(other)
+    }
+}
+
+impl<'a> BPlusTreeCell<'a, &'a BPlusTreeValue> {
+    
+    /// Retourne une cellule clé/valeur
+    pub fn ref_from_bytes(key_spec: &NumericSpec, cell: &'a [u8]) -> Self {
+        let key_bytes = key_spec.get_byte_slice(cell);
+        let key = key_spec.from_byte_slice(key_bytes);
+        let value_part_bytes = &cell[usize::from(key_spec.size())..];
+
+        let value_part = BPlusTreeValue::ref_from_bytes(value_part_bytes).unwrap();
+
+        Self { key, value_part, _pht: PhantomData }
+    }
+
+    /// Récupère une référence sur les données stockées dans la cellule.
+    pub fn get_value<Pager: IPager>(&self, pager: &Pager) -> PagerResult<Cow<'_, [u8]>> {
+        self.value_part.get(pager)
+    }
+}
+
+
 #[derive(FromBytes, KnownLayout, Immutable)]
 #[repr(C)]
-pub struct BPlusTreeCell {
+/// Représente la partie valeur d'une cellule d'une feuille.
+pub struct BPlusTreeValue {
     data_header: DynamicSizedDataHeader,
     data: [u8],
 }
 
-impl BPlusTreeCell {
+impl BPlusTreeValue {
+
     /// Récupère une référence sur les données stockées dans la cellule.
-    pub fn get(&self, pager: &impl IPager) -> PagerResult<Cow<'_, [u8]>> {
+    pub fn get<Pager: IPager>(&self, pager: &Pager) -> PagerResult<Cow<'_, [u8]>> {
         // Les données ont débordées ailleurs
         // on va devoir créer un tampon pour stocker tout ça.
         if self.data_header.has_spilled() {
@@ -258,4 +511,3 @@ impl BPlusTreeCell {
         &self.data[..self.data_header.in_page_size.try_into().unwrap()]
     }
 }
-

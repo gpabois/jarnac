@@ -5,6 +5,8 @@ use std::{
     io,
 };
 
+use zerocopy::TryFromBytes;
+
 use super::page::{PageId, PageKind};
 
 pub struct PagerError {
@@ -45,6 +47,18 @@ impl Error for PagerError {
     }
 }
 
+impl<Src, Dest> From<zerocopy::TryCastError<Src, Dest>> for PagerError 
+where Dest: TryFromBytes + ?Sized
+{
+    fn from(value: zerocopy::TryCastError<Src, Dest>) -> Self {
+        match value {
+            zerocopy::ConvertError::Alignment(_) => todo!(),
+            zerocopy::ConvertError::Size(_) => todo!(),
+            zerocopy::ConvertError::Validity(_) => todo!(),
+        }
+    }
+}
+
 impl From<io::Error> for PagerError {
     fn from(value: io::Error) -> Self {
         Self::new(PagerErrorKind::IoError(value))
@@ -62,6 +76,7 @@ pub enum PagerErrorKind {
     InvalidPageKind,
     InvalidFormat,
     WrongPageKind { expected: PageKind, got: PageKind },
+    CellPageFull,
     IoError(io::Error),
 }
 
@@ -79,6 +94,7 @@ impl Display for PagerErrorKind {
             }
             PagerErrorKind::IoError(_) => write!(f, "an io error occured"),
             PagerErrorKind::PageNotCached(id) => write!(f, "page {id} not cached"),
+            PagerErrorKind::CellPageFull => write!(f, "cell page is full"),
         }
     }
 }

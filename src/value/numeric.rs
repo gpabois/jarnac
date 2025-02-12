@@ -2,25 +2,40 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum NumericRefInner<'data> {
-    Uint8(&'data Uint8),
-    Uint16(&'data Uint16),
-    Uint32(&'data Uint32),
-    Uint64(&'data Uint64),
-    Int8(&'data Int8),
-    Int16(&'data Int16),
-    Int32(&'data Int32),
-    Int64(&'data Int64),
+enum NumericInner {
+    Uint8(Uint8),
+    Uint16(Uint16),
+    Uint32(Uint32),
+    Uint64(Uint64),
+    Int8(Int8),
+    Int16(Int16),
+    Int32(Int32),
+    Int64(Int64),
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct NumericRef<'data>(NumericRefInner<'data>);
+pub struct Numeric(NumericInner);
+
+impl Numeric {
+    pub fn into_numeric_spec(&self) -> NumericSpec {
+        match self.0 {
+            NumericInner::Uint8(_) => Uint8::into_numeric_spec(),
+            NumericInner::Uint16(_) => Uint16::into_numeric_spec(),
+            NumericInner::Uint32(_) => Uint32::into_numeric_spec(),
+            NumericInner::Uint64(_) => Uint64::into_numeric_spec(),
+            NumericInner::Int8(_) => Int8::into_numeric_spec(),
+            NumericInner::Int16(_) => Int16::into_numeric_spec(),
+            NumericInner::Int32(_) => Int32::into_numeric_spec(),
+            NumericInner::Int64(_) => Int64::into_numeric_spec(),
+        }
+    }
+}
 
 pub trait IntoNumericSpec {
     fn into_numeric_spec() -> NumericSpec;
 }
 
-#[derive(FromBytes, Clone, Copy, KnownLayout, Immutable)]
+#[derive(FromBytes, Clone, Copy, KnownLayout, Immutable, Eq, PartialEq, Debug)]
 pub struct NumericSpec(u8);
 
 impl NumericSpec {
@@ -41,23 +56,27 @@ impl NumericSpec {
         self.0 & 0b111
     }
 
+    pub fn get_byte_slice<'data>(&self, data: &'data [u8]) -> &'data [u8] {
+        &data[0..usize::from(self.size())]
+    }
+
     /// Récupère une référence vers une valeur numérique sans réaliser de copie.
-    pub fn into_ref<'data>(&self, data: &'data [u8]) -> NumericRef<'data> {
-        NumericRef(match (self.size(), self.is_signed()) {
-            (1, false) => NumericRefInner::Uint8(Uint8::ref_from_bytes(data).unwrap()),
-            (2, false) => NumericRefInner::Uint16(Uint16::ref_from_bytes(data).unwrap()),
-            (3, false) => NumericRefInner::Uint32(Uint32::ref_from_bytes(data).unwrap()),
-            (4, false) => NumericRefInner::Uint64(Uint64::ref_from_bytes(data).unwrap()),
-            (1, true) => NumericRefInner::Int8(Int8::ref_from_bytes(data).unwrap()),
-            (2, true) => NumericRefInner::Int16(Int16::ref_from_bytes(data).unwrap()),
-            (3, true) => NumericRefInner::Int32(Int32::ref_from_bytes(data).unwrap()),
-            (4, true) => NumericRefInner::Int64(Int64::ref_from_bytes(data).unwrap()),
+    pub fn from_byte_slice<'data>(&self, data: &[u8]) -> Numeric {
+        Numeric(match (self.size(), self.is_signed()) {
+            (1, false) => NumericInner::Uint8(*Uint8::ref_from_bytes(data).unwrap()),
+            (2, false) => NumericInner::Uint16(*Uint16::ref_from_bytes(data).unwrap()),
+            (3, false) => NumericInner::Uint32(*Uint32::ref_from_bytes(data).unwrap()),
+            (4, false) => NumericInner::Uint64(*Uint64::ref_from_bytes(data).unwrap()),
+            (1, true) => NumericInner::Int8(*Int8::ref_from_bytes(data).unwrap()),
+            (2, true) => NumericInner::Int16(*Int16::ref_from_bytes(data).unwrap()),
+            (3, true) => NumericInner::Int32(*Int32::ref_from_bytes(data).unwrap()),
+            (4, true) => NumericInner::Int64(*Int64::ref_from_bytes(data).unwrap()),
             _ => unreachable!(),
         })
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Uint8(u8);
 
 impl IntoNumericSpec for Uint8 {
@@ -66,7 +85,7 @@ impl IntoNumericSpec for Uint8 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Uint16(u16);
 
 impl IntoNumericSpec for Uint16 {
@@ -75,7 +94,7 @@ impl IntoNumericSpec for Uint16 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Uint32(u32);
 
 impl IntoNumericSpec for Uint32 {
@@ -84,7 +103,7 @@ impl IntoNumericSpec for Uint32 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Uint64(u64);
 
 impl IntoNumericSpec for Uint64 {
@@ -93,7 +112,7 @@ impl IntoNumericSpec for Uint64 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Int8(i8);
 
 impl IntoNumericSpec for Int8 {
@@ -102,7 +121,7 @@ impl IntoNumericSpec for Int8 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Int16(i16);
 
 impl IntoNumericSpec for Int16 {
@@ -111,7 +130,7 @@ impl IntoNumericSpec for Int16 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Int32(i32);
 
 impl IntoNumericSpec for Int32 {
@@ -120,7 +139,7 @@ impl IntoNumericSpec for Int32 {
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct Int64(i64);
 
 impl IntoNumericSpec for Int64 {

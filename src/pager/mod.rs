@@ -1,15 +1,14 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use zerocopy::TryFromBytes;
+use zerocopy_derive::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use std::{
-    alloc::{alloc, dealloc, Layout},
-    cell::RefCell,
-    io::{self, Cursor, Read, Seek, Write},
-    ops::{Deref, DerefMut},
-    ptr::NonNull,
+    cell::UnsafeCell,
+    io::{self, Read, Seek, Write},
+    ops::DerefMut,
 };
 
 use cache::{CachedPage, PagerCache};
 use free::{pop_free_page, push_free_page};
-use page::{MutPage, PageId, PageLocation, PageSize, RefPage};
+use page::{MutPage, OptionalPageId, PageId, PageLocation, PageSize, RefPage};
 use stress::FsPagerStress;
 use transaction::PagerTransaction;
 
@@ -63,25 +62,20 @@ trait IPagerInternals: IPager {
 pub trait IPager {
     /// Crée une nouvelle page.
     fn new_page(&self) -> PagerResult<PageId>;
-
     /// Supprime une page
     fn delete_page(&self, id: &PageId) -> PagerResult<()>;
-
     /// Récupère une page existante.
     fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>>;
-
     /// Récupère une page modifiable existante.
     fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>>;
-
     /// Nombre de pages stockées.
     fn len(&self) -> u64;
-
+    /// Aucune page n'est stockée
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
     /// Reoturne la taille d'une page
     fn page_size(&self) -> PageSize;
-
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
 }
@@ -98,56 +92,27 @@ impl PagerOptions {
     }
 }
 
+#[derive(TryFromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(packed)]
 pub struct PagerHeader {
+    /// Nombre magique
+    magic_number: u16,
     /// Taille d'une page
     pub(super) page_size: PageSize,
     /// Nombre de pages stockées dans le pager
     pub(super) page_count: u64,
     /// Début de la liste chaînée des pages libres
-    pub(super) free_head: Option<PageId>,
-    /// Données de l'entête du pager.
-    data: NonNull<[u8]>,
-    layout: Layout,
-}
-
-impl Drop for PagerHeader {
-    fn drop(&mut self) {
-        unsafe {
-            dealloc(self.data.cast::<u8>().as_ptr(), self.layout);
-        }
-    }
+    pub(super) free_head: OptionalPageId,
 }
 
 impl PagerHeader {
-    pub fn new(page_size: PageSize) -> Self {
-        unsafe {
-            let layout = Layout::array::<u8>(PAGER_HEADER_SIZE.try_into().unwrap()).unwrap();
-
-            let data = NonNull::slice_from_raw_parts(
-                NonNull::new(alloc(layout)).unwrap(),
-                PAGER_HEADER_SIZE.try_into().unwrap(),
-            );
-
-            let header = Self {
-                page_size: page_size.into(),
-                page_count: 0,
-                free_head: None,
-                layout,
-                data,
-            };
-
-            header.initialise();
-
-            header
+    fn initialise(&mut self, page_size: PageSize) {
+        *self = Self {
+            magic_number: MAGIC_NUMBER,
+            page_size,
+            page_count: 0,
+            free_head: None.into()
         }
-    }
-}
-
-impl Deref for PagerHeader {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.data.as_ref() }
     }
 }
 
@@ -156,119 +121,43 @@ impl PagerHeader {
     pub const PAGE_COUNT_LOC: u64 = 8;
     pub const PAGE_FREE_HEAD_LOC: u64 = 16;
 
-    /// Ouvre un curseur sur les données de l'entête.
-    fn cursor(&self) -> Cursor<&mut [u8]> {
-        unsafe {
-            let mut_data = self.data.as_ptr().as_mut().unwrap();
-            Cursor::new(mut_data)
-        }
-    }
-
-    /// Initialise une nouvelle entête
-    fn initialise(&self) {
-        unsafe {
-            let mut_data = self.data.as_ptr().as_mut().unwrap();
-            mut_data.fill(0);
-
-            let mut cursor = self.cursor();
-            cursor
-                .write_u64::<LittleEndian>(self.page_size.into())
-                .unwrap();
-        }
-    }
-
-    /// Réhydrate les attributs de l'entête depuis les données brutes
-    fn hydrate(&mut self) -> io::Result<()> {
-        let mut cursor = self.cursor();
-        let page_size = cursor.read_u64::<LittleEndian>()?.into();
-        let page_count = cursor.read_u64::<LittleEndian>()?;
-
-        let free_head = if cursor.read_u8()? == 1 {
-            Some(cursor.read_u64::<LittleEndian>()?.into())
-        } else {
-            cursor.read_u64::<LittleEndian>()?;
-            None
-        };
-
-        self.page_count = page_count;
-        self.page_size = page_size;
-        self.free_head = free_head;
-
-        Ok(())
-    }
-
     pub fn inc_page_count(&mut self) {
         self.page_count += 1;
-        let mut cursor = self.cursor();
-        cursor
-            .seek(io::SeekFrom::Start(Self::PAGE_COUNT_LOC))
-            .unwrap();
-        cursor.write_u64::<LittleEndian>(self.page_count).unwrap();
+
     }
 
     pub fn set_free_head(&mut self, head: Option<PageId>) {
-        let mut cursor = self.cursor();
-        cursor
-            .seek(io::SeekFrom::Start(Self::PAGE_FREE_HEAD_LOC))
-            .unwrap();
-
-        if let Some(free_head) = head {
-            cursor.write_u8(1).unwrap();
-            cursor.write_u64::<LittleEndian>(free_head.into()).unwrap();
-        } else {
-            cursor.write_u8(0).unwrap();
-            cursor.write_u64::<LittleEndian>(0).unwrap();
-        };
-
-        self.free_head = head;
+        self.free_head = head.into();
     }
 
     pub fn page_location(&self, pid: &PageId) -> PageLocation {
-        pid.get_location(PAGER_PAGES_BASE, &self.page_size)
-    }
-
-    /// Ecris l'entête dans un fichier paginé
-    pub fn write<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()> {
-        unsafe {
-            let data = self.data.as_ref();
-            stream.seek(io::SeekFrom::Start(PAGER_HEADER_LOC))?;
-            stream.write_all(data)?;
-
-            Ok(())
-        }
-    }
-
-    /// Lit l'entête depuis un fichier paginé.
-    pub fn read<R: Read + Seek>(stream: &mut R) -> io::Result<Self> {
-        unsafe {
-            let layout = Layout::array::<u8>(PAGER_HEADER_SIZE.try_into().unwrap()).unwrap();
-            let mut data = NonNull::slice_from_raw_parts(
-                NonNull::new(alloc(layout)).unwrap(),
-                PAGER_HEADER_SIZE.try_into().unwrap(),
-            );
-
-            stream.seek(io::SeekFrom::Start(PAGER_HEADER_LOC))?;
-            stream.read_exact(data.as_mut())?;
-
-            let mut header = Self {
-                data,
-                layout,
-                page_count: Default::default(),
-                page_size: Default::default(),
-                free_head: Default::default(),
-            };
-
-            header.hydrate()?;
-
-            Ok(header)
-        }
+        let page_size = self.page_size;
+        pid.get_location(PAGER_PAGES_BASE, &page_size)
     }
 }
 
 pub struct Pager<Fs: IFileSystem> {
-    header: RefCell<PagerHeader>,
+    header: UnsafeCell<Box<[u8; size_of::<PagerHeader>()]>>,
     cache: PagerCache,
     file: FilePtr<Fs>,
+}
+
+impl<Fs> Pager<Fs> 
+where Fs: IFileSystem
+{
+    fn borrow_header(&self) -> &PagerHeader {
+        unsafe  {
+            let bytes = self.header.get().as_ref().unwrap().as_slice();
+            PagerHeader::try_ref_from_bytes(bytes).unwrap()
+        }
+    }
+
+    fn borrow_mut_header(&self) -> &mut PagerHeader {
+        unsafe  {
+            let bytes = self.header.get().as_mut().unwrap().as_mut_slice();
+            PagerHeader::try_mut_from_bytes(bytes).unwrap()
+        }    
+    }
 }
 
 impl<Fs> IPagerInternals for Pager<Fs>
@@ -276,23 +165,25 @@ where
     Fs: IFileSystem + Clone + 'static,
 {
     fn set_free_head(&self, head: Option<PageId>) {
-        self.header.borrow_mut().set_free_head(head);
+        self.borrow_mut_header().set_free_head(head);
     }
 
     fn page_location(&self, pid: &PageId) -> PageLocation {
-        self.header.borrow().page_location(pid)
+        self.borrow_header().page_location(pid)
     }
 
     fn page_count(&self) -> u64 {
-        self.header.borrow().page_count
+        self.borrow_header().page_count
     }
 
     fn free_head(&self) -> Option<PageId> {
-        self.header.borrow().free_head
+        self.borrow_header().free_head.into()
     }
 
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()> {
-        self.header.borrow().write(stream)
+        unsafe {
+            stream.write_all(self.header.get().as_ref().unwrap().as_slice())
+        }
     }
 
     fn iter_dirty_pages(&self) -> impl Iterator<Item = CachedPage<'_>> {
@@ -308,7 +199,7 @@ where
     Fs: IFileSystem + Clone + 'static,
 {
     fn page_size(&self) -> PageSize {
-        self.header.borrow().page_size
+        self.borrow_header().page_size
     }
 
     fn commit(&self) -> PagerResult<()> {
@@ -330,7 +221,7 @@ where
         let mut cpage = self.cache.alloc(&pid)?;
 
         cpage.set_new();
-        self.header.borrow_mut().inc_page_count();
+        self.borrow_mut_header().inc_page_count();
 
         Ok(pid)
     }
@@ -348,7 +239,7 @@ where
     }
 
     fn len(&self) -> u64 {
-        self.header.borrow().page_count
+        self.borrow_header().page_count
     }
 }
 
@@ -386,16 +277,14 @@ where
             .into());
         }
 
-        let header = PagerHeader::new(page_size);
-        let mut stream = file.open(FileOpenOptions::new().write(true).create(true))?;
-        stream.write_u16::<LittleEndian>(MAGIC_NUMBER)?;
-        header.write(&mut stream)?;
-        drop(stream);
+        let mut header_bytes = Box::<[u8; size_of::<PagerHeader>()]>::new([0; size_of::<PagerHeader>()]);
+        let header = PagerHeader::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
+        header.initialise(page_size);
 
         Ok(Self {
             file,
             cache,
-            header: RefCell::new(header),
+            header: UnsafeCell::new(header_bytes)
         })
     }
 
@@ -408,13 +297,17 @@ where
         let file = FilePtr::new(fs, path);
         let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
+        let mut header_bytes = Box::<[u8; size_of::<PagerHeader>()]>::new([0; size_of::<PagerHeader>()]);
+
         // On récupère l'entête du fichier paginé.
         let header = {
             let mut stream = file.open(FileOpenOptions::new().read(true))?;
-            assert_eq!(stream.read_u16::<LittleEndian>()?, MAGIC_NUMBER);
+            stream.read_exact(header_bytes.as_mut_slice())?;
 
-            PagerHeader::read(&mut stream)
-        }?;
+            let header = PagerHeader::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
+            assert!(header.magic_number == MAGIC_NUMBER, "not a nac file");
+            header
+        };
 
         // Instantie le cache
         let cache = cache::PagerCache::new(
@@ -430,7 +323,7 @@ where
         Ok(Self {
             file,
             cache,
-            header: RefCell::new(header),
+            header: UnsafeCell::new(header_bytes)
         })
     }
 

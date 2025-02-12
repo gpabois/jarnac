@@ -213,7 +213,7 @@ mod tests {
         let dsd_header: crate::pager::spill::DynamicSizedDataHeader = write_dynamic_sized_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
-        assert!(dsd_header.spill_page_id == Some(PageId::from(1)).into(), "il doit y avoir eu du débordement");
+        assert!(dsd_header.spill_page_id == Some(PageId::from(1u64)).into(), "il doit y avoir eu du débordement");
 
         // Efface les données stockées dans le tampon.
         data.deref_mut().fill(0);

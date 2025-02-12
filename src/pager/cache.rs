@@ -432,7 +432,7 @@ mod tests {
         {
             println!("create page n° 100");
             // On va allouer une page
-            let pcache = cache.alloc(&PageId::from(100)).unwrap();
+            let pcache = cache.alloc(&PageId::from(100u64)).unwrap();
             // l'écriture va passer la page en état dirty
             // ce qui le force à devoir être déchargé de la mémoire.
             pcache
@@ -456,7 +456,7 @@ mod tests {
             // On va allouer une seconde page
             // normalement la taille de cache est insuffisante pour stocker deux pages
             // le cache doit alors décharger la première page.
-            let pcache = cache.alloc(&PageId::from(110)).unwrap();
+            let pcache = cache.alloc(&PageId::from(110u64)).unwrap();
             pcache
                 .borrow_mut(false)
                 .open_mut_cursor()
@@ -466,13 +466,13 @@ mod tests {
 
         // On teste que la page 100 a été déchargée correctement.
         assert!(
-            stress.contains(&PageId::from(100)),
+            stress.contains(&PageId::from(100u64)),
             "la page n° 100 doit être déchargée du cache"
         );
 
         println!("retrieve page n° 100 in memory");
         assert_eq!(
-            Cursor::new(stress.0.borrow().get(&PageId::from(100)).unwrap())
+            Cursor::new(stress.0.borrow().get(&PageId::from(100u64)).unwrap())
                 .read_u64::<LittleEndian>()
                 .unwrap(),
             0x1234u64,
@@ -480,16 +480,16 @@ mod tests {
         );
 
         // on va récupérer la page 100 en mémoire
-        let pcache = cache.get(100)?;
+        let pcache = cache.get(100u64)?;
         let got = pcache.borrow().open_cursor().read_u64::<LittleEndian>()?;
 
         assert!(
-            !stress.contains(&PageId::from(100)),
+            !stress.contains(&PageId::from(100u64)),
             "la page n° 100 doit être récupérée de la mémoire"
         );
 
         assert!(
-            stress.contains(&PageId::from(110)),
+            stress.contains(&PageId::from(110u64)),
             "la page n° 110 doit être déchargée de la mémoire"
         );
 

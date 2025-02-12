@@ -1,9 +1,16 @@
+//! Module de page
+//! 
+//! Les pages sont toujours renvoyées par le [pager](crate::pager::IPager) :
+//! - soit en [référence](self::RefPage) ;
+//! - soit en [référence mutable](self::MutPage).
+//! 
+//! Les pages sont indexées par [PageId]. 
 use std::{
     fmt::Display, io::Cursor, num::NonZero, ops::{Add, Deref, DerefMut, Mul, Sub}
 };
 
 use zerocopy::ByteSlice;
-use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 use super::{
     cache::CachedPage,
@@ -11,8 +18,7 @@ use super::{
     PagerResult,
 };
 
-
-#[derive(FromBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, Eq)]
+#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, Eq)]
 pub struct OptionalPageId(Option<NonZero<u64>>);
 
 impl AsRef<Option<PageId>> for OptionalPageId {
@@ -50,11 +56,22 @@ impl Into<Option<PageId>> for OptionalPageId {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, TryFromBytes, Immutable, KnownLayout)]
 #[repr(transparent)]
+/// Identifiant d'une page
+/// 
+/// Les valeurs vont de 1 à [u64::MAX]
 pub struct PageId(pub(super)NonZero<u64>);
 
 impl PageId {
     pub(super) fn new(value: u64) -> Self {
         Self(NonZero::new(value).expect("page id must be > 0"))
+    }
+}
+
+impl Mul<PageSize> for PageId {
+    type Output = PageLocation;
+
+    fn mul(self, rhs: PageSize) -> Self::Output {
+        PageLocation((self.0.get() - 1) * u64::from(rhs.0))
     }
 }
 
@@ -82,6 +99,12 @@ impl Into<NonZero<u64>> for PageId {
     }
 }
 
+impl From<usize> for PageId {
+    fn from(value: usize) -> Self {
+        Self(NonZero::try_from(u64::try_from(value).unwrap()).expect("must be a non-zeroed value"))
+    }
+}
+
 impl From<u64> for PageId {
     fn from(value: u64) -> Self {
         Self(NonZero::new(value).expect(&format!("page id should be > 0, got {value}")))
@@ -102,12 +125,21 @@ impl std::fmt::Display for PageId {
 
 impl PageId {
     pub fn get_location(&self, base: u64, page_size: &PageSize) -> PageLocation {
-        PageLocation((self.0.get() - 1) * page_size.0 + base)
+        (*self) * (*page_size) + base
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PageLocation(u64);
+
+impl Add<u64> for PageLocation {
+    type Output = PageLocation;
+
+    fn add(mut self, rhs: u64) -> Self::Output {
+        self.0 += rhs;
+        self
+    }
+}
 
 impl Into<u64> for PageLocation {
     fn into(self) -> u64 {
@@ -115,11 +147,19 @@ impl Into<u64> for PageLocation {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct PageSize(u64);
+#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+/// Taille d'une page
+/// 
+/// Les valeurs vont jusqu'à [u16::MAX]. C'est à dire jusqu'à 64 Kio.
+/// 
+/// L'idée est d'avoir une taille de page qui soit le reflet de la taille d'un bloc du système de fichier.
+/// 
+/// # Example
+/// Pour un volume entre 2 et 16 tebibytes, le FAT32 impose des blocs d'une taille de 64 Kio.
+pub struct PageSize(u16);
 
 impl PageSize {
-    pub fn new(value: u64) -> Self {
+    pub fn new(value: u16) -> Self {
         Self(value)
     }
 }
@@ -133,34 +173,20 @@ impl Add<usize> for PageSize {
     }
 }
 
-impl Sub<usize> for PageSize {
-    type Output = usize;
+impl Sub<u16> for PageSize {
+    type Output = u16;
 
-    fn sub(self, rhs: usize) -> Self::Output {
-        let ps_usize: usize = self.0.try_into().unwrap();
-        ps_usize - rhs
+    fn sub(self, rhs: u16) -> Self::Output {
+        self.0 - rhs
     }
 }
 
-impl Mul<u64> for PageSize {
-    type Output = u64;
-
-    fn mul(self, rhs: u64) -> Self::Output {
-        self.0 * rhs
-    }
-}
-
-impl From<u64> for PageSize {
-    fn from(value: u64) -> Self {
+impl From<u16> for PageSize {
+    fn from(value: u16) -> Self {
         Self(value)
     }
 }
 
-impl Into<u64> for PageSize {
-    fn into(self) -> u64 {
-        self.0
-    }
-}
 
 impl From<usize> for PageSize {
     fn from(value: usize) -> Self {
@@ -174,13 +200,22 @@ impl Into<usize> for PageSize {
     }
 }
 
-#[repr(u8)]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+/// Type de page.
+/// 
+/// Toutes les pages démarrent avec un octet qui permet d'identifier sa nature.
 pub enum PageKind {
+    /// Une page libre (cf [crate::pager::free])
     Free = 0,
+    /// Une page de débordement (cf [crate::pager::spill])
     Overflow = 1,
+    /// La page d'entrée d'un arbre B+ (cf [crate::bp_tree::BPlusTreePage])
     BPlusTree = 2,
+    /// La page représentant un noeud intérieur d'un arbre B+ (cf [crate::bp_tree::BPTreeInteriorPage])
     BPlusTreeInterior = 3,
+    /// La page représentant une feuille d'un arbre B+ (cf [crate::bp_tree::BPTreeLeafPage])
     BPlusTreeLeaf = 4
 }
 
@@ -219,6 +254,7 @@ impl TryFrom<u8> for PageKind {
     }
 }
 
+/// Référence vers une page.
 pub struct RefPage<'pager>(CachedPage<'pager>);
 
 unsafe impl ByteSlice for RefPage<'_> {}
@@ -265,6 +301,7 @@ impl<'pager> RefPage<'pager> {
     }
 }
 
+/// Référence mutable vers une page.
 pub struct MutPage<'pager> {
     /// If true, dirty flag is not raised upon modification
     dry: bool,
@@ -324,10 +361,12 @@ impl<'pager> MutPage<'pager> {
         self.inner.id()
     }
 
+    /// Ouvre une curseur permettant de modifier le contenu de la page.
     pub fn open_mut_cursor(&mut self) -> Cursor<&mut [u8]> {
         Cursor::new(self.deref_mut())
     }
 
+    /// Ouvre un curseur permettant de lire le contenu de la page.
     pub fn open_cursor(&self) -> Cursor<&[u8]> {
         Cursor::new(self.deref())
     }
