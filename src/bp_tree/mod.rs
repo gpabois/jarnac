@@ -8,8 +8,8 @@ use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        cell::{CellHeader, CellPageHeader}, 
-        page::{MutPage, OptionalPageId, PageId, PageKind, PageSize}, 
+        cell::{Cell, CellHeader, CellId, CellPage, CellPageHeader}, 
+        page::{MutPage, OptionalPageId, PageData, PageId, PageKind, PageSize, RefPageSlice, TryIntoRefFromBytes}, 
         spill::{read_dynamic_sized_data, DynamicSizedDataHeader}, 
         IPager, PagerResult
     },
@@ -176,7 +176,7 @@ where
         Ok(node_page.kind)
     }
 
-    pub fn search(&self, key: &BPTreeKey) -> PagerResult<Option<&'pager BPlusTreeValue>> {
+    pub fn search(&self, key: &BPTreeKey) -> PagerResult<Option<RefPageSlice<'pager>>> {
         let maybe_pid = self.search_leaf(key)?;
 
         Ok(match maybe_pid {
@@ -184,10 +184,8 @@ where
                 let page = self.pager.get_page(&pid)?;
                 let leaf  = BPTreeLeafPage::try_ref_from_bytes(&page).unwrap();
                 
-                let cell = leaf
-                    .iter(&self.as_ref().header.key_spec)
-                    .filter(|cell| cell == key)
-                    .next();
+                BPTreeLeafPage::iter(page, &self.as_ref().header.key_spec)
+                .filter(|cell| cell == key);
 
                 None
             },
@@ -209,8 +207,7 @@ where
                 return Ok(Some(*pid));
             } else {
                 let page = self.pager.get_page(pid)?;
-                let interior= BPTreeInteriorPage::try_ref_from_bytes(&page)?;
-                current = Some(interior.search_child(&key))
+                current = Some(BPTreeInteriorPage::search_child(&page, &key))
             }
         }
 
@@ -282,7 +279,8 @@ where
         let leaf = BPTreeLeafPage::try_mut_from_bytes(&mut page).unwrap();
         leaf.header.cell_spec = CellPageHeader::new(
             self.as_ref().header.interior_cell_size.into(), 
-            self.as_ref().header.k.try_into().unwrap()
+            self.as_ref().header.k.try_into().unwrap(),
+            size_of::<BPTreeLeafPageHeader>().try_into().unwrap()
         );
 
         Ok(pid)
@@ -295,9 +293,11 @@ where
         page[0] = PageKind::BPlusTreeInterior as u8;
 
         let interior = BPTreeInteriorPage::try_mut_from_bytes(&mut page).unwrap();
+        
         interior.header.cell_spec = CellPageHeader::new(
             self.as_ref().header.leaf_cell_size.into(),
-            self.as_ref().header.k.try_into().unwrap()
+            self.as_ref().header.k.try_into().unwrap(),
+            size_of::<BPTreeInteriorPageHeader>().try_into().unwrap()
         );
 
         Ok(pid)
@@ -395,21 +395,24 @@ impl BPTreeInteriorCell {
 }
 
 impl BPTreeInteriorPage {
-    /// Itère sur les cellules du noeud.
-    pub fn iter(&self) -> impl Iterator<Item=&BPTreeInteriorCell> {
-        self.header.cell_spec.iter_cells_bytes(&self.cells).map(|bytes| BPTreeInteriorCell::ref_from_bytes(&bytes).unwrap())
-    }
-
     /// Recherche le noeud enfant à partir de la clé passée en référence.
-    pub fn search_child(&self, key: &Numeric) -> PageId {
+    pub fn search_child<'page, Page>(page: Page, key: &Numeric) -> PageId 
+    where Page: PageData<'page> + Clone
+    {
         let spec = &key.into_numeric_spec();
-        let maybe_child: Option<PageId> = self.iter()
-        .filter(
-            |cell| cell.from_key_byte_slice(&spec).partial_cmp(key).map(Ordering::is_le).unwrap_or_default()
-        )
+        let interior = BPTreeInteriorPage::try_ref_from_bytes(page).unwrap();
+
+        let maybe_child: Option<PageId>  = CellPage::iter(page)
+        .filter(|cell| {
+            let interior: &BPTreeInteriorCell = cell.try_into_ref_from_bytes();
+            interior.from_key_byte_slice(spec).partial_cmp(key).map(Ordering::is_le).unwrap_or_default()
+        })
         .last()
-        .map(|cell| cell.left)
-        .unwrap_or_else(|| self.tail)
+        .map(|cell| {
+            let interior: &BPTreeInteriorCell = cell.try_into_ref_from_bytes();
+            interior.left
+        })
+        .unwrap_or_else(|| interior.tail)
         .into();
 
         maybe_child.expect("should have a child to perform the search")
@@ -440,19 +443,25 @@ impl BPTreeLeafPage {
         self.header.cell_spec.is_full()
     }
 
-    pub fn iter<'a>(&'a self, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<'a, &'a BPlusTreeValue>> {
-        self
-            .header
-            .cell_spec
-            .iter_cells_bytes(&self.cells)
-            .map(|bytes| BPlusTreeCell::ref_from_bytes(key_spec, bytes))
+    pub fn iter<'a, Page>(page: Page, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<'a, &'a BPlusTreeValue>> 
+    where Page: PageData<'a> + Clone
+    {
+        CellPage::iter(page)
+            .map(|cell| {
+                BPlusTreeCell::ref_from_bytes(
+                    key_spec, 
+                    cell.cid, 
+                    cell.cell_bytes
+                )
+            })
     }
 
 }
 
 /// Cellule d'une feuille contenant une paire clé/valeur.
-pub struct BPlusTreeCell<'a, ValuePart: 'a>{
+pub struct BPlusTreeCell<'a, ValuePart: 'a> {
     _pht: PhantomData<&'a()>,
+    cid: CellId,
     key: Numeric,
     value_part: ValuePart
 }
@@ -466,14 +475,16 @@ impl<ValuePart> PartialEq<Numeric> for BPlusTreeCell<'_, ValuePart> {
 impl<'a> BPlusTreeCell<'a, &'a BPlusTreeValue> {
     
     /// Retourne une cellule clé/valeur
-    pub fn ref_from_bytes(key_spec: &NumericSpec, cell: &'a [u8]) -> Self {
-        let key_bytes = key_spec.get_byte_slice(cell);
+    pub fn ref_from_bytes<CellData>(key_spec: &NumericSpec, cid: CellId, cell: CellData) -> Self 
+    where CellData: Deref<Target = [u8]>
+    {
+        let key_bytes = key_spec.get_byte_slice(&cell);
         let key = key_spec.from_byte_slice(key_bytes);
         let value_part_bytes = &cell[usize::from(key_spec.size())..];
 
         let value_part = BPlusTreeValue::ref_from_bytes(value_part_bytes).unwrap();
 
-        Self { key, value_part, _pht: PhantomData }
+        Self { key, value_part, cid, _pht: PhantomData }
     }
 
     /// Récupère une référence sur les données stockées dans la cellule.

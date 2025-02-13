@@ -6,10 +6,10 @@
 //! 
 //! Les pages sont indexées par [PageId]. 
 use std::{
-    fmt::Display, io::Cursor, num::NonZero, ops::{Add, Deref, DerefMut, Mul, Sub}
+    fmt::Display, io::Cursor, mem::forget, num::NonZero, ops::{Add, Deref, DerefMut, Mul, Range, Sub}
 };
 
-use zerocopy::ByteSlice;
+use zerocopy::{ByteSlice, Immutable, KnownLayout, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 use super::{
@@ -254,8 +254,67 @@ impl TryFrom<u8> for PageKind {
     }
 }
 
+pub trait PageData<'page>: Deref<Target = [u8]> + IntoPageSlice<Range<usize>> + 'page {}
+pub trait PageMutData<'page>: DerefMut<Target = [u8]> + PageData<'page> {}
+
+pub trait PageSlice<'page>: Deref<Target = [u8]> + 'page {}
+pub trait PageMutSlice<'page>: DerefMut<Target = [u8]> + 'page {}
+
+pub trait TryIntoRefFromBytes<Output: TryFromBytes + KnownLayout + Immutable + ?Sized> {
+    fn try_into_ref_from_bytes(&self) -> &Output;
+}
+
+pub trait TryIntoMutFromBytes<Output: TryFromBytes + KnownLayout + Immutable + ?Sized> {
+    fn try_into_mut_from_bytes(&mut self) -> &mut Output;
+}
+
+pub trait IntoPageSlice<Idx> {
+    type Output: Deref<Target = [u8]>;
+
+    fn into_page_slice(self, idx: Idx) -> Self::Output;
+}
+
+pub trait IntoMutPageSlice<Idx> {
+    type Output;
+
+    fn into_mut_page_slice(self, idx: Idx) -> Self::Output;
+}
+
 /// Référence vers une page.
 pub struct RefPage<'pager>(CachedPage<'pager>);
+
+impl<'pager> PageData<'pager> for RefPage<'pager> {}
+
+impl<Output> TryIntoRefFromBytes<Output> for RefPage<'_> 
+where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
+{
+    fn try_into_ref_from_bytes(&self) -> &Output {
+        Output::try_ref_from_bytes(self.deref()).unwrap()
+    }
+}
+
+impl Clone for RefPage<'_> {
+    fn clone(&self) -> Self {
+        Self::new(self.0.clone())
+    }
+}
+
+impl<'pager, Idx> IntoPageSlice<Idx> for RefPage<'pager> 
+where Idx: std::slice::SliceIndex<[u8], Output = [u8]>
+{
+    type Output = RefPageSlice<'pager>;
+    
+    fn into_page_slice(self, idx: Idx) -> Self::Output {
+        unsafe {
+            let slice = RefPageSlice {
+                inner: self.0.clone(), 
+                slice: &self.0.content.as_ref()[idx]
+            };
+            forget(self);
+            slice
+        }
+    }
+}
 
 unsafe impl ByteSlice for RefPage<'_> {}
 
@@ -292,12 +351,45 @@ impl<'pager> RefPage<'pager> {
         }
     }
 
+    /// Transforme la référence en référence faible.
+    pub fn downgrade(self) -> WeakPage<'pager> {
+        WeakPage(self.0.clone())
+    }
+
     pub fn open_cursor(&self) -> Cursor<&[u8]> {
         Cursor::new(self.deref())
     }
 
     pub fn id(&self) -> PageId {
         self.0.id()
+    }
+}
+
+/// Référence vers une tranche de données d'une page.
+pub struct RefPageSlice<'pager>{
+    inner: CachedPage<'pager>, 
+    slice: &'pager [u8]
+}
+
+impl<Output> TryIntoRefFromBytes<Output> for RefPageSlice<'_> 
+where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
+{
+    fn try_into_ref_from_bytes(&self) -> &Output {
+        Output::try_ref_from_bytes(self.slice).unwrap()
+    }
+}
+
+impl Drop for RefPageSlice<'_> {
+    fn drop(&mut self) {
+        self.inner.rw_counter -= 1;
+    }
+}
+
+impl Deref for RefPageSlice<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.slice
     }
 }
 
@@ -335,6 +427,43 @@ impl Drop for MutPage<'_> {
     }
 }
 
+impl<'pager, Idx> IntoPageSlice<Idx> for MutPage<'pager> 
+where Idx: std::slice::SliceIndex<[u8], Output = [u8]>
+{
+    type Output = RefPageSlice<'pager>;
+    
+    fn into_page_slice(self, idx: Idx) -> Self::Output {
+        self
+            .into_ref()
+            .into_page_slice(idx)
+    }
+}
+
+impl<'pager, Idx> IntoMutPageSlice<Idx> for MutPage<'pager> 
+where Idx: std::slice::SliceIndex<[u8], Output = [u8]>
+{
+    type Output = MutPageSlice<'pager>;
+    
+    fn into_mut_page_slice(mut self, idx: Idx) -> Self::Output {
+        unsafe {
+            let slice = MutPageSlice {
+                inner: self.inner.clone(), 
+                slice: &mut self.inner.content.as_mut()[idx]
+            };
+            forget(self);
+            slice
+        }
+    }
+}
+
+impl<Output> TryIntoMutFromBytes<Output> for MutPage<'_> 
+where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
+{
+    fn try_into_mut_from_bytes(&mut self) -> &mut Output {
+        Output::try_mut_from_bytes(self.deref_mut()).unwrap()
+    }
+}
+
 impl<'pager> MutPage<'pager> {
     pub(super) fn try_new(mut inner: CachedPage<'pager>) -> PagerResult<Self> {
         if inner.rw_counter != 0 {
@@ -357,6 +486,19 @@ impl<'pager> MutPage<'pager> {
         }
     }
 
+    /// Transforme la référence en référence faible.
+    pub fn downgrade(self) -> WeakPage<'pager> {
+        WeakPage(self.inner.clone())
+    }
+
+    /// Transforme la référence mutable en référence simple.
+    pub fn into_ref(mut self) -> RefPage<'pager> {
+        self.inner.rw_counter = 1;
+        let rf = RefPage(self.inner.clone());
+        forget(self);
+        rf
+    }
+
     pub fn id(&self) -> PageId {
         self.inner.id()
     }
@@ -369,5 +511,44 @@ impl<'pager> MutPage<'pager> {
     /// Ouvre un curseur permettant de lire le contenu de la page.
     pub fn open_cursor(&self) -> Cursor<&[u8]> {
         Cursor::new(self.deref())
+    }
+}
+
+
+/// Une tranche mutable d'une page.
+pub struct MutPageSlice<'pager>{
+    inner: CachedPage<'pager>, 
+    slice: &'pager mut [u8]
+}
+
+impl Drop for MutPageSlice<'_> {
+    fn drop(&mut self) {
+        self.inner.rw_counter += 1;
+    }
+}
+
+#[derive(Clone)]
+/// Référence faible vers une page.
+/// 
+/// Le pointeur faible garde la page en mémoire, il faut donc veiller à ne 
+/// pas les garder trop longtemps pour éviter un phénomène d'engorgement
+/// du cache.
+pub struct WeakPage<'pager>(CachedPage<'pager>);
+
+impl<'pager> WeakPage<'pager> {
+    /// Transforme la référence faible en référence.
+    /// 
+    /// #Panics
+    /// Panique si une référence mutable est déjà prise.
+    pub fn upgrade_ref(self) -> RefPage<'pager> {
+        RefPage::new(self.0)
+    }
+
+    /// Transforme la référence faible en référence mutable.
+    /// 
+    /// #Panics
+    /// Panique si une référence est déjà prise.
+    pub fn upgrade_mut(self) -> MutPage<'pager> {
+        MutPage::try_new(self.0).unwrap()
     }
 }
