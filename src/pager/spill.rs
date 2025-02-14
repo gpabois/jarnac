@@ -10,12 +10,17 @@ use super::{
     IPager, PagerResult,
 };
 
-
+#[derive(FromBytes, KnownLayout, Immutable)]
+#[repr(C)]
+pub struct VarData {
+    header: VarHeader,
+    in_page: [u8]
+}
 
 #[derive(FromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 /// Contient les données nécessaires pour récupérer les données d'une taille dynamique.
-pub struct DynamicSizedDataHeader {
+pub struct VarHeader {
     /// La taille totale de la donnée
     pub total_size: u64,
     /// La taille en page
@@ -24,7 +29,7 @@ pub struct DynamicSizedDataHeader {
     pub spill_page_id: OptionalPageId,
 }
 
-impl DynamicSizedDataHeader {
+impl VarHeader {
     pub fn has_spilled(&self) -> bool {
         self.in_page_size < self.total_size
     }
@@ -112,7 +117,7 @@ pub fn free_overflow_pages<Pager: IPager>(head: PageId, pager: &Pager) -> PagerR
 
 /// Lit les données d'une taille dynamique dans une région d'une page.
 pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
-    header: &DynamicSizedDataHeader,
+    header: &VarHeader,
     dest: &mut W,
     src: &[u8],
     pager: &Pager,
@@ -140,7 +145,7 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
-) -> PagerResult<DynamicSizedDataHeader> {
+) -> PagerResult<VarHeader> {
     let total_size = data.len();
     let mut remaining: usize = total_size;
 
@@ -181,7 +186,7 @@ pub fn write_dynamic_sized_data<Pager: IPager>(
         })?;
     }
 
-    Ok(DynamicSizedDataHeader {
+    Ok(VarHeader {
         total_size: total_size.try_into().unwrap(),
         in_page_size: in_page_size.try_into().unwrap(),
         spill_page_id: ov_head.into(),
@@ -210,7 +215,7 @@ mod tests {
         
         let mut dest: [u8;100] = [0;100];
 
-        let dsd_header: crate::pager::spill::DynamicSizedDataHeader = write_dynamic_sized_data(data.deref(), &mut dest, &pager)?;
+        let dsd_header: crate::pager::spill::VarHeader = write_dynamic_sized_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.spill_page_id == Some(PageId::from(1u64)).into(), "il doit y avoir eu du débordement");

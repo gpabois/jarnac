@@ -80,6 +80,8 @@ pub trait IPager {
     fn commit(&self) -> PagerResult<()>;
 }
 
+pub type BoxedPager = Box<dyn IPager>;
+
 #[derive(Default)]
 pub struct PagerOptions {
     cache_size: Option<usize>,
@@ -191,6 +193,15 @@ where
             .iter()
             .map(|cell| cell.unwrap())
             .filter(|cell| cell.is_dirty())
+    }
+}
+
+impl<Fs> Pager<Fs> 
+where
+    Fs: IFileSystem + Clone + 'static,
+{
+    pub fn into_boxed(self) -> BoxedPager {
+        Box::new(self)
     }
 }
 

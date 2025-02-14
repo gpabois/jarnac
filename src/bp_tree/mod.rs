@@ -1,17 +1,14 @@
 //! Arbre B+
 //! 
 //! Le système permet d'indexer une valeur de taille variable ou fixe avec une clé signée/non-signée d'une taille d'au plus 64 bits (cf [crate::value::numeric]).
-use std::{borrow::Cow, cmp::Ordering, marker::PhantomData, ops::{Deref, DerefMut}};
+use std::{cmp::Ordering,  ops::{Deref, DerefMut, Range, RangeFrom}};
 
-use zerocopy::{FromBytes, TryFromBytes};
+use zerocopy::TryFromBytes;
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        cell::{Cell, CellHeader, CellId, CellPage, CellPageHeader}, 
-        page::{MutPage, OptionalPageId, PageData, PageId, PageKind, PageSize, RefPageSlice, TryIntoRefFromBytes}, 
-        spill::{read_dynamic_sized_data, DynamicSizedDataHeader}, 
-        IPager, PagerResult
+        cell::{CellHeader, CellId, CellPage, CellPageHeader, CellSlice}, page::{IntoPageSliceIndex, MutPage, OptionalPageId, PageData, PageId, PageKind, PageSize, PageSliceData, RefPageSlice, TryIntoRefFromBytes}, spill::VarHeader, IPager, PagerResult
     },
     value::numeric::{IntoNumericSpec, Numeric, NumericSpec},
 };
@@ -30,7 +27,7 @@ fn compute_b_plus_tree_parameters(
     let u32_btree_interior_page_header_size = u16::try_from(size_of::<BPTreeInteriorPageHeader>()).unwrap();
     let u32_btree_leaf_page_header_size = u16::try_from(size_of::<BPTreeLeafPageHeader>()).unwrap();
     let u32_page_id_size = u16::try_from(size_of::<PageId>()).unwrap();
-    let u32_dsd = u16::try_from(size_of::<DynamicSizedDataHeader>()).unwrap();
+    let u32_dsd = u16::try_from(size_of::<VarHeader>()).unwrap();
 
     // taille d'une cellule d'un noeud intérieur.
     let interior_cell_size = u32_key_size + u32_page_id_size;
@@ -182,9 +179,8 @@ where
         Ok(match maybe_pid {
             Some(pid) => {
                 let page = self.pager.get_page(&pid)?;
-                let leaf  = BPTreeLeafPage::try_ref_from_bytes(&page).unwrap();
-                
-                BPTreeLeafPage::iter(page, &self.as_ref().header.key_spec)
+
+                BPTreeLeafPage::iter(&page, &self.as_ref().header.key_spec)
                 .filter(|cell| cell == key);
 
                 None
@@ -396,13 +392,14 @@ impl BPTreeInteriorCell {
 
 impl BPTreeInteriorPage {
     /// Recherche le noeud enfant à partir de la clé passée en référence.
-    pub fn search_child<'page, Page>(page: Page, key: &Numeric) -> PageId 
-    where Page: PageData<'page> + Clone
+    pub fn search_child<Page>(page: Page, key: &Numeric) -> PageId 
+    where Page: PageData
     {
         let spec = &key.into_numeric_spec();
-        let interior = BPTreeInteriorPage::try_ref_from_bytes(page).unwrap();
+        let interior = BPTreeInteriorPage::try_ref_from_bytes(page.as_ref()).unwrap();
 
-        let maybe_child: Option<PageId>  = CellPage::iter(page)
+        let maybe_child: Option<PageId>  = CellPage::iter(&page)
+        .flat_map(|cid| CellPage::get_cell_slice(&page, &cid))
         .filter(|cell| {
             let interior: &BPTreeInteriorCell = cell.try_into_ref_from_bytes();
             interior.from_key_byte_slice(spec).partial_cmp(key).map(Ordering::is_le).unwrap_or_default()
@@ -443,15 +440,15 @@ impl BPTreeLeafPage {
         self.header.cell_spec.is_full()
     }
 
-    pub fn iter<'a, Page>(page: Page, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<'a, &'a BPlusTreeValue>> 
-    where Page: PageData<'a> + Clone
+    pub fn iter<'a, Page: 'a>(page: &'a Page, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<impl PageSliceData + 'a>> 
+    where Page: PageData + Clone + IntoPageSliceIndex<Range<usize>>, Page::Output: PageSliceData + IntoPageSliceIndex<RangeFrom<usize>>
     {
         CellPage::iter(page)
+            .flat_map(move |cid| CellPage::get_cell_slice(page, &cid))
             .map(|cell| {
-                BPlusTreeCell::ref_from_bytes(
+                BPlusTreeCell::from_cell_slice(
                     key_spec, 
-                    cell.cid, 
-                    cell.cell_bytes
+                    cell
                 )
             })
     }
@@ -459,66 +456,29 @@ impl BPTreeLeafPage {
 }
 
 /// Cellule d'une feuille contenant une paire clé/valeur.
-pub struct BPlusTreeCell<'a, ValuePart: 'a> {
-    _pht: PhantomData<&'a()>,
+pub struct BPlusTreeCell<ValueSlice> {
     cid: CellId,
     key: Numeric,
-    value_part: ValuePart
+    value_bytes: ValueSlice
 }
 
-impl<ValuePart> PartialEq<Numeric> for BPlusTreeCell<'_, ValuePart> {
+impl<ValueSlice> PartialEq<Numeric> for BPlusTreeCell<ValueSlice> {
     fn eq(&self, other: &Numeric) -> bool {
         self.key.eq(other)
     }
 }
 
-impl<'a> BPlusTreeCell<'a, &'a BPlusTreeValue> {
+impl<ValueSlice> BPlusTreeCell<ValueSlice> {
     
     /// Retourne une cellule clé/valeur
-    pub fn ref_from_bytes<CellData>(key_spec: &NumericSpec, cid: CellId, cell: CellData) -> Self 
-    where CellData: Deref<Target = [u8]>
+    pub fn from_cell_slice<Slice>(key_spec: &NumericSpec, cell_slice: CellSlice<Slice>) -> Self 
+    where Slice: PageSliceData + IntoPageSliceIndex<RangeFrom<usize>, Output=ValueSlice>
     {
-        let key_bytes = key_spec.get_byte_slice(&cell);
+        let cid = cell_slice.cid;
+        let key_bytes = key_spec.get_byte_slice(cell_slice.as_ref());
         let key = key_spec.from_byte_slice(key_bytes);
-        let value_part_bytes = &cell[usize::from(key_spec.size())..];
+        let value_bytes = cell_slice.into_page_slice(usize::from(key_spec.size())..);
 
-        let value_part = BPlusTreeValue::ref_from_bytes(value_part_bytes).unwrap();
-
-        Self { key, value_part, cid, _pht: PhantomData }
-    }
-
-    /// Récupère une référence sur les données stockées dans la cellule.
-    pub fn get_value<Pager: IPager>(&self, pager: &Pager) -> PagerResult<Cow<'_, [u8]>> {
-        self.value_part.get(pager)
-    }
-}
-
-
-#[derive(FromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-/// Représente la partie valeur d'une cellule d'une feuille.
-pub struct BPlusTreeValue {
-    data_header: DynamicSizedDataHeader,
-    data: [u8],
-}
-
-impl BPlusTreeValue {
-
-    /// Récupère une référence sur les données stockées dans la cellule.
-    pub fn get<Pager: IPager>(&self, pager: &Pager) -> PagerResult<Cow<'_, [u8]>> {
-        // Les données ont débordées ailleurs
-        // on va devoir créer un tampon pour stocker tout ça.
-        if self.data_header.has_spilled() {
-            let mut buf = Vec::<u8>::default();
-            read_dynamic_sized_data(&self.data_header, &mut buf, self.get_in_page_data(), pager)?;
-            return Ok(Cow::Owned(buf));
-        }
-
-        Ok(Cow::Borrowed(self.get_in_page_data()))
-    }
-
-    /// Retourne une référence sur la portion stockée dans la cellule.
-    fn get_in_page_data(&self) -> &[u8] {
-        &self.data[..self.data_header.in_page_size.try_into().unwrap()]
+        Self { key, value_bytes, cid }
     }
 }
