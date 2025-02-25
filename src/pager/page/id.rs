@@ -2,7 +2,7 @@ use std::{num::NonZero, ops::Mul};
 
 use zerocopy_derive::*;
 
-use super::{page_location::PageLocation, page_size::PageSize};
+use super::{location::PageLocation, size::PageSize};
 
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, TryFromBytes, Immutable, KnownLayout)]
@@ -13,7 +13,7 @@ use super::{page_location::PageLocation, page_size::PageSize};
 pub struct PageId(pub(super)NonZero<u64>);
 
 impl PageId {
-    pub(super) fn new(value: u64) -> Self {
+    pub(crate) fn new(value: u64) -> Self {
         Self(NonZero::new(value).expect("page id must be > 0"))
     }
 }

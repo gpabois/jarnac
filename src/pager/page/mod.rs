@@ -5,20 +5,19 @@
 //! - soit en [référence mutable](self::MutPage).
 //! 
 //! Les pages sont indexées par [PageId]. 
-pub mod page_data;
-pub mod into_page_slice_index;
-pub mod page_slice_data;
-pub mod page_kind;
-pub mod page_size;
-pub mod page_location;
-pub mod page_id;
+pub mod data;
+pub mod slice;
+pub mod kind;
+pub mod size;
+pub mod location;
+pub mod id;
 
-pub use page_data::*;
-pub use into_page_slice_index::*;
-pub use page_id::*;
-pub use page_kind::*;
-pub use page_size::*;
-pub use page_slice_data::*;
+pub use data::*;
+pub use id::*;
+pub use kind::*;
+pub use size::*;
+pub use slice::*;
+pub use location::*;
 
 use std::{
     io::Cursor, mem::forget, ops::{Deref, DerefMut}
@@ -52,8 +51,6 @@ pub trait TryIntoMutFromBytes<Output: TryFromBytes + KnownLayout + Immutable + ?
 
 /// Référence vers une page.
 pub struct RefPage<'pager>(CachedPage<'pager>);
-
-impl<'pager> PageData for RefPage<'pager> {}
 
 impl AsRef<[u8]> for RefPage<'_> {
     fn as_ref(&self) -> &[u8] {
@@ -130,9 +127,6 @@ pub struct MutPage<'pager> {
     dry: bool,
     inner: CachedPage<'pager>,
 }
-
-impl MutPageData for MutPage<'_> {}
-impl PageData for MutPage<'_> {}
 
 impl AsRef<[u8]> for MutPage<'_> {
     fn as_ref(&self) -> &[u8] {

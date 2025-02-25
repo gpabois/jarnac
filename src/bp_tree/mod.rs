@@ -1,14 +1,14 @@
 //! Arbre B+
 //! 
 //! Le système permet d'indexer une valeur de taille variable ou fixe avec une clé signée/non-signée d'une taille d'au plus 64 bits (cf [crate::value::numeric]).
-use std::{cmp::Ordering,  ops::{Deref, DerefMut, Range, RangeFrom}};
+use std::{cmp::Ordering,  ops::{Deref, DerefMut}};
 
 use zerocopy::TryFromBytes;
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        cell::{CellHeader, CellId, CellPage, CellPageHeader, CellSlice}, page::{IntoPageSliceIndex, MutPage, OptionalPageId, PageData, PageId, PageKind, PageSize, PageSliceData, RefPageSlice, TryIntoRefFromBytes}, spill::VarHeader, IPager, PagerResult
+        cell::{CellHeader, CellId, CellPageData, CellPageHeader, CellSlice}, page::{MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, PageSliceData, RefPageData, RefPageSlice, TryIntoRefFromBytes}, spill::VarHeader, IPager, PagerResult
     },
     value::numeric::{IntoNumericSpec, Numeric, NumericSpec},
 };
@@ -393,13 +393,13 @@ impl BPTreeInteriorCell {
 impl BPTreeInteriorPage {
     /// Recherche le noeud enfant à partir de la clé passée en référence.
     pub fn search_child<Page>(page: Page, key: &Numeric) -> PageId 
-    where Page: PageData
+    where Page: RefPageData
     {
         let spec = &key.into_numeric_spec();
         let interior = BPTreeInteriorPage::try_ref_from_bytes(page.as_ref()).unwrap();
 
-        let maybe_child: Option<PageId>  = CellPage::iter(&page)
-        .flat_map(|cid| CellPage::get_cell_slice(&page, &cid))
+        let maybe_child: Option<PageId>  = CellPageData::iter(&page)
+        .flat_map(|cid| CellPageData::borrow_cell_slice(&page, &cid))
         .filter(|cell| {
             let interior: &BPTreeInteriorCell = cell.try_into_ref_from_bytes();
             interior.from_key_byte_slice(spec).partial_cmp(key).map(Ordering::is_le).unwrap_or_default()
@@ -440,11 +440,11 @@ impl BPTreeLeafPage {
         self.header.cell_spec.is_full()
     }
 
-    pub fn iter<'a, Page: 'a>(page: &'a Page, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<impl PageSliceData + 'a>> 
-    where Page: PageData + Clone + IntoPageSliceIndex<Range<usize>>, Page::Output: PageSliceData + IntoPageSliceIndex<RangeFrom<usize>>
+    pub fn iter<'a, Page: 'a>(page: &'a Page, key_spec: &'a NumericSpec) -> impl Iterator<Item=BPlusTreeCell<&'a PageSlice>> 
+    where Page: RefPageData
     {
-        CellPage::iter(page)
-            .flat_map(move |cid| CellPage::get_cell_slice(page, &cid))
+        CellPageData::iter(page)
+            .flat_map(move |cid| CellPageData::borrow_cell_slice(page, &cid))
             .map(|cell| {
                 BPlusTreeCell::from_cell_slice(
                     key_spec, 
@@ -468,17 +468,17 @@ impl<ValueSlice> PartialEq<Numeric> for BPlusTreeCell<ValueSlice> {
     }
 }
 
-impl<ValueSlice> BPlusTreeCell<ValueSlice> {
+impl<PageSlice> BPlusTreeCell<PageSlice> 
+where PageSlice: PageSliceData
+{
     
     /// Retourne une cellule clé/valeur
-    pub fn from_cell_slice<Slice>(key_spec: &NumericSpec, cell_slice: CellSlice<Slice>) -> Self 
-    where Slice: PageSliceData + IntoPageSliceIndex<RangeFrom<usize>, Output=ValueSlice>
+    pub fn from_cell_slice(key_spec: &NumericSpec, cell_slice: CellSlice<PageSlice>) -> Self 
     {
         let cid = cell_slice.cid;
         let key_bytes = key_spec.get_byte_slice(cell_slice.as_ref());
         let key = key_spec.from_byte_slice(key_bytes);
         let value_bytes = cell_slice.into_page_slice(usize::from(key_spec.size())..);
-
         Self { key, value_bytes, cid }
     }
 }
