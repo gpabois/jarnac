@@ -1,12 +1,10 @@
-use std::{
-    io::{Cursor, Read, Write}, ops::{Deref, DerefMut}
-};
+use std::io::{Cursor, Read, Write};
 
-use zerocopy::TryFromBytes;
+use zerocopy::{IntoBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 use super::{
-    page::{OptionalPageId, PageId, PageKind},
+    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind},
     IPager, PagerResult,
 };
 
@@ -15,6 +13,21 @@ use super::{
 pub struct VarData {
     header: VarHeader,
     in_page: [u8]
+}
+
+impl VarData {
+    pub fn size(&self) -> u64 {
+        self.header.total_size
+    }
+    
+    pub fn has_spilled(&self) -> bool {
+        self.header.has_spilled()
+    }
+
+    pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
+        self.header = write_var_data(data, &mut self.in_page, pager)?;
+        Ok(())
+    }
 }
 
 #[derive(FromBytes, KnownLayout, Immutable)]
@@ -57,9 +70,9 @@ impl SpillPage {
     #[inline]
     /// Récupère une référence sur la page de débordement.
     pub fn get<Page>(page: &Page) -> &Self
-    where Page: Deref<Target = [u8]>
+    where Page: AsRefPageSlice
     {
-        Self::try_ref_from_bytes(page).unwrap()
+        Self::try_ref_from_bytes(page.as_ref()).unwrap()
     }
 
     #[inline]
@@ -70,11 +83,11 @@ impl SpillPage {
 
     /// Crée une nouvelle page de débordement.
     pub fn new<Page>(page: &mut Page) -> &mut Self 
-    where Page: DerefMut<Target = [u8]>
+    where Page: AsMutPageSlice
     {
-        page.fill(0);
-        page[0] = PageKind::Overflow as u8;
-        Self::try_mut_from_bytes(page).unwrap()
+        page.as_mut().fill(0);
+        page.as_mut().as_mut_bytes()[0] = PageKind::Overflow as u8;
+        Self::try_mut_from_bytes(page.as_mut()).unwrap()
     }
 
     pub fn get_in_page_size(&self) -> u64 {
@@ -141,7 +154,7 @@ pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
 ///
 /// Si les données ne peuvent être stockées intégralement dans la région,
 /// alors la fonction réalise un débordement (Overflow) sur une à plusieurs pages.
-pub fn write_dynamic_sized_data<Pager: IPager>(
+pub fn write_var_data<Pager: IPager>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
@@ -198,7 +211,7 @@ mod tests {
     use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc};
     use rand::RngCore;
     use crate::{fs::in_memory::InMemoryFs, pager::{spill::read_dynamic_sized_data, page::{PageId, PageSize}, Pager, PagerOptions}};
-    use super::write_dynamic_sized_data;
+    use super::write_var_data;
 
     #[test]
     pub fn test_spilled() -> Result<(), Box<dyn Error>>{
@@ -215,7 +228,7 @@ mod tests {
         
         let mut dest: [u8;100] = [0;100];
 
-        let dsd_header: crate::pager::spill::VarHeader = write_dynamic_sized_data(data.deref(), &mut dest, &pager)?;
+        let dsd_header: crate::pager::spill::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.spill_page_id == Some(PageId::from(1u64)).into(), "il doit y avoir eu du débordement");

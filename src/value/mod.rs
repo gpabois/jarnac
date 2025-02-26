@@ -168,4 +168,5 @@ impl Display for Primary {
     }
 }
 
+#[allow(dead_code)]
 pub struct Document(HashMap<Primary, Value>);

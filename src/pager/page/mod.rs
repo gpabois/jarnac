@@ -23,48 +23,20 @@ use std::{
     io::Cursor, mem::forget, ops::{Deref, DerefMut}
 };
 
-use zerocopy::{Immutable, KnownLayout, TryFromBytes};
-
 use super::{
     cache::CachedPage,
     error::{PagerError, PagerErrorKind},
     PagerResult,
 };
 
-pub trait TryIntoRefFromBytes<Output> 
-where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
-{
-    fn try_into_ref_from_bytes(&self) -> &Output;
-}
-
-impl<'a, Output, U> TryIntoRefFromBytes<Output> for &'a U 
-where U: TryIntoRefFromBytes<Output>, Output: TryFromBytes + KnownLayout + Immutable + ?Sized {
-    fn try_into_ref_from_bytes(&self) -> &Output {
-        self.deref().try_into_ref_from_bytes()
-    }
-}
-
-pub trait TryIntoMutFromBytes<Output: TryFromBytes + KnownLayout + Immutable + ?Sized> {
-    fn try_into_mut_from_bytes(&mut self) -> &mut Output;
-}
-
-
 /// Référence vers une page.
 pub struct RefPage<'pager>(CachedPage<'pager>);
 
-impl AsRef<[u8]> for RefPage<'_> {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<PageSlice> for RefPage<'_> {
+    fn as_ref(&self) -> &PageSlice {
         unsafe {
             self.0.content.as_ref()
         }
-    }
-}
-
-impl<Output> TryIntoRefFromBytes<Output> for RefPage<'_> 
-where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
-{
-    fn try_into_ref_from_bytes(&self) -> &Output {
-        Output::try_ref_from_bytes(self.deref()).unwrap()
     }
 }
 
@@ -75,7 +47,7 @@ impl Clone for RefPage<'_> {
 }
 
 impl Deref for RefPage<'_> {
-    type Target = [u8];
+    type Target = PageSlice;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.0.content.as_ref() }
@@ -128,20 +100,20 @@ pub struct MutPage<'pager> {
     inner: CachedPage<'pager>,
 }
 
-impl AsRef<[u8]> for MutPage<'_> {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<PageSlice> for MutPage<'_> {
+    fn as_ref(&self) -> &PageSlice {
         self.deref()
     }
 }
 
-impl AsMut<[u8]> for MutPage<'_> {
-    fn as_mut(&mut self) -> &mut [u8] {
+impl AsMut<PageSlice> for MutPage<'_> {
+    fn as_mut(&mut self) -> &mut PageSlice {
         self.deref_mut()
     }
 }
 
 impl Deref for MutPage<'_> {
-    type Target = [u8];
+    type Target = PageSlice;
 
     fn deref(&self) -> &Self::Target {
         unsafe { self.inner.content.as_ref() }
@@ -156,14 +128,6 @@ impl DerefMut for MutPage<'_> {
             }
             self.inner.content.as_mut()
         }
-    }
-}
-
-impl<Output> TryIntoMutFromBytes<Output> for MutPage<'_> 
-where Output: TryFromBytes + KnownLayout + Immutable + ?Sized
-{
-    fn try_into_mut_from_bytes(&mut self) -> &mut Output {
-        Output::try_mut_from_bytes(self.deref_mut()).unwrap()
     }
 }
 

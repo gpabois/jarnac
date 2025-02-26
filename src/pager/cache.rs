@@ -13,7 +13,7 @@ use itertools::Itertools;
 
 use super::{
     error::{PagerError, PagerErrorKind},
-    page::{MutPage, PageId, PageSize, RefPage},
+    page::{MutPage, PageId, PageSize, PageSlice, RefPage},
     stress::{BoxedPagerStress, IPagerStress},
     PagerResult,
 };
@@ -179,7 +179,7 @@ impl PagerCache {
                 let ptr = self.ptr.add(current_tail);
                 let mut cell_ptr = ptr.cast::<MaybeUninit<CachedPageData>>();
                 let content_ptr = ptr.add(size_of::<CachedPageData>());
-                let content = NonNull::slice_from_raw_parts(content_ptr, self.page_size.into());
+                let content = std::mem::transmute(NonNull::slice_from_raw_parts(content_ptr, self.page_size.into()));
                 let cell_ptr = NonNull::new_unchecked(
                     cell_ptr.as_mut().write(CachedPageData::new(*pid, content)),
                 );
@@ -313,7 +313,7 @@ impl Deref for CachedPage<'_> {
 /// Page cachée
 pub struct CachedPageData {
     pub pid: PageId,
-    pub content: NonNull<[u8]>,
+    pub content: NonNull<PageSlice>,
     pub flags: u8,
     pub use_counter: usize,
     pub rw_counter: isize,
@@ -336,7 +336,7 @@ impl CachedPageData {
     const DIRTY_FLAGS: u8 = 0b1;
     const NEW_FLAGS: u8 = 0b11;
 
-    pub fn new(pid: PageId, content: NonNull<[u8]>) -> Self {
+    pub fn new(pid: PageId, content: NonNull<PageSlice>) -> Self {
         Self {
             pid,
             content,

@@ -1,51 +1,177 @@
-use zerocopy::FromBytes;
-use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use byteorder::{BigEndian, WriteBytesExt};
+use zerocopy::{byteorder::{BigEndian as ZBigEndian, U16, U32}, FromBytes, I16, I32, I64, U64};
+use zerocopy_derive::{FromBytes, Immutable, KnownLayout};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-enum NumericInner {
-    Uint8(Uint8),
-    Uint16(Uint16),
-    Uint32(Uint32),
-    Uint64(Uint64),
-    Int8(Int8),
-    Int16(Int16),
-    Int32(Int32),
-    Int64(Int64),
+#[derive(PartialEq, Eq, Clone, Copy, FromBytes, KnownLayout, Immutable, Default)]
+pub struct Numeric([u8;17]);
+
+impl PartialOrd<Numeric> for Numeric {
+    fn partial_cmp(&self, other: &Numeric) -> Option<std::cmp::Ordering> {
+        if self.0[0] != other.0[0] {
+            return None
+        }
+
+        match *self.kind() {
+            UINT8 => self.as_u8().partial_cmp(other.as_u8()),
+            UINT16 => self.as_u16().partial_cmp(other.as_u16()),
+            UINT32 => self.as_u32().partial_cmp(other.as_u32()),
+            UINT64 => self.as_u64().partial_cmp(other.as_u64()),
+            INT8 => self.as_i8().partial_cmp(other.as_i8()),
+            INT16 => self.as_i16().partial_cmp(other.as_i16()),
+            INT32 => self.as_i32().partial_cmp(other.as_i32()),
+            INT64 => self.as_i64().partial_cmp(other.as_i64()),
+            _ => unreachable!("unknown numeric kind")
+        }
+    }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Numeric(NumericInner);
+impl Numeric {
+    pub fn as_u8(&self) -> &u8 {
+        &self.borrow_numeric()[0]
+    }
+
+    pub fn as_u16(&self) -> &U16<ZBigEndian> {
+        U16::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn as_u32(&self) -> &U32<ZBigEndian> {
+        U32::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn as_u64(&self) -> &U64<ZBigEndian> {
+        U64::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn as_i8(&self) -> &i8 {
+        unsafe {
+            std::mem::transmute(&self.borrow_numeric()[0])
+        }
+    }
+
+    pub fn as_i16(&self) -> &I16<ZBigEndian> {
+        I16::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn as_i32(&self) -> &I32<ZBigEndian> {
+        I32::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn as_i64(&self) -> &I64<ZBigEndian> {
+        I64::<ZBigEndian>::ref_from_bytes(self.borrow_numeric()).unwrap()
+    }
+
+    pub fn borrow_numeric(&self) -> &[u8] {
+        self.kind().get_byte_slice(&self.0[1..])
+    }
+
+    pub fn borrow_mut_numeric(&mut self) -> &mut [u8] {
+        self.kind().clone().get_mut_byte_slice(&mut self.0[1..])
+    }
+}
+
+impl From<u8> for Numeric {
+    fn from(value: u8) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = UINT8.into();
+        num.borrow_mut_numeric().write_u8(value).unwrap();
+        num
+    }
+}
+
+impl From<u16> for Numeric {
+    fn from(value: u16) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = UINT16.into();
+        num.borrow_mut_numeric().write_u16::<BigEndian>(value).unwrap();
+        num        
+    }
+}
+
+impl From<u32> for Numeric {
+    fn from(value: u32) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = UINT32.into();
+        num.borrow_mut_numeric().write_u32::<BigEndian>(value).unwrap();
+        num        
+    }
+}
+
+impl From<u64> for Numeric {
+    fn from(value: u64) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = UINT64.into();
+        num.borrow_mut_numeric().write_u64::<BigEndian>(value).unwrap();
+        num        
+    }
+}
+
+impl From<i8> for Numeric {
+    fn from(value: i8) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = INT8.into();
+        num.borrow_mut_numeric().write_i8(value).unwrap();
+        num
+    }
+}
+
+impl From<i16> for Numeric {
+    fn from(value: i16) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = INT16.into();
+        num.borrow_mut_numeric().write_i16::<BigEndian>(value).unwrap();
+        num        
+    }
+}
+
+impl From<i32> for Numeric {
+    fn from(value: i32) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = INT32.into();
+        num.borrow_mut_numeric().write_i32::<BigEndian>(value).unwrap();
+        num        
+    }
+}
+
+impl From<i64> for Numeric {
+    fn from(value: i64) -> Self {
+        let mut num = Numeric::default();
+        num.0[0] = INT64.into();
+        num.borrow_mut_numeric().write_i64::<BigEndian>(value).unwrap();
+        num        
+    }
+}
 
 impl Numeric {
-    pub fn into_numeric_spec(&self) -> NumericSpec {
-        match self.0 {
-            NumericInner::Uint8(_) => Uint8::into_numeric_spec(),
-            NumericInner::Uint16(_) => Uint16::into_numeric_spec(),
-            NumericInner::Uint32(_) => Uint32::into_numeric_spec(),
-            NumericInner::Uint64(_) => Uint64::into_numeric_spec(),
-            NumericInner::Int8(_) => Int8::into_numeric_spec(),
-            NumericInner::Int16(_) => Int16::into_numeric_spec(),
-            NumericInner::Int32(_) => Int32::into_numeric_spec(),
-            NumericInner::Int64(_) => Int64::into_numeric_spec(),
+    pub fn kind(&self) -> &NumericKind {
+        unsafe {
+            std::mem::transmute(&self.0[0])
         }
     }
 }
 
 pub trait IntoNumericSpec {
-    fn into_numeric_spec() -> NumericSpec;
+    fn kind() -> NumericKind;
 }
 
 #[derive(FromBytes, Clone, Copy, KnownLayout, Immutable, Eq, PartialEq, Debug)]
-pub struct NumericSpec(u8);
+pub struct NumericKind(u8);
 
-impl NumericSpec {
+impl Into<u8> for NumericKind {
+    fn into(self) -> u8 {
+        self.0
+    }
+}
+
+impl NumericKind {
     pub fn from<NS: IntoNumericSpec>() -> Self {
-        NS::into_numeric_spec()
+        NS::kind()
     }
 
-    fn new(size: u8, signed: bool) -> Self {
-        let signed: u8 = signed.into();
-        Self(size & 0b111 | (signed * 128))
+    const fn new_int(size: u8, signed: bool) -> Self {
+        unsafe {
+            let signed: u8 = std::mem::transmute(signed);
+            Self(size & 0b111 | (signed * 128))
+        }
     }
 
     pub fn is_signed(&self) -> bool {
@@ -60,91 +186,18 @@ impl NumericSpec {
         &data[0..usize::from(self.size())]
     }
 
-    /// Récupère une référence vers une valeur numérique sans réaliser de copie.
-    pub fn from_byte_slice<'data>(&self, data: &[u8]) -> Numeric {
-        Numeric(match (self.size(), self.is_signed()) {
-            (1, false) => NumericInner::Uint8(*Uint8::ref_from_bytes(data).unwrap()),
-            (2, false) => NumericInner::Uint16(*Uint16::ref_from_bytes(data).unwrap()),
-            (3, false) => NumericInner::Uint32(*Uint32::ref_from_bytes(data).unwrap()),
-            (4, false) => NumericInner::Uint64(*Uint64::ref_from_bytes(data).unwrap()),
-            (1, true) => NumericInner::Int8(*Int8::ref_from_bytes(data).unwrap()),
-            (2, true) => NumericInner::Int16(*Int16::ref_from_bytes(data).unwrap()),
-            (3, true) => NumericInner::Int32(*Int32::ref_from_bytes(data).unwrap()),
-            (4, true) => NumericInner::Int64(*Int64::ref_from_bytes(data).unwrap()),
-            _ => unreachable!(),
-        })
+    pub fn get_mut_byte_slice<'data>(&self, data: &'data mut [u8]) -> &'data mut [u8] {
+        &mut data[0..usize::from(self.size())]
     }
+
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Uint8(u8);
+const UINT8: NumericKind = NumericKind::new_int(1, false);
+const UINT16: NumericKind = NumericKind::new_int(2, false);
+const UINT32: NumericKind = NumericKind::new_int(3, false);
+const UINT64: NumericKind = NumericKind::new_int(4, false);
 
-impl IntoNumericSpec for Uint8 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(1, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Uint16(u16);
-
-impl IntoNumericSpec for Uint16 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(2, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Uint32(u32);
-
-impl IntoNumericSpec for Uint32 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(3, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Uint64(u64);
-
-impl IntoNumericSpec for Uint64 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(4, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Int8(i8);
-
-impl IntoNumericSpec for Int8 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(1, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Int16(i16);
-
-impl IntoNumericSpec for Int16 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(2, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Int32(i32);
-
-impl IntoNumericSpec for Int32 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(3, false)
-    }
-}
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct Int64(i64);
-
-impl IntoNumericSpec for Int64 {
-    fn into_numeric_spec() -> NumericSpec {
-        NumericSpec::new(4, false)
-    }
-}
-
+const INT8: NumericKind = NumericKind::new_int(1, true);
+const INT16: NumericKind = NumericKind::new_int(2, true);
+const INT32: NumericKind = NumericKind::new_int(3, true);
+const INT64: NumericKind = NumericKind::new_int(4, true);

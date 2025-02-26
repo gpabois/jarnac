@@ -1,10 +1,9 @@
-use std::ops::DerefMut;
 
 use zerocopy_derive::*;
-use zerocopy::TryFromBytes;
+use zerocopy::{IntoBytes, TryFromBytes};
 
 use super::{
-    page::{OptionalPageId, PageId, PageKind},
+    page::{AsMutPageSlice, OptionalPageId, PageId, PageKind},
     IPagerInternals, PagerResult,
 };
 
@@ -30,14 +29,14 @@ impl FreePage
 where
 {
     /// Initialise une page libre.
-    pub fn new<P>(page: &mut P) -> std::io::Result<&'_ mut Self> 
-    where P: DerefMut<Target = [u8]>
+    pub fn new<Page>(page: &mut Page) -> std::io::Result<&'_ mut Self> 
+    where Page: AsMutPageSlice
     {
-        let slice = page.deref_mut();
-        slice.fill(0);
-        slice[0] = PageKind::Free as u8;
+    
+        page.as_mut().fill(0);
+        page.as_mut().as_mut_bytes()[0] = PageKind::Free as u8;
 
-        Ok(Self::try_mut_from_bytes(slice).unwrap())
+        Ok(Self::try_mut_from_bytes(page.as_mut()).unwrap())
     }
 
     pub fn get_next(&self) -> Option<PageId> {

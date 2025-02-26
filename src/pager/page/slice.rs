@@ -1,17 +1,97 @@
-use std::{mem::forget, ops::{Deref, DerefMut}, slice::SliceIndex};
+use std::{mem::forget, ops::{Deref, DerefMut, Index, IndexMut}, slice::SliceIndex};
+
+use zerocopy::{Immutable, KnownLayout, TryFromBytes};
+use zerocopy_derive::{FromBytes, Immutable};
 
 use crate::pager::cache::CachedPage;
 
-use super::{MutPage, RefPage};
+use super::{AsMutPageSlice, AsRefPageSlice, MutPage, RefPage};
 
-pub type PageSlice = [u8];
+#[derive(FromBytes, Immutable)]
+#[repr(C)]
+/// A slice of a page
+pub struct PageSlice([u8]);
+
+impl PageSlice {
+    pub fn try_into_ref<T>(&self) -> Result<&T, zerocopy::ConvertError<zerocopy::AlignmentError<&[u8], T>, zerocopy::SizeError<&[u8], T>, zerocopy::ValidityError<&[u8], T>>>
+    where T: TryFromBytes + KnownLayout + Immutable + ?Sized
+    {
+        T::try_ref_from_bytes(&self.0)
+    }
+
+    pub fn try_into_mut<T>(&mut self) ->  Result<&mut T, zerocopy::ConvertError<zerocopy::AlignmentError<&mut [u8], T>, zerocopy::SizeError<&mut [u8], T>, zerocopy::ValidityError<&mut [u8], T>>>
+    where T: TryFromBytes + KnownLayout + Immutable + ?Sized
+    {
+        T::try_mut_from_bytes(&mut self.0)
+    }
+}
+
+impl BorrowPageSlice for PageSlice {
+    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
+        self.index(idx)
+    }
+}
+
+impl BorrowMutPageSlice for PageSlice {
+    fn borrow_mut_page_slice<Idx: PageSliceIndex>(&mut self, idx: Idx) -> &mut PageSlice {
+        self.index_mut(idx)
+    }
+}
+
+impl<Idx> Index<Idx> for PageSlice where Idx: SliceIndex<[u8], Output = [u8]> {
+    type Output = PageSlice;
+
+    fn index(&self, index: Idx) -> &Self::Output {
+        unsafe {
+            std::mem::transmute(&self.0[index])
+        }
+    }
+}
+
+impl<Idx> IndexMut<Idx> for PageSlice where Idx: SliceIndex<[u8], Output = [u8]> {
+    fn index_mut(&mut self, index: Idx) -> &mut Self::Output {
+        unsafe {
+            std::mem::transmute(&mut self.0[index])
+        }   
+    }
+}
+
+impl Deref for PageSlice {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for PageSlice {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<&[u8]> for &PageSlice {
+    fn from(value: &[u8]) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
+
+impl From<&mut [u8]> for &mut PageSlice {
+    fn from(value: &mut [u8]) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
 
 pub trait PageSliceIndex: SliceIndex<[u8], Output = [u8]> {}
 impl<Idx> PageSliceIndex for Idx where Idx: SliceIndex<[u8], Output = [u8]>{}
 
 /// Transforme une référence sur une page en référence sur une tranche de la page.
 pub trait IntoRefPageSlice {
-    type RefPageSlice: PageSliceData;
+    type RefPageSlice: AsRefPageSlice;
 
     fn into_page_slice<Idx: PageSliceIndex>(self, idx: Idx) -> Self::RefPageSlice;
 }
@@ -40,7 +120,6 @@ impl<'pager> IntoRefPageSlice for &RefPage<'pager> {
                 inner: self.0.clone(), 
                 slice: &self.0.content.as_ref()[idx]
             };
-            forget(self);
             slice
         }
     }    
@@ -52,7 +131,7 @@ impl<'pager> IntoRefPageSlice for RefPageSlice<'pager> {
     fn into_page_slice<Idx: PageSliceIndex>(self, idx: Idx) -> Self::RefPageSlice {
         let slice = Self {
             inner: self.inner.clone(), 
-            slice: &self.slice.as_ref()[idx]
+            slice: &self.slice[idx]
         };
         forget(self);
         slice
@@ -70,7 +149,7 @@ impl<'pager> IntoRefPageSlice for MutPage<'pager> {
 }
 
 pub trait IntoMutPageSlice {
-    type MutPageSlice: MutPageSliceData;
+    type MutPageSlice: AsMutPageSlice;
 
     fn into_mut_page_slice<Idx: PageSliceIndex>(self, idx: Idx) -> Self::MutPageSlice;
 }
@@ -112,78 +191,25 @@ pub trait BorrowPageSlice {
     fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice;
 }
 
-impl BorrowPageSlice for RefPage<'_> {
-    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
-        &self.as_ref()[idx]
-    }
-}
-
-impl BorrowPageSlice for &RefPage<'_> {
-    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
-        &self.as_ref()[idx]
-    }
-}
-
-impl BorrowPageSlice for MutPage<'_> {
-    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
-        &self.as_ref()[idx]
-    }
-}
-
-impl BorrowPageSlice for &MutPage<'_> {
-    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
-        &self.as_ref()[idx]
-    }
-}
-
-impl BorrowPageSlice for &mut MutPage<'_> {
-    fn borrow_page_slice<Idx: PageSliceIndex>(&self, idx: Idx) -> &PageSlice {
-        &self.as_ref()[idx]
-    }
-}
-
 /// Emprunte une référence sur une tranche d'une page.
 pub trait BorrowMutPageSlice {
     fn borrow_mut_page_slice<Idx: PageSliceIndex>(&mut self, idx: Idx) -> &mut PageSlice;
 }
 
-impl BorrowMutPageSlice for MutPage<'_> {
-    fn borrow_mut_page_slice<Idx: PageSliceIndex>(&mut self, idx: Idx) -> &mut PageSlice {
-        &mut self.as_mut()[idx]
-    }
-}
-impl BorrowMutPageSlice for MutPageSlice<'_> {
-    fn borrow_mut_page_slice<Idx: PageSliceIndex>(&mut self, idx: Idx) -> &mut PageSlice {
-        &mut self.as_mut()[idx]
-    }
-}
-impl BorrowMutPageSlice for &mut MutPageSlice<'_> {
-    fn borrow_mut_page_slice<Idx: PageSliceIndex>(&mut self, idx: Idx) -> &mut PageSlice {
-        &mut self.as_mut()[idx]
-    }
-}
-
-pub trait PageSliceData: AsRef<[u8]> {}
-impl<'a> PageSliceData for &'a [u8] {}
-impl<'a> PageSliceData for &'a mut [u8] {}
-
-pub trait MutPageSliceData: AsRef<[u8]> + AsMut<[u8]> {}
-impl<'a> MutPageSliceData for &'a mut [u8] {}
-
 /// Référence vers une tranche de données d'une page.
 pub struct RefPageSlice<'pager>{
     pub(super) inner: CachedPage<'pager>, 
-    pub(super) slice: &'pager [u8]
+    pub(super) slice: &'pager PageSlice
 }
 
-impl PageSliceData for RefPageSlice<'_> {}
-impl AsRef<[u8]> for RefPageSlice<'_> {
-    fn as_ref(&self) -> &[u8] {
+impl AsRef<PageSlice> for RefPageSlice<'_> {
+    fn as_ref(&self) -> &PageSlice {
         self.deref()
     }
 }
+
 impl Deref for RefPageSlice<'_> {
-    type Target = [u8];
+    type Target = PageSlice;
 
     fn deref(&self) -> &Self::Target {
         self.slice
@@ -198,25 +224,38 @@ impl Drop for RefPageSlice<'_> {
 /// Une tranche mutable d'une page.
 pub struct MutPageSlice<'pager>{
     pub(super) inner: CachedPage<'pager>, 
-    pub(super) slice: &'pager mut [u8]
+    pub(super) slice: &'pager mut PageSlice
 }
 
-impl<'pager> PageSliceData for MutPageSlice<'pager> {}
-impl<'pager> MutPageSliceData for MutPageSlice<'pager> {}
+impl AsRef<PageSlice> for MutPageSlice<'_> {
+    fn as_ref(&self) -> &PageSlice {
+        self.slice
+    }
+}
+
+impl AsMut<PageSlice> for MutPageSlice<'_> {
+    fn as_mut(&mut self) -> &mut PageSlice {
+        self.slice
+    }
+}
+
 impl<'pager> Into<RefPageSlice<'pager>> for MutPageSlice<'pager> {
     fn into(mut self) -> RefPageSlice<'pager> {
-        self.inner.rw_counter = 0;
+        unsafe {
+            self.inner.rw_counter = 0;
 
-        let slice = std::mem::take(&mut self.slice);
-
-        let slice = RefPageSlice {
-            inner: self.inner.clone(),
+            let slice = std::ptr::from_mut(self.slice).as_ref().unwrap();
+        
+            let slice = RefPageSlice {
+                inner: self.inner.clone(),
+                slice
+            };
+    
+            forget(self);
+    
             slice
-        };
+        }
 
-        forget(self);
-
-        slice
     }
 }
 
