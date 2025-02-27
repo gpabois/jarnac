@@ -9,5 +9,5 @@
 pub mod fs;
 pub mod pager;
 pub mod value;
-pub mod bp_tree;
+pub mod bplus_tree;
 pub mod prelude;

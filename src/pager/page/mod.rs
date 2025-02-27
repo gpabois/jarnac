@@ -88,8 +88,8 @@ impl<'pager> RefPage<'pager> {
         Cursor::new(self.deref())
     }
 
-    pub fn id(&self) -> PageId {
-        self.0.id()
+    pub fn id(&self) -> &PageId {
+        &self.0.id()
     }
 }
 
@@ -166,7 +166,7 @@ impl<'pager> MutPage<'pager> {
         rf
     }
 
-    pub fn id(&self) -> PageId {
+    pub fn id(&self) -> &PageId {
         self.inner.id()
     }
 

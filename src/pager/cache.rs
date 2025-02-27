@@ -140,7 +140,7 @@ impl PagerCache {
         // La page a été déchargée, on va essayer de la récupérer.
         if self.stress.contains(pid) {
             let mut pcache = self.alloc_in_memory(pid)?;
-            assert_eq!(pcache.id(), *pid);
+            assert_eq!(pcache.id(), pid);
             self.stress.retrieve(&mut pcache)?;
             return Ok(Some(pcache));
         }
@@ -347,8 +347,8 @@ impl CachedPageData {
         }
     }
 
-    pub fn id(&self) -> PageId {
-        self.pid
+    pub fn id(&self) -> &PageId {
+        &self.pid
     }
 
     pub fn clear_flags(&mut self) {
@@ -402,7 +402,7 @@ mod tests {
             println!("décharge {0}", src.id());
             let mut buf = Vec::<u8>::new();
             buf.write_all(src.borrow().deref())?;
-            self.0.borrow_mut().insert(src.id(), buf);
+            self.0.borrow_mut().insert(*src.id(), buf);
             Ok(())
         }
 

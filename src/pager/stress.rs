@@ -112,7 +112,7 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         unsafe {
             file.write_all(src.content.as_ref())?;
         }
-        self.pages.borrow_mut().insert(src.id(), pid);
+        self.pages.borrow_mut().insert(*src.id(), pid);
 
         Ok(())
     }

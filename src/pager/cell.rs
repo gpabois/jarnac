@@ -125,6 +125,27 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         })
     }
 
+    /// Divise les cellules à l'endroit choisi. 
+    pub fn split_at_into<P2>(&mut self, dest: &mut CellPage<P2>, at: u8) -> PagerResult<()> where P2: AsMutPageSlice {
+        self.iter()
+        .skip(at.into())
+        .try_for_each::<_, PagerResult<()>>(|src_cell| {
+            let cid = dest.push()?;
+            let mut dest_cell = dest.borrow_mut_cell(&cid).unwrap();
+
+            src_cell.copy_into(&mut dest_cell);
+            
+            Ok(())            
+        })?;
+
+        let to_free = self.iter_ids().collect::<Vec<_>>();
+
+        to_free.into_iter().for_each(|cid| {
+            self.free_cell(&cid);
+        });
+
+        Ok(())
+    }   
 
     /// Insère une nouvelle cellule à la fin de la liste chaînée.
     pub fn push(&mut self) -> PagerResult<CellId> 
@@ -142,13 +163,43 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         Ok(cid)
     }
 
+    /// Insère une nouvelle cellule après une autre.
+    pub fn insert_after(&mut self, after: &CellId) -> PagerResult<CellId> {
+        let cid = self.alloc_page_cell()?;
+
+        // La prochaine cellule après la cellule à insérer
+        let maybe_next: Option<CellId> = {
+            let mut cell = self.borrow_mut_cell(&after).unwrap();
+            let next = cell.header.next;
+            cell.header.next = Some(cid).into();
+            next.into()      
+        };
+
+        match maybe_next {
+            Some(next) => {
+                let mut next_next =self.borrow_mut_cell( &next).unwrap();
+                next_next.header.prev = Some(cid).into();
+                
+                let mut cell = self.borrow_mut_cell(&cid).unwrap();
+                cell.header.prev = Some(*after).into();
+                cell.header.next = Some(next).into();
+            },
+            None => {
+                self.as_mut().set_head(Some(cid));
+                self.borrow_mut_cell(&cid).unwrap().header.prev = Some(*after).into();
+            },
+        };
+
+        Ok(cid)
+    }
+
     /// Insère une nouvelle cellule avant une autre.
     pub fn insert_before(&mut self, before: &CellId) -> PagerResult<CellId> 
     {
         let cid = self.alloc_page_cell()?;
 
         let maybe_prev: Option<CellId> = {
-            let mut cell = self.borrow_mut_cell(&cid).unwrap();
+            let mut cell = self.borrow_mut_cell(&before).unwrap();
             let prev = cell.header.prev;
             cell.header.prev = Some(cid).into();
             prev.into()
@@ -188,19 +239,23 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         Ok(cid)
     }
 
-
-
     fn set_previous_sibling(&mut self, cid: &CellId, previous: Option<CellId>) 
     {
         let mut cell = self.borrow_mut_cell(cid).unwrap();
         cell.header.prev = previous.into();
     }  
 
+    #[allow(dead_code)]
     fn set_next_sibling(&mut self, cid: &CellId, previous: Option<CellId>) 
     {
         let mut cell = self.borrow_mut_cell(cid).unwrap();
         cell.header.prev = previous.into();
     }  
+
+    fn free_cell(&mut self, cid: &CellId) {
+        self.detach_cell(cid);
+        self.push_free_cell(cid);
+    }
 
     /// Insère une nouvelle cellule dans la liste des cellules libres.
     fn push_free_cell(&mut self, cid: &CellId) 
@@ -347,6 +402,10 @@ impl CellPageHeader {
     pub fn is_full(&self) -> bool {
         self.len - self.free_len >= self.capacity
     }
+
+    pub fn len(&self) -> u8 {
+        self.len
+    }
 }
 
 #[derive(FromBytes, KnownLayout, Immutable)]
@@ -377,6 +436,30 @@ impl<Slice> Cell<Slice> where Slice: AsMutPageSlice {
     }
 }
 
+impl<Slice> Cell<Slice> where Slice: AsRefPageSlice {
+    /// Retourne l'identifiant de la cellule.
+    pub fn id(&self) -> &CellId {
+        &self.cid
+    }
+
+    /// Copie le contenu de la cellule dans une autre cellule.
+    pub fn copy_into<S2>(&self, dest: &mut Cell<S2>) where S2: AsMutPageSlice {
+        let src_data: &CellData = self.as_ref();
+        let dest_data: &mut CellData = dest.as_mut();
+
+        dest_data.data.copy_from_slice(&src_data.data);
+    }
+
+    pub fn next_sibling(&self) -> &Option<CellId> {
+        let data: &CellData = self.as_ref();
+        data.header.next.as_ref()
+    }
+
+    pub fn prev_sibling(&self) -> &Option<CellId> {
+        let data: &CellData = self.as_ref();
+        data.header.prev.as_ref()
+    }
+}
 
 impl<Slice> Cell<Slice> where Slice: AsMutPageSlice {
     /// Détache la cellule de sa liste chaînée.
@@ -520,6 +603,14 @@ pub struct GlobalCellId(PageId, CellId);
 impl GlobalCellId {
     pub(crate) fn new(pid: PageId, cid: CellId) -> Self {
         Self(pid, cid)
+    }
+
+    pub fn pid(&self) -> &PageId {
+        &self.0
+    }
+
+    pub fn cid(&self) -> &CellId {
+        &self.1
     }
 }
 

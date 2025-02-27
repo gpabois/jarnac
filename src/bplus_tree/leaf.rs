@@ -1,5 +1,5 @@
 
-use std::ops::DerefMut;
+use std::ops::{Deref, DerefMut, Div};
 
 use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
@@ -10,6 +10,33 @@ use super::BPTreeNodeKind;
 
 /// Représente une feuille d'un arbre B+.
 pub struct BPTreeLeaf<Page>(Page) where Page: AsRefPageSlice;
+
+impl<Page> Deref for BPTreeLeaf<Page> where Page: AsRefPageSlice {
+    type Target = BPTreeLeafData;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
+}
+
+impl<Page> DerefMut for BPTreeLeaf<Page> where Page: AsMutPageSlice {
+
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.as_mut()
+    }
+}
+
+impl<Page> AsRef<Page> for BPTreeLeaf<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &Page {
+        &self.0
+    }
+}
+
+impl<Page> AsMut<Page> for BPTreeLeaf<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut Page {
+        &mut self.0
+    }
+}
 
 impl<Page> AsRef<BPTreeLeafData> for BPTreeLeaf<Page> where Page: AsRefPageSlice {
     fn as_ref(&self) -> &BPTreeLeafData {
@@ -61,6 +88,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         leaf
     }
 
+    #[allow(dead_code)]
     pub fn iter_mut<'a>(&'a mut self) -> impl Iterator<Item=BPTreeLeafCell<&'a mut PageSlice>>
     {
         let cp: &mut CellPage<_> = self.as_mut();
@@ -87,14 +115,42 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         let cp: &mut CellPage<_> = self.as_mut();
         cp.push()     
     }
+
+    pub fn as_mut_cells(&mut self) -> &mut CellPage<Page> {
+        self.as_mut()
+    }
+
+    pub fn split_into<P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> PagerResult<Numeric> where P2: AsMutPageSlice {
+        let at = self.len().div(2);
+        self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
+
+        let key = self.iter().last().map(|cell| cell.borrow_key().clone()).unwrap();
+
+        Ok(key)
+    }
 }
 
 impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
+
+    pub fn as_page(&self) -> &Page {
+        &self.0
+    }
 
     /// Vérifie si la feuille est pleine.
     pub fn is_full(&self) -> bool {
         let data: &BPTreeLeafData = self.as_ref();
         data.is_full()
+    }
+
+    pub fn len(&self) -> u8 {
+        let data: &BPTreeLeafData = self.as_ref();
+        data.header.cell_spec.len()
+    }
+
+    pub fn borrow_cell(&self, cid: &CellId) -> BPTreeLeafCell<&PageSlice> {
+        let cp: &CellPage<_> = self.as_ref();
+        let cell = cp.borrow_cell(cid).unwrap();
+        BPTreeLeafCell(cell)
     }
 
     /// Itère sur les cellules du noeud.
@@ -113,16 +169,16 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
 #[repr(C)]
 /// En-tête d'une [feuille](self::BPTreeLeafPage).
 pub struct BPTreeLeafPageHeader {
-    kind: BPTreeNodeKind,
+    pub(crate) kind: BPTreeNodeKind,
     cell_spec: CellPageHeader,
-    parent: OptionalPageId,
-    prev: OptionalPageId,
-    next: OptionalPageId,
+    pub(super) parent: OptionalPageId,
+    pub(super) prev: OptionalPageId,
+    pub(super) next: OptionalPageId,
 }
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
-/// Page d'une feuille d'un arbre B+
+/// Données d'une feuille d'un arbre B+
 pub struct BPTreeLeafData {
     pub(super) header: BPTreeLeafPageHeader,
     cells: [u8],
@@ -178,11 +234,16 @@ where Slice: AsRefPageSlice
         self.0.cid
     }
 
+    pub fn as_cell(&self) -> &Cell<Slice> {
+        &self.0
+    }
+
     pub fn borrow_key(&self) -> &Numeric {
         let data: &BPTreeLeafCellData = self.as_ref();
         &data.key
     }
 
+    #[allow(dead_code)]
     pub fn borrow_value(&self) -> &VarData {
         let data: &BPTreeLeafCellData = self.as_ref();
         &data.value      

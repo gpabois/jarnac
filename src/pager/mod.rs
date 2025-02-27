@@ -74,7 +74,7 @@ pub trait IPager {
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    /// Reoturne la taille d'une page
+    /// Retourne la taille d'une page
     fn page_size(&self) -> PageSize;
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
@@ -391,7 +391,7 @@ mod tests {
 
             let cpage = pager.get_cached_page(&pid)?;
             assert!(cpage.is_new());
-            assert_eq!(cpage.id(), pid);
+            assert_eq!(*cpage.id(), pid);
         }
 
         Ok(())

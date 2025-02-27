@@ -149,10 +149,6 @@ impl Numeric {
     }
 }
 
-pub trait IntoNumericSpec {
-    fn kind() -> NumericKind;
-}
-
 #[derive(FromBytes, Clone, Copy, KnownLayout, Immutable, Eq, PartialEq, Debug)]
 pub struct NumericKind(u8);
 
@@ -163,10 +159,6 @@ impl Into<u8> for NumericKind {
 }
 
 impl NumericKind {
-    pub fn from<NS: IntoNumericSpec>() -> Self {
-        NS::kind()
-    }
-
     const fn new_int(size: u8, signed: bool) -> Self {
         unsafe {
             let signed: u8 = std::mem::transmute(signed);

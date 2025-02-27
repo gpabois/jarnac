@@ -28,9 +28,15 @@ impl VarData {
         self.header = write_var_data(data, &mut self.in_page, pager)?;
         Ok(())
     }
+
+    pub fn copy_into(&self, dest: &mut VarData) -> PagerResult<()> {
+        dest.header = self.header.clone();
+        dest.in_page.copy_from_slice(&self.in_page);
+        Ok(())
+    }
 }
 
-#[derive(FromBytes, KnownLayout, Immutable)]
+#[derive(FromBytes, KnownLayout, Immutable, Clone)]
 #[repr(C)]
 /// Contient les données nécessaires pour récupérer les données d'une taille dynamique.
 pub struct VarHeader {
