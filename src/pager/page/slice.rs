@@ -3,7 +3,7 @@ use std::{mem::forget, ops::{Deref, DerefMut, Index, IndexMut}, slice::SliceInde
 use zerocopy::{Immutable, KnownLayout, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable};
 
-use crate::pager::cache::CachedPage;
+use crate::pager::page::descriptor::PageDescriptor;
 
 use super::{AsMutPageSlice, AsRefPageSlice, MutPage, RefPage};
 
@@ -103,7 +103,7 @@ impl<'pager> IntoRefPageSlice for RefPage<'pager> {
         unsafe {
             let slice = RefPageSlice {
                 inner: self.0.clone(), 
-                slice: &self.0.content.as_ref()[idx]
+                slice: &self.0.get_content_ptr().as_ref()[idx]
             };
             forget(self);
             slice
@@ -118,7 +118,7 @@ impl<'pager> IntoRefPageSlice for &RefPage<'pager> {
         unsafe {
             let slice = RefPageSlice {
                 inner: self.0.clone(), 
-                slice: &self.0.content.as_ref()[idx]
+                slice: &self.0.get_content_ptr().as_ref()[idx]
             };
             slice
         }
@@ -157,11 +157,11 @@ pub trait IntoMutPageSlice {
 impl<'pager> IntoMutPageSlice for MutPage<'pager> {
     type MutPageSlice = MutPageSlice<'pager>;
     
-    fn into_mut_page_slice<Idx: PageSliceIndex>(mut self, idx: Idx) -> Self::MutPageSlice {
+    fn into_mut_page_slice<Idx: PageSliceIndex>(self, idx: Idx) -> Self::MutPageSlice {
         unsafe {
             let slice = MutPageSlice {
                 inner: self.inner.clone(), 
-                slice: &mut self.inner.content.as_mut()[idx]
+                slice: &mut self.inner.get_content_ptr().as_mut()[idx]
             };
             forget(self);
             slice
@@ -198,7 +198,7 @@ pub trait BorrowMutPageSlice {
 
 /// Référence vers une tranche de données d'une page.
 pub struct RefPageSlice<'pager>{
-    pub(super) inner: CachedPage<'pager>, 
+    pub(super) inner: PageDescriptor<'pager>, 
     pub(super) slice: &'pager PageSlice
 }
 
@@ -217,13 +217,15 @@ impl Deref for RefPageSlice<'_> {
 }
 impl Drop for RefPageSlice<'_> {
     fn drop(&mut self) {
-        self.inner.rw_counter -= 1;
+        unsafe {
+            self.inner.dec_rw_counter();
+        }
     }
 }
 
 /// Une tranche mutable d'une page.
 pub struct MutPageSlice<'pager>{
-    pub(super) inner: CachedPage<'pager>, 
+    pub(super) inner: PageDescriptor<'pager>, 
     pub(super) slice: &'pager mut PageSlice
 }
 
@@ -240,9 +242,9 @@ impl AsMut<PageSlice> for MutPageSlice<'_> {
 }
 
 impl<'pager> Into<RefPageSlice<'pager>> for MutPageSlice<'pager> {
-    fn into(mut self) -> RefPageSlice<'pager> {
+    fn into(self) -> RefPageSlice<'pager> {
         unsafe {
-            self.inner.rw_counter = 0;
+            self.inner.reset_rw_counter();
 
             let slice = std::ptr::from_mut(self.slice).as_ref().unwrap();
         
@@ -283,6 +285,8 @@ impl<'pager> DerefMut for MutPageSlice<'pager> {
 }
 impl Drop for MutPageSlice<'_> {
     fn drop(&mut self) {
-        self.inner.rw_counter += 1;
+        unsafe  {
+            self.inner.inc_rw_counter();
+        }
     }
 }

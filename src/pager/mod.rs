@@ -2,19 +2,18 @@ use zerocopy::TryFromBytes;
 use zerocopy_derive::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use std::{
     cell::UnsafeCell,
-    io::{self, Read, Seek, Write},
-    ops::DerefMut,
+    io::{self, Read, Seek, Write}, ops::DerefMut,
 };
 
-use cache::{CachedPage, PagerCache};
+use buffer::{IPageBuffer, PageBuffer};
 use free::{pop_free_page, push_free_page};
-use page::{MutPage, OptionalPageId, PageId, PageLocation, PageSize, RefPage};
+use page::{descriptor::PageDescriptor, MutPage, OptionalPageId, PageId, PageLocation, PageSize, RefPage};
 use stress::FsPagerStress;
 use transaction::PagerTransaction;
 
 use crate::fs::{FileOpenOptions, FilePtr, IFileSystem, IPath};
 
-mod cache;
+mod buffer;
 pub mod cell;
 pub mod error;
 pub mod free;
@@ -56,7 +55,7 @@ trait IPagerInternals: IPager {
     /// Ecrit l'entête du fichier dans le flux
     fn write_header<W: Write + Seek>(&self, stream: &mut W) -> io::Result<()>;
     /// Itère sur les pages cachées
-    fn iter_dirty_pages(&self) -> impl Iterator<Item = CachedPage<'_>>;
+    fn iter_dirty_pages(&self) -> impl Iterator<Item = PageDescriptor<'_>>;
 }
 
 pub trait IPager {
@@ -65,19 +64,19 @@ pub trait IPager {
     /// Supprime une page
     fn delete_page(&self, id: &PageId) -> PagerResult<()>;
     /// Récupère une page existante.
-    fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>>;
+    fn borrow_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>>;
     /// Récupère une page modifiable existante.
-    fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>>;
+    fn borrow_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>>;
     /// Nombre de pages stockées.
     fn len(&self) -> u64;
-    /// Aucune page n'est stockée
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
     /// Retourne la taille d'une page
     fn page_size(&self) -> PageSize;
     /// Commit les pages modifiées.
     fn commit(&self) -> PagerResult<()>;
+    /// Aucune page n'est stockée
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub type BoxedPager = Box<dyn IPager>;
@@ -140,7 +139,7 @@ impl PagerHeader {
 
 pub struct Pager<Fs: IFileSystem> {
     header: UnsafeCell<Box<[u8; size_of::<PagerHeader>()]>>,
-    cache: PagerCache,
+    buffer: PageBuffer,
     file: FilePtr<Fs>,
 }
 
@@ -188,8 +187,8 @@ where
         }
     }
 
-    fn iter_dirty_pages(&self) -> impl Iterator<Item = CachedPage<'_>> {
-        self.cache
+    fn iter_dirty_pages(&self) -> impl Iterator<Item = PageDescriptor<'_>> {
+        self.buffer
             .iter()
             .map(|cell| cell.unwrap())
             .filter(|cell| cell.is_dirty())
@@ -229,19 +228,19 @@ where
 
     fn new_page(&self) -> PagerResult<PageId> {
         let pid = pop_free_page(self)?.unwrap_or_else(|| PageId::new(self.page_count() + 1));
-        let mut cpage = self.cache.alloc(&pid)?;
+        let page = self.buffer.alloc(&pid)?;
 
-        cpage.set_new();
+        page.set_new();
         self.borrow_mut_header().inc_page_count();
 
         Ok(pid)
     }
 
-    fn get_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>> {
+    fn borrow_page<'pager>(&'pager self, id: &PageId) -> PagerResult<RefPage<'pager>> {
         self.get_cached_page(id).and_then(RefPage::try_new)
     }
 
-    fn get_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>> {
+    fn borrow_mut_page<'pager>(&'pager self, id: &PageId) -> PagerResult<MutPage<'pager>> {
         self.get_cached_page(id).and_then(MutPage::try_new)
     }
 
@@ -269,7 +268,7 @@ where
         let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
         // Instantie le système de cache
-        let cache = cache::PagerCache::new(
+        let cache = buffer::PageBuffer::new(
             cache_size,
             page_size,
             FsPagerStress::new(
@@ -294,7 +293,7 @@ where
 
         Ok(Self {
             file,
-            cache,
+            buffer: cache,
             header: UnsafeCell::new(header_bytes)
         })
     }
@@ -321,7 +320,7 @@ where
         };
 
         // Instantie le cache
-        let cache = cache::PagerCache::new(
+        let cache = buffer::PageBuffer::new(
             cache_size,
             header.page_size,
             FsPagerStress::new(
@@ -333,31 +332,31 @@ where
 
         Ok(Self {
             file,
-            cache,
+            buffer: cache,
             header: UnsafeCell::new(header_bytes)
         })
     }
 
-    fn get_cached_page<'pager>(&'pager self, pid: &PageId) -> PagerResult<CachedPage<'pager>> {
+    fn get_cached_page<'pager>(&'pager self, pid: &PageId) -> PagerResult<PageDescriptor<'pager>> {
         // La page n'existe pas
         if *pid > self.page_count() {
             return Err(PagerError::new(PagerErrorKind::UnexistingPage(*pid)));
         }
 
         // La page a été cachée au préalable
-        if let Some(cached) = self.cache.try_get(pid)? {
+        if let Some(cached) = self.buffer.try_get(pid)? {
             return Ok(cached);
         }
 
         // On va charger la page depuis le fichier paginé,
         // et la mettre en cache;
-        let mut cpage = self.cache.alloc(pid)?;
+        let mut cpage = self.buffer.alloc(pid)?;
         self.load_page_content(&mut cpage)?;
         Ok(cpage)
     }
 
     /// Charge le contenu de la page depuis le système de stockage persistant
-    fn load_page_content(&self, page: &mut CachedPage<'_>) -> PagerResult<()> {
+    fn load_page_content(&self, page: &mut PageDescriptor<'_>) -> PagerResult<()> {
         let pid = page.id();
         let loc = self.page_location(&pid);
 
@@ -403,13 +402,13 @@ mod tests {
         let pager = Pager::new(vfs, "test", PageSize::new(4_096), PagerOptions::default())?;
 
         let pid = pager.new_page()?;
-        let mut page = pager.get_mut_page(&pid)?;
+        let mut page = pager.borrow_mut_page(&pid)?;
         let expected: u64 = 123456;
 
         page.open_mut_cursor().write_u64::<LittleEndian>(expected)?;
         drop(page);
 
-        let page = pager.get_page(&pid)?;
+        let page = pager.borrow_page(&pid)?;
         let got = page.open_cursor().read_u64::<LittleEndian>()?;
 
         assert_eq!(expected, got);
@@ -430,7 +429,7 @@ mod tests {
         let expected: u64 = 123456;
 
         pager
-            .get_mut_page(&pid)?
+            .borrow_mut_page(&pid)?
             .open_mut_cursor()
             .write_u64::<LittleEndian>(expected)?;
 
@@ -455,7 +454,7 @@ mod tests {
         assert_eq!(pager.len(), 1);
 
         let got = pager
-            .get_page(&pid)?
+            .borrow_page(&pid)?
             .open_cursor()
             .read_u64::<LittleEndian>()?;
 

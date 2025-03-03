@@ -8,6 +8,22 @@ use super::{
     IPager, PagerResult,
 };
 
+/// Représente une valeur de taille variable.
+pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice;
+
+impl<Slice> AsRef<VarData> for Var<Slice> where Slice: AsRefPageSlice {
+    fn as_ref(&self) -> &VarData {
+        VarData::try_ref_from_bytes(self.0.as_ref()).unwrap()
+    }
+}
+
+impl<Slice> AsMut<VarData> for Var<Slice> where Slice: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut VarData {
+        VarData::try_mut_from_bytes(self.0.as_mut()).unwrap()
+    }
+}
+
+
 #[derive(FromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct VarData {
@@ -125,7 +141,7 @@ pub fn free_overflow_pages<Pager: IPager>(head: PageId, pager: &Pager) -> PagerR
     let mut current = Some(head);
 
     while let Some(pid) = current {
-        let raw = pager.get_page(&pid)?;
+        let raw = pager.borrow_page(&pid)?;
         let page = SpillPage::get(&raw);
         current = page.get_next();
         pager.delete_page(&pid)?;
@@ -147,7 +163,7 @@ pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
     let mut current = header.spill_page_id;
 
     while let Some(pid) = current.as_ref() {
-        let raw = pager.get_page(pid)?;
+        let raw = pager.borrow_page(pid)?;
         let page = SpillPage::get(&raw);
         page.read(dest);
         current = page.get_next().into();
@@ -178,7 +194,7 @@ pub fn write_var_data<Pager: IPager>(
 
     while remaining > 0 {
         let pid = pager.new_page()?;
-        let mut page = pager.get_mut_page(&pid)?;
+        let mut page = pager.borrow_mut_page(&pid)?;
         let spill = SpillPage::new(&mut page);
  
         remaining -= spill.write(&mut cursor);
@@ -188,7 +204,7 @@ pub fn write_var_data<Pager: IPager>(
         }
 
         if let Some(prev_ov_pid) = prev_ov_pid {
-            let mut prev_page = pager.get_mut_page(&prev_ov_pid)?;
+            let mut prev_page = pager.borrow_mut_page(&prev_ov_pid)?;
             let prev_sp = SpillPage::get_mut(&mut prev_page);
             prev_sp.set_next(Some(pid));
         }
@@ -198,7 +214,7 @@ pub fn write_var_data<Pager: IPager>(
 
     // Si il reste des pages de débordement, on va les libérer, ça sert à rien de les garder.
     if let Some(tail) = prev_ov_pid {
-        let mut tail_page = pager.get_mut_page(&tail)?;
+        let mut tail_page = pager.borrow_mut_page(&tail)?;
         let tail_sp = SpillPage::get_mut(&mut tail_page);
         tail_sp.get_next().iter().try_for_each(|rem| {
             free_overflow_pages(*rem, pager)

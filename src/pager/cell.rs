@@ -711,7 +711,7 @@ mod tests {
         let header: CellPageHeader = CellPageHeader::new(CellSize::from(500), 4, u16::try_from(size_of::<CellHeader>()).unwrap());
 
         let pid = pager.new_page()?;
-        let mut page =  pager.get_mut_page(&pid)?;
+        let mut page =  pager.borrow_mut_page(&pid)?;
         
         let mut cpage = CellPage::new(&mut page, header);
         assert_eq!(cpage.len(), 0);

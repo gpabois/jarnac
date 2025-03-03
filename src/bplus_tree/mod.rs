@@ -165,7 +165,7 @@ impl<'pager, Pager, Page> IRefBPlusTree for BPlusTree<'pager, Pager, Page> where
 
         Ok(match maybe_pid {
             Some(pid) => {
-                let leaf: BPTreeLeaf<_> = self.pager.get_page(&pid)?.into();
+                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid)?.into();
 
                 let gid = leaf
                     .iter()
@@ -185,7 +185,7 @@ impl<'pager, Pager, Page> IRefBPlusTree for BPlusTree<'pager, Pager, Page> where
         
         Ok(match maybe_pid {
             Some(pid) => {
-                let leaf: BPTreeLeaf<_> = self.pager.get_page(&pid)?.into();
+                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid)?.into();
 
                 let gid = leaf
                     .iter()
@@ -269,7 +269,7 @@ where
         
         let pid = pager.new_page()?;
         
-        let mut page = pager.get_mut_page(&pid)?;
+        let mut page = pager.borrow_mut_page(&pid)?;
         page.fill(0);
         page.as_mut_bytes()[0] = PageKind::BPlusTree as u8;
 
@@ -309,7 +309,7 @@ where
 {
 
     fn node_kind(&self, pid: &PageId) -> PagerResult<BPTreeNodeKind> {
-        let page = self.pager.get_page(pid)?;
+        let page = self.pager.borrow_page(pid)?;
         let node_page = BPTreeNodePageData::try_ref_from_bytes(&page)?;
         Ok(node_page.kind)
     }
@@ -320,7 +320,7 @@ where
         while let Some(pid) = current.as_ref() {
             match self.node_kind(&pid)? {
                 BPTreeNodeKind::Interior => {
-                    let interior: BPTreeInterior<_> = self.pager.get_page(pid)?.into();
+                    let interior: BPTreeInterior<_> = self.pager.borrow_page(pid)?.into();
                     current = interior.iter().flat_map(|cell| cell.as_ref().left.as_ref().clone()).next();
                 },
                 BPTreeNodeKind::Leaf => {
@@ -343,7 +343,7 @@ where
             if self.node_kind(pid)? == BPTreeNodeKind::Leaf {
                 return Ok(Some(*pid));
             } else {
-                let interior: BPTreeInterior<_> = self.pager.get_page(pid)?.into();
+                let interior: BPTreeInterior<_> = self.pager.borrow_page(pid)?.into();
                 current = Some(interior.search_child(key))
             }
         }
@@ -353,7 +353,7 @@ where
 
     
     fn borrow_leaf(&self, pid: &PageId) -> PagerResult<BPTreeLeaf<RefPage<'pager>>> {
-        self.pager.get_page(pid).map(BPTreeLeaf::from)
+        self.pager.borrow_page(pid).map(BPTreeLeaf::from)
     }
 }
 
@@ -380,7 +380,7 @@ where
         };
         
 
-        let mut leaf: BPTreeLeaf<_> = self.pager.get_mut_page(&pid)?.into();
+        let mut leaf: BPTreeLeaf<_> = self.pager.borrow_mut_page(&pid)?.into();
 
         if leaf.is_full() {
             self.split(leaf.as_mut())?;
@@ -497,7 +497,7 @@ where
         interior.insert(left, key, right)?;
 
         interior.header.parent.as_ref().iter().try_for_each(|parent_id| {
-            let mut page = self.pager.get_mut_page(parent_id)?;
+            let mut page = self.pager.borrow_mut_page(parent_id)?;
             self.split(&mut page)
         })?;
         
@@ -505,17 +505,17 @@ where
     }
 
     fn borrow_mut_interior(&self, pid: &PageId) -> PagerResult<BPTreeInterior<MutPage<'pager>>> {
-        self.pager.get_mut_page(pid).map(BPTreeInterior::from)
+        self.pager.borrow_mut_page(pid).map(BPTreeInterior::from)
     }
 
     fn borrow_mut_leaf(&self, pid: &PageId) -> PagerResult<BPTreeLeaf<MutPage<'pager>>> {
-        self.pager.get_mut_page(pid).map(BPTreeLeaf::from)
+        self.pager.borrow_mut_page(pid).map(BPTreeLeaf::from)
     }
 
     /// Insère une nouvelle feuille dans l'arbre.
     fn insert_leaf(&mut self) -> PagerResult<PageId> {
         let pid = self.pager.new_page()?;
-        let page = self.pager.get_mut_page(&pid)?;
+        let page = self.pager.borrow_mut_page(&pid)?;
 
         BPTreeLeaf::new(page,
             self.as_ref().header.k.try_into().unwrap(),
@@ -528,7 +528,7 @@ where
     /// Insère un noeud intérieur dans l'arbre.
     fn insert_interior(&mut self) -> PagerResult<PageId> {
         let pid = self.pager.new_page()?;
-        let page = self.pager.get_mut_page(&pid)?;
+        let page = self.pager.borrow_mut_page(&pid)?;
 
         BPTreeInterior::new(page, 
             self.as_ref().header.k.try_into().unwrap(), 

@@ -10,7 +10,7 @@ use byteorder::{ReadBytesExt, WriteBytesExt};
 
 use crate::fs::{FileOpenOptions, FilePtr, IFileSystem};
 
-use super::{cache::CachedPage, page::{PageId, PageSize}, PagerResult};
+use super::{page::{descriptor::PageDescriptor, PageId, PageSize}, PagerResult};
 
 /// Gestion du *stress mémoire* sur le système de pagination.
 ///
@@ -19,9 +19,9 @@ use super::{cache::CachedPage, page::{PageId, PageSize}, PagerResult};
 /// de données, généralement un disque mémoire.
 pub trait IPagerStress {
     /// Décharge une page de la mémoire.
-    fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()>;
+    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()>;
     /// Récupère une page en mémoire.
-    fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()>;
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()>;
     /// Vérifie si la page est déchargée.
     fn contains(&self, pid: &PageId) -> bool;
 }
@@ -30,11 +30,11 @@ impl<U> IPagerStress for Rc<U>
 where
     U: IPagerStress,
 {
-    fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
         self.deref().discharge(src)
     }
 
-    fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
         self.deref().retrieve(dest)
     }
 
@@ -55,11 +55,11 @@ impl BoxedPagerStress {
 }
 
 impl IPagerStress for BoxedPagerStress {
-    fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
         self.0.discharge(src)
     }
 
-    fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
         self.0.retrieve(dest)
     }
 
@@ -95,7 +95,7 @@ impl<Fs: IFileSystem> FsPagerStress<Fs> {
 }
 
 impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
-    fn discharge(&self, src: &CachedPage<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
         let pid: PageId = self
             .freelist
             .borrow_mut()
@@ -108,22 +108,22 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
 
         let addr = pid *self.page_size;
         file.seek(std::io::SeekFrom::Start(addr.into()))?;
-        file.write_u8(src.flags)?;
+        file.write_u8(src.get_flags())?;
         unsafe {
-            file.write_all(src.content.as_ref())?;
+            file.write_all(src.get_content_ptr().as_ref())?;
         }
         self.pages.borrow_mut().insert(*src.id(), pid);
 
         Ok(())
     }
 
-    fn retrieve(&self, dest: &mut CachedPage<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
         let pid = self.pages.borrow().get(&dest.id()).copied().map(PageId::from).unwrap();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
         let addr = pid * self.page_size;
         file.seek(std::io::SeekFrom::Start(addr.into()))?;
-        dest.flags = file.read_u8()?;
+        dest.set_flags(file.read_u8()?);
         file.read_exact(dest.borrow_mut(true).deref_mut())?;
 
         self.freelist.borrow_mut().push(pid);

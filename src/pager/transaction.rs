@@ -44,7 +44,7 @@ where
 
         self.pager
             .iter_dirty_pages()
-            .try_for_each(|mut cpage| {
+            .try_for_each(|cpage| {
                 // On filtre les pages propres
                 if !cpage.is_dirty() {
                     return Ok(());
@@ -56,7 +56,7 @@ where
                 }
 
                 
-                let loc = self.pager.page_location(&cpage.pid);
+                let loc = self.pager.page_location(cpage.id());
 
                 // Si la page n'est pas nouvelle, alors elle existe déjà dans le fichier paginé
                 // donc on sauvegarde la version originale de la page.
@@ -81,7 +81,7 @@ where
             .inspect(|_| {
                 self.pager
                     .iter_dirty_pages()
-                    .for_each(|mut cpage| cpage.clear_flags());
+                    .for_each(|cpage| cpage.clear_flags());
             })
     }
 }

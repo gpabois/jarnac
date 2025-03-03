@@ -53,7 +53,7 @@ pub(super) fn push_free_page<Pager: IPagerInternals>(
     pager: &Pager,
     pid: &PageId,
 ) -> PagerResult<()> {
-    let mut page = pager.get_mut_page(pid)?;
+    let mut page = pager.borrow_mut_page(pid)?;
     page.fill(0);
 
     FreePage::new(&mut page)?;
@@ -66,7 +66,7 @@ pub(super) fn push_free_page<Pager: IPagerInternals>(
 /// Dépile une page libre dans la liste chaînée
 pub(super) fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> PagerResult<Option<PageId>> {
     if let Some(next) = pager.free_head() {
-        let new_head = FreePage::try_ref_from_bytes(&pager.get_page(&next)?).unwrap().get_next();
+        let new_head = FreePage::try_ref_from_bytes(&pager.borrow_page(&next)?).unwrap().get_next();
         pager.set_free_head(new_head);
         return Ok(Some(next));
     }
