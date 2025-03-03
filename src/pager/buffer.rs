@@ -39,24 +39,24 @@ pub trait IPageBuffer {
 }
 
 pub struct PageBuffer {
-    /// The memory layout of the allocated space
+    /// Le layout de l'espace allouée
     layout: Layout,
-    /// The allocated buffer space
+    /// L'espace allouée
     ptr: NonNull<u8>,
-    /// The size of the buffer
+    /// La taille du tampon en octets.
     size: usize,
-    /// The tail of allocated space
+    /// Le bout de l'espace des pages allouées
     tail: RefCell<usize>,
-    /// The size of a page
+    /// Taille d'une page
     page_size: PageSize,
-    /// Free page cells
+    /// Emplacements libres dans l'espace des pages allouées.
     free_list: RefCell<Vec<NonNull<PageDescriptorInner>>>,
-    /// Stored page cells
+    /// Ensemble des pages stockées dans le tampon
     stored: RefCell<HashSet<PageId>>,
-    /// Current cached pages that are in memory.
+    /// Ensemble des pages stockées dans le tampon et chargées en mémoire.
     in_memory: RefCell<HashMap<PageId, NonNull<PageDescriptorInner>>>,
     /// Stratégie de gestion du stress mémoire
-    /// Employé si le cache est plein
+    /// Employé si le tampon est plein
     stress: BoxedPagerStress,
 }
 
