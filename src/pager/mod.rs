@@ -19,7 +19,7 @@ pub mod error;
 pub mod free;
 mod logs;
 pub mod page;
-pub mod spill;
+pub mod var;
 mod stress;
 mod transaction;
 
@@ -83,12 +83,12 @@ pub type BoxedPager = Box<dyn IPager>;
 
 #[derive(Default)]
 pub struct PagerOptions {
-    cache_size: Option<usize>,
+    buffer_size: Option<usize>,
 }
 
 impl PagerOptions {
     pub fn set_cache_size(mut self, cache_size: usize) -> Self {
-        self.cache_size = Some(cache_size);
+        self.buffer_size = Some(cache_size);
         self
     }
 }
@@ -265,11 +265,11 @@ where
         options: PagerOptions,
     ) -> PagerResult<Self> {
         let file = FilePtr::new(fs, path);
-        let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
+        let buffer_size = options.buffer_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
         // Instantie le système de cache
-        let cache = buffer::PageBuffer::new(
-            cache_size,
+        let buffer = buffer::PageBuffer::new(
+            buffer_size,
             page_size,
             FsPagerStress::new(
                 file.fs.clone(),
@@ -293,7 +293,7 @@ where
 
         Ok(Self {
             file,
-            buffer: cache,
+            buffer,
             header: UnsafeCell::new(header_bytes)
         })
     }
@@ -305,7 +305,7 @@ where
         options: PagerOptions,
     ) -> PagerResult<Self> {
         let file = FilePtr::new(fs, path);
-        let cache_size = options.cache_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
+        let cache_size = options.buffer_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
         let mut header_bytes = Box::<[u8; size_of::<PagerHeader>()]>::new([0; size_of::<PagerHeader>()]);
 

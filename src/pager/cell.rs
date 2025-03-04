@@ -469,11 +469,13 @@ impl<Slice> Cell<Slice> where Slice: AsMutPageSlice {
         data.header.prev = None.into();
     }
 
+    /// Définit le prochain voisin de la cellule.
     fn set_next_sibling(&mut self, next: Option<CellId>) {
         let data: &mut CellData = self.as_mut();
         data.header.next = next.into();
     }
 
+    /// Définit le voisin précédent de la cellule.
     fn set_prev_sibling(&mut self, prev: Option<CellId>) {
         let data: &mut CellData = self.as_mut();
         data.header.prev = prev.into();      

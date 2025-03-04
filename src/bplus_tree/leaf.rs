@@ -1,15 +1,32 @@
 
 use std::ops::{Deref, DerefMut, Div};
 
-use zerocopy::{FromBytes, TryFromBytes};
+use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
-use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader, CellSize}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageKind, PageSlice}, spill::VarData, PagerResult}, value::numeric::Numeric};
+use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader, CellSize}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageKind, PageSlice}, var::VarData, PagerResult}, value::numeric::Numeric};
 
 use super::BPTreeNodeKind;
 
 /// Représente une feuille d'un arbre B+.
 pub struct BPTreeLeaf<Page>(Page) where Page: AsRefPageSlice;
+
+impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
+    pub fn try_from(page: Page) -> PagerResult<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeLeaf.assert(kind).map(|_| Self(page))
+    }
+
+    fn as_data(&self) -> &BPTreeLeafData {
+        self.as_ref()
+    }
+}
+
+impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
+    fn as_mut_data(&mut self) -> &mut BPTreeLeafData {
+        self.as_mut()
+    }
+}
 
 impl<Page> Deref for BPTreeLeaf<Page> where Page: AsRefPageSlice {
     type Target = BPTreeLeafData;
@@ -74,17 +91,19 @@ impl<Page> From<Page> for BPTreeLeaf<Page> where Page: AsRefPageSlice
 }
 
 impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
+    /// Crée une nouvelle feuille d'un arbre B+.
     pub fn new(mut page: Page, k: u8, cell_size: CellSize) -> Self {
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeLeaf as u8;
 
-        let mut leaf: Self = page.into();
-        let data: &mut BPTreeLeafData = leaf.as_mut();
-        data.header.cell_spec = CellPageHeader::new(
+        let mut leaf = Self::try_from(page).unwrap();
+
+        leaf.header.cell_spec = CellPageHeader::new(
             cell_size, 
             k,
-            size_of::<BPTreeLeafPageHeader>().try_into().unwrap()
+            size_of::<BPTreeLeafHeader>().try_into().unwrap()
         );
+
         leaf
     }
 
@@ -168,7 +187,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 /// En-tête d'une [feuille](self::BPTreeLeafPage).
-pub struct BPTreeLeafPageHeader {
+pub struct BPTreeLeafHeader {
     pub(crate) kind: BPTreeNodeKind,
     cell_spec: CellPageHeader,
     pub(super) parent: OptionalPageId,
@@ -180,7 +199,7 @@ pub struct BPTreeLeafPageHeader {
 #[repr(C)]
 /// Données d'une feuille d'un arbre B+
 pub struct BPTreeLeafData {
-    pub(super) header: BPTreeLeafPageHeader,
+    pub(super) header: BPTreeLeafHeader,
     cells: [u8],
 }
 

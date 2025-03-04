@@ -202,6 +202,12 @@ pub struct RefPageSlice<'pager>{
     pub(super) slice: &'pager PageSlice
 }
 
+impl AsRef<[u8]> for RefPageSlice<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.deref()
+    }
+}
+
 impl AsRef<PageSlice> for RefPageSlice<'_> {
     fn as_ref(&self) -> &PageSlice {
         self.deref()

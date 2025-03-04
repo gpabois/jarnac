@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, ops::{Deref, DerefMut, Div}};
 
-use zerocopy::TryFromBytes;
+use zerocopy::{IntoBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
 
 use crate::{pager::{cell::{Cell, CellHeader, CellId, CellPage, CellPageHeader, CellSize}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, PagerResult}, value::numeric::Numeric};
@@ -8,6 +8,13 @@ use crate::{pager::{cell::{Cell, CellHeader, CellId, CellPage, CellPageHeader, C
 use super::BPTreeNodeKind;
 
 pub struct BPTreeInterior<Page>(Page) where Page: AsRefPageSlice;
+
+impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
+    pub fn try_from(page: Page) -> PagerResult<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeInterior.assert(kind).map(|_| Self(page))
+    }
+}
 
 impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
     /// Initialise un nouveau noeud intérieur.

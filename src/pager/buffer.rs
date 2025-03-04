@@ -111,7 +111,7 @@ impl IPageBuffer for PageBuffer {
 
 impl PageBuffer {
     pub fn new<Ps: IPagerStress + 'static>(
-        cache_size: usize,
+        buffer_size: usize,
         page_size: PageSize,
         stress_strategy: Ps,
     ) -> Self {
@@ -120,7 +120,7 @@ impl PageBuffer {
             let align: usize = (page_size + size_of::<PageDescriptorInner>()).next_power_of_two();
             
             let layout = Layout::from_size_align(
-                cache_size,
+                buffer_size,
                 align,
             )
             .unwrap();
@@ -130,7 +130,7 @@ impl PageBuffer {
             Self {
                 layout,
                 ptr,
-                size: cache_size,
+                size: buffer_size,
                 tail: RefCell::new(0),
                 page_size,
                 stored: RefCell::default(),

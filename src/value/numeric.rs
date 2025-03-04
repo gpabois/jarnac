@@ -184,12 +184,12 @@ impl NumericKind {
 
 }
 
-const UINT8: NumericKind = NumericKind::new_int(1, false);
-const UINT16: NumericKind = NumericKind::new_int(2, false);
-const UINT32: NumericKind = NumericKind::new_int(3, false);
-const UINT64: NumericKind = NumericKind::new_int(4, false);
+pub const UINT8: NumericKind = NumericKind::new_int(1, false);
+pub const UINT16: NumericKind = NumericKind::new_int(2, false);
+pub const UINT32: NumericKind = NumericKind::new_int(3, false);
+pub const UINT64: NumericKind = NumericKind::new_int(4, false);
 
-const INT8: NumericKind = NumericKind::new_int(1, true);
-const INT16: NumericKind = NumericKind::new_int(2, true);
-const INT32: NumericKind = NumericKind::new_int(3, true);
-const INT64: NumericKind = NumericKind::new_int(4, true);
+pub const INT8: NumericKind = NumericKind::new_int(1, true);
+pub const INT16: NumericKind = NumericKind::new_int(2, true);
+pub const INT32: NumericKind = NumericKind::new_int(3, true);
+pub const INT64: NumericKind = NumericKind::new_int(4, true);

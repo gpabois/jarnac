@@ -1,15 +1,49 @@
+pub mod stream;
+
 use std::io::{Cursor, Read, Write};
 
 use zerocopy::{IntoBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 use super::{
-    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind},
-    IPager, PagerResult,
+    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind}, IPager, PagerResult
 };
 
 /// Représente une valeur de taille variable.
 pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice;
+
+impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
+    pub fn size(&self) -> u64 {
+        self.as_data().header.total_size
+    }
+    
+    pub fn has_spilled(&self) -> bool {
+        self.as_data().header.has_spilled()
+    }
+
+    pub fn copy_into(&self, dest: &mut VarData) -> PagerResult<()> {
+        dest.header = self.as_data().header.clone();
+        dest.in_page.copy_from_slice(&self.as_data().in_page);
+        Ok(())
+    }   
+
+    fn as_data(&self) -> &VarData {
+        self.as_ref()
+    }
+}
+
+impl<Slice> Var<Slice> where Slice: AsMutPageSlice {
+    pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
+        self.as_mut().header = write_var_data(data, &mut self.as_mut().in_page, pager)?;
+        Ok(())
+    }
+}
+
+impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice {
+    fn as_ref(&self) -> &[u8] {
+        &self.as_data().in_page[..self.as_data().header.in_page_size.try_into().unwrap()]
+    }
+}
 
 impl<Slice> AsRef<VarData> for Var<Slice> where Slice: AsRefPageSlice {
     fn as_ref(&self) -> &VarData {
@@ -31,15 +65,23 @@ pub struct VarData {
     in_page: [u8]
 }
 
+impl AsRef<[u8]> for VarData {
+    fn as_ref(&self) -> &[u8] {
+        &self.in_page
+    }
+}
+
 impl VarData {
     pub fn size(&self) -> u64 {
         self.header.total_size
     }
     
+    /// Est-ce que le contenu de la donnée a débordé sur d'autres pages ?
     pub fn has_spilled(&self) -> bool {
         self.header.has_spilled()
     }
 
+    /// Ecris la donnée.
     pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
         self.header = write_var_data(data, &mut self.in_page, pager)?;
         Ok(())
@@ -71,6 +113,38 @@ impl VarHeader {
 
 }
 
+pub struct SpillPage<Page>(Page) where Page: AsRefPageSlice;
+
+impl<Page> SpillPage<Page> where Page: AsRefPageSlice {
+    pub fn try_from(page: Page) -> PagerResult<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into().unwrap();
+        PageKind::Overflow.assert(kind).map(|_| Self(page))
+    }
+
+    pub fn as_data(&self) -> &SpillPageData {
+        self.as_ref()
+    }
+}
+
+impl<Page> AsRef<SpillPageData> for SpillPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &SpillPageData {
+        SpillPageData::try_ref_from_bytes(self.0.as_ref()).unwrap()
+    }
+}
+
+impl<Page> AsMut<SpillPageData> for SpillPage<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut SpillPageData {
+        SpillPageData::try_mut_from_bytes(self.0.as_mut()).unwrap()
+    }
+}
+
+impl<Page> AsRef<[u8]> for SpillPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &[u8] {
+        let in_page_size: usize = self.as_data().in_page_size.try_into().unwrap();
+        &self.as_data().body[..in_page_size]
+    }
+}
+
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(u8)]
 #[allow(dead_code)]
@@ -81,14 +155,14 @@ enum SpillKind {
 #[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 /// Page de débordement sans copie. 
-pub struct SpillPage {
+pub struct SpillPageData {
     kind: SpillKind,
     in_page_size: u64,
     next: OptionalPageId,
     body: [u8]
 }
 
-impl SpillPage {
+impl SpillPageData {
     #[inline]
     /// Récupère une référence sur la page de débordement.
     pub fn get<Page>(page: &Page) -> &Self
@@ -142,7 +216,7 @@ pub fn free_overflow_pages<Pager: IPager>(head: PageId, pager: &Pager) -> PagerR
 
     while let Some(pid) = current {
         let raw = pager.borrow_page(&pid)?;
-        let page = SpillPage::get(&raw);
+        let page = SpillPageData::get(&raw);
         current = page.get_next();
         pager.delete_page(&pid)?;
     }
@@ -164,7 +238,7 @@ pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
 
     while let Some(pid) = current.as_ref() {
         let raw = pager.borrow_page(pid)?;
-        let page = SpillPage::get(&raw);
+        let page = SpillPageData::get(&raw);
         page.read(dest);
         current = page.get_next().into();
     }
@@ -195,7 +269,7 @@ pub fn write_var_data<Pager: IPager>(
     while remaining > 0 {
         let pid = pager.new_page()?;
         let mut page = pager.borrow_mut_page(&pid)?;
-        let spill = SpillPage::new(&mut page);
+        let spill = SpillPageData::new(&mut page);
  
         remaining -= spill.write(&mut cursor);
 
@@ -205,7 +279,7 @@ pub fn write_var_data<Pager: IPager>(
 
         if let Some(prev_ov_pid) = prev_ov_pid {
             let mut prev_page = pager.borrow_mut_page(&prev_ov_pid)?;
-            let prev_sp = SpillPage::get_mut(&mut prev_page);
+            let prev_sp = SpillPageData::get_mut(&mut prev_page);
             prev_sp.set_next(Some(pid));
         }
 
@@ -215,7 +289,7 @@ pub fn write_var_data<Pager: IPager>(
     // Si il reste des pages de débordement, on va les libérer, ça sert à rien de les garder.
     if let Some(tail) = prev_ov_pid {
         let mut tail_page = pager.borrow_mut_page(&tail)?;
-        let tail_sp = SpillPage::get_mut(&mut tail_page);
+        let tail_sp = SpillPageData::get_mut(&mut tail_page);
         tail_sp.get_next().iter().try_for_each(|rem| {
             free_overflow_pages(*rem, pager)
         })?;
@@ -232,7 +306,7 @@ pub fn write_var_data<Pager: IPager>(
 mod tests {
     use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc};
     use rand::RngCore;
-    use crate::{fs::in_memory::InMemoryFs, pager::{spill::read_dynamic_sized_data, page::{PageId, PageSize}, Pager, PagerOptions}};
+    use crate::{fs::in_memory::InMemoryFs, pager::{var::read_dynamic_sized_data, page::{PageId, PageSize}, Pager, PagerOptions}};
     use super::write_var_data;
 
     #[test]
@@ -250,7 +324,7 @@ mod tests {
         
         let mut dest: [u8;100] = [0;100];
 
-        let dsd_header: crate::pager::spill::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
+        let dsd_header: crate::pager::var::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.spill_page_id == Some(PageId::from(1u64)).into(), "il doit y avoir eu du débordement");

@@ -12,7 +12,6 @@ pub mod size;
 pub mod location;
 pub mod id;
 pub mod descriptor;
-pub mod cow;
 
 pub use data::*;
 use descriptor::PageDescriptor;
