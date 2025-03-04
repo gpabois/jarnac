@@ -102,12 +102,14 @@ fn compute_b_plus_tree_parameters(
         // On va essayer de trouver le tuple (k, data_size) 
         // qui maximise k * (data_size + leaf_cell_header) 
         // tout en étant inférieure à leaf_cell_space_size
-        let (k3, data_size) = (0..u8::MAX)
-        .into_iter()
-        .map(|k| (k, leaf_cell_space_size - u16::from(k) * leaf_cell_header_size))
-        .filter(|(k, data_size)| u16::from(*k) * (leaf_cell_header_size + *data_size) <= leaf_cell_space_size)
-        .last()
-        .unwrap();
+        let (k3, data_size) = (1..u8::MAX)
+            .into_iter()
+            .filter(|k | leaf_cell_space_size >=  u16::from(*k) * leaf_cell_header_size)
+            .filter(|k| interior_cell_space_size >= u16::from(*k) * (interior_cell_size))
+            .map(|k| (k, u16::div_ceil(leaf_cell_space_size - u16::from(k) * leaf_cell_header_size, u16::from(k))))
+            .filter(|(k, data_size)| u16::from(*k) * (leaf_cell_header_size + *data_size) <= leaf_cell_space_size)
+            .last()
+            .unwrap();
 
 
         k = u16::from(k3);
