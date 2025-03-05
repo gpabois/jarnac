@@ -73,7 +73,7 @@ impl From<u8> for Numeric {
     fn from(value: u8) -> Self {
         let mut num = Numeric::default();
         num.0[0] = UINT8.into();
-        num.borrow_mut_numeric().write_u8(value).unwrap();
+        (&mut num.0[1..=1]).write_u8(value).unwrap();
         num
     }
 }
@@ -82,7 +82,7 @@ impl From<u16> for Numeric {
     fn from(value: u16) -> Self {
         let mut num = Numeric::default();
         num.0[0] = UINT16.into();
-        num.borrow_mut_numeric().write_u16::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=3]).write_u16::<BigEndian>(value).unwrap();
         num        
     }
 }
@@ -91,7 +91,7 @@ impl From<u32> for Numeric {
     fn from(value: u32) -> Self {
         let mut num = Numeric::default();
         num.0[0] = UINT32.into();
-        num.borrow_mut_numeric().write_u32::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=5]).write_u32::<BigEndian>(value).unwrap();
         num        
     }
 }
@@ -100,7 +100,7 @@ impl From<u64> for Numeric {
     fn from(value: u64) -> Self {
         let mut num = Numeric::default();
         num.0[0] = UINT64.into();
-        num.borrow_mut_numeric().write_u64::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=9]).write_u64::<BigEndian>(value).unwrap();
         num        
     }
 }
@@ -109,7 +109,7 @@ impl From<i8> for Numeric {
     fn from(value: i8) -> Self {
         let mut num = Numeric::default();
         num.0[0] = INT8.into();
-        num.borrow_mut_numeric().write_i8(value).unwrap();
+        (&mut num.0[1..=1]).write_i8(value).unwrap();
         num
     }
 }
@@ -118,7 +118,7 @@ impl From<i16> for Numeric {
     fn from(value: i16) -> Self {
         let mut num = Numeric::default();
         num.0[0] = INT16.into();
-        num.borrow_mut_numeric().write_i16::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=3]).write_i16::<BigEndian>(value).unwrap();
         num        
     }
 }
@@ -127,7 +127,7 @@ impl From<i32> for Numeric {
     fn from(value: i32) -> Self {
         let mut num = Numeric::default();
         num.0[0] = INT32.into();
-        num.borrow_mut_numeric().write_i32::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=5]).write_i32::<BigEndian>(value).unwrap();
         num        
     }
 }
@@ -136,7 +136,7 @@ impl From<i64> for Numeric {
     fn from(value: i64) -> Self {
         let mut num = Numeric::default();
         num.0[0] = INT64.into();
-        num.borrow_mut_numeric().write_i64::<BigEndian>(value).unwrap();
+        (&mut num.0[1..=9]).write_i64::<BigEndian>(value).unwrap();
         num        
     }
 }

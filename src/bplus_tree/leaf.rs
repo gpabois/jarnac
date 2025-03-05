@@ -1,8 +1,8 @@
 
 use std::ops::{Deref, DerefMut, Div};
 
-use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
-use zerocopy_derive::{FromBytes, Immutable, KnownLayout, TryFromBytes};
+use zerocopy::{IntoBytes, TryFromBytes};
+use zerocopy_derive::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader, CellSize}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageKind, PageSlice}, var::VarData, PagerResult}, value::numeric::Numeric};
 
@@ -96,7 +96,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeLeaf as u8;
 
-        let mut leaf = Self::try_from(page).unwrap();
+        let mut leaf = Self::try_from(page).expect("not a b+ leaf node");
 
         leaf.header.cell_spec = CellPageHeader::new(
             cell_size, 
@@ -221,7 +221,7 @@ impl<Slice> AsRef<PageSlice> for BPTreeLeafCell<Slice> where Slice: AsRefPageSli
 
 impl<Slice> AsRef<BPTreeLeafCellData> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice {
     fn as_ref(&self) -> &BPTreeLeafCellData {
-        BPTreeLeafCellData::ref_from_bytes(self.0.as_slice()).unwrap()
+        BPTreeLeafCellData::try_ref_from_bytes(self.0.as_slice()).unwrap()
     }
 }
 
@@ -284,7 +284,7 @@ where Slice: AsMutPageSlice
     }
 }
 
-#[derive(FromBytes, Immutable, KnownLayout)]
+#[derive(TryFromBytes, Immutable, KnownLayout)]
 #[repr(C)]
 pub struct BPTreeLeafCellData {
     key: Numeric,

@@ -73,7 +73,7 @@ pub enum PagerErrorKind {
     PageAlreadyCached(PageId),
     PageNotCached(PageId),
     PageCurrentlyBorrowed,
-    InvalidPageKind,
+    InvalidPageKind(u8),
     InvalidFormat,
     SpilledVar,
     WrongPageKind { expected: PageKind, got: PageKind },
@@ -88,7 +88,7 @@ impl Display for PagerErrorKind {
             PagerErrorKind::UnexistingPage(id) => write!(f, "page {id} does not exist"),
             PagerErrorKind::PageAlreadyCached(id) => write!(f, "page {id} is already cached"),
             PagerErrorKind::PageCurrentlyBorrowed => write!(f, "page is already borrowed"),
-            PagerErrorKind::InvalidPageKind => write!(f, "unknown page kind"),
+            PagerErrorKind::InvalidPageKind(invalid_kind) => write!(f, "unknown page kind, got {0}", invalid_kind),
             PagerErrorKind::InvalidFormat => write!(f, "invalid pager format"),
             PagerErrorKind::WrongPageKind { expected, got } => {
                         write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)

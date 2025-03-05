@@ -50,7 +50,10 @@ impl TryFrom<u8> for PageKind {
         match value {
             0 => Ok(Self::Free),
             1 => Ok(Self::Overflow),
-            _ => Err(PagerError::new(PagerErrorKind::InvalidPageKind)),
+            2 => Ok(Self::BPlusTree),
+            3 => Ok(Self::BPlusTreeInterior),
+            4 => Ok(Self::BPlusTreeLeaf),
+            invalid_code => Err(PagerError::new(PagerErrorKind::InvalidPageKind(invalid_code))),
         }
     }
 }

@@ -15,8 +15,7 @@ use crate::{
     pager::{
         cell::GlobalCellId,
         page::{
-            AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize,
-            RefPage,
+            self, data, AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
         },
         var::VarHeader,
         IPager, PagerResult,
@@ -27,6 +26,60 @@ use crate::{
 pub type BPTreeKey = Numeric;
 
 pub const MIN_K: u16 = 2;
+pub const KEY_SIZE: usize = size_of::<Numeric>();
+pub const LEAF_HEADER_SIZE: usize = size_of::<BPTreeLeafHeader>();
+pub const LEAF_CELL_HEADER_SIZE: usize = KEY_SIZE + size_of::<VarHeader>();
+pub const INTERIOR_HEADER_SIZE: usize = size_of::<BPTreeInteriorHeader>();
+pub const INTERIOR_CELL_SIZE: usize = size_of::<PageId>() + KEY_SIZE;
+
+fn within_available_interior_cell_space_size(page_size: PageSize, k: u16) -> bool {
+    max_interior_cell_space_size(page_size) >= compute_interior_cell_space_size(k)
+}
+
+fn within_available_leaf_cell_space_size(page_size: PageSize, k: u16, data_size: u16) -> bool {
+    max_leaf_cell_space_size(page_size) >= compute_leaf_cell_space_size(k, data_size)
+}
+
+
+/// Calcule l'espace maximal alloué aux cellules d'un noeud intérieur
+#[inline(always)]
+fn max_interior_cell_space_size(page_size: PageSize) -> u16 {
+    page_size - u16::try_from(INTERIOR_HEADER_SIZE).unwrap()
+}
+
+#[inline(always)]
+fn compute_interior_cell_space_size(k: u16) -> u16 {
+    let interior_cell_size = u16::try_from(INTERIOR_CELL_SIZE).unwrap();
+    k * interior_cell_size
+}
+
+#[inline(always)]
+fn compute_leaf_cell_space_size(k: u16, data_size: u16) -> u16 {
+    let header = u16::try_from(LEAF_HEADER_SIZE).unwrap();
+    k * (header + data_size).next_power_of_two()
+}
+
+/// Calcule l'espace maximal alloué aux cellules d'une feuille
+#[inline(always)]
+fn max_leaf_cell_space_size(page_size: PageSize) -> u16 {
+    page_size - u16::try_from(LEAF_HEADER_SIZE).unwrap()
+}
+
+#[inline(always)]
+fn max_k_for_interior_cells(interior_cell_space_size: u16) -> u16 {
+    u16::div_ceil(
+        interior_cell_space_size, 
+        u16::try_from(INTERIOR_CELL_SIZE).unwrap()
+    )
+}
+
+#[inline(always)]
+/// Calcule la taille maximale possible de la valeur stockée dans l'arbre B+ au sein de la page.
+fn max_leaf_value_size(k: u16, page_size: PageSize) -> u16 {
+    let leaf_cell_space_size = max_leaf_cell_space_size(page_size);
+    let leaf_cell_header_size = u16::try_from(LEAF_CELL_HEADER_SIZE).unwrap();
+    u16::div_ceil(leaf_cell_space_size.saturating_sub(k * leaf_cell_header_size), k)
+}
 
 /// Calcule les paramètres des arbres B+
 fn compute_b_plus_tree_parameters(
@@ -34,90 +87,43 @@ fn compute_b_plus_tree_parameters(
     key_spec: NumericKind,
     data_size: Option<u16>,
 ) -> BPlusTreeHeader {
-    let key_size = u16::from(key_spec.size());
-
-    let interior_header_size = u16::try_from(size_of::<BPTreeInteriorHeader>()).unwrap();
-    let leaf_header_size = u16::try_from(size_of::<BPTreeLeafHeader>()).unwrap();
-    let page_id_size = u16::try_from(size_of::<PageId>()).unwrap();
-    let var_header = u16::try_from(size_of::<VarHeader>()).unwrap();
-
     // taille d'une cellule d'un noeud intérieur.
-    let interior_cell_size = key_size + page_id_size;
+    let interior_cell_size = u16::try_from(INTERIOR_CELL_SIZE).unwrap();
 
     // taille de l'entête d'une cellule de la feuille
-    let leaf_cell_header_size = var_header + key_size;
+    let leaf_cell_header_size = u16::try_from(LEAF_CELL_HEADER_SIZE).unwrap();
 
-    // deux choses à calculer :
-    // 1. la taille d'une cellule stockant les clés pour les noeuds intermédiaires ;
-    // 2. la taille d'une cellule stockant les clés/valeurs pour les feuilles ;
+    let (k, data_size) = if let Some(data_size) = data_size {
+        let k = (1..u8::MAX).into_iter()
+        .filter(|&k| within_available_interior_cell_space_size(page_size, k.into()))
+        .filter(|&k| within_available_leaf_cell_space_size(page_size, k.into(), data_size))
+        .last()
+        .unwrap_or_default();
 
-    // Taille maximale de l'espace des cellules des noeuds intérieurs
-    let interior_cell_space_size = page_size - interior_header_size;
-    
-    // Taille maximale de l'espace des cellules des feuilles.
-    let leaf_cell_space_size = page_size - leaf_header_size;
-
-    // On détermine K le nombre de clés possibles dans un noeud.
-    // K1: Nombre de clés en calculant sur la base de la taille réservée aux cellules des noeuds intérieurs.
-    // K2: Nombre de clés en calculant sur la base de la taille réservée aux cellules des feuilles.
-    let k1 = u16::div_ceil(interior_cell_space_size, interior_cell_size);
-
-    // On démarre hypothèse K = K1.
-    let mut k = k1;
-
-    // Deux grands cas : on a passé une taille de données, donc on peut voir lequel des deux K est le plus utile.
-    // Pas de taille donnée, donc on prend K = K1, et on calcule la taille maximale admissible des données
-    // Une taille donnée, et là :
-    // - Si K2 < MIN_K, ça ne vaut pas le coups, on recalcule en prenant K1
-    // - Si K2 >= MIN_K, alors on doit vérifier qu'on ne dépasse pas la taille allouée pour les cellules des noeuds intérieurs.
-    let data_size = if let Some(data_size) = data_size {
-        let k2 = u16::div_ceil(leaf_cell_space_size, key_size + data_size);
-
-        // On a un K >= [Self::MIN_K], on peut tenter le coup, l'avantage est de ne pas avoir de débordement possible.
-        // On doit juste vérifier que ça tiendra avec les noeuds intérieurs
-        if k2 >= MIN_K {
-            // Avec K=K2, on recalcule l'espace que ça va occuper pour les noeuds intérieurs.
-            // Si cela excède la taille maximale, on retient K=K1,
-            // et on recalcule la taille de la valeur stockable en cellule avant débordement.
-            // Sinon
-            if interior_cell_space_size < k2 * interior_cell_size {
-                u16::div_ceil(leaf_cell_space_size - k * leaf_cell_header_size, k)
-            } else {
-                k = k2;
-                data_size
-            }
-        } else {
-            let (k3, data_size) = (0..u8::MAX)
-                .into_iter()
-                .map(|k| (k, leaf_cell_space_size - u16::from(k) * leaf_cell_header_size))
-                .filter(|(k, data_size)| u16::from(*k) * (leaf_cell_header_size + *data_size) <= leaf_cell_space_size)
-                .last()
-                .unwrap();
-
-
-            k = u16::from(k3);
-            data_size
-        }
+        (k, data_size)
     } else {
         // On va essayer de trouver le tuple (k, data_size) 
         // qui maximise k * (data_size + leaf_cell_header) 
         // tout en étant inférieure à leaf_cell_space_size
-        let (k3, data_size) = (1..u8::MAX)
+        (1..u8::MAX)
             .into_iter()
-            .filter(|k | leaf_cell_space_size >=  u16::from(*k) * leaf_cell_header_size)
-            .filter(|k| interior_cell_space_size >= u16::from(*k) * (interior_cell_size))
-            .map(|k| (k, u16::div_ceil(leaf_cell_space_size - u16::from(k) * leaf_cell_header_size, u16::from(k))))
-            .filter(|(k, data_size)| u16::from(*k) * (leaf_cell_header_size + *data_size) <= leaf_cell_space_size)
-            .last()
-            .unwrap();
-
-
-        k = u16::from(k3);
-        data_size
+            .filter(|&k | within_available_interior_cell_space_size(page_size, k.into()))
+            .map(|k| (k, max_leaf_value_size(k.into(), page_size)))
+            .map(|(k, mut data_size)| {
+                let header = u16::try_from(LEAF_HEADER_SIZE).unwrap();
+                data_size = (header + data_size).next_power_of_two() - header;
+                (k, data_size)
+            })
+            .filter(|&(k, data_size)| within_available_leaf_cell_space_size(page_size, k.into(), data_size))
+            .max_by_key(|&(_, data_size)| data_size)
+            .unwrap_or_default()
     };
 
-    let interior_cell_size = k * interior_cell_size;
-    let leaf_cell_size = k * (leaf_cell_header_size + data_size);
+    assert!(k > 0, "k is zero");
+    assert!(data_size > 0, "data size is zero");
+
+    let interior_cell_size = u16::from(k) * interior_cell_size;
+    let leaf_cell_size = u16::from(k) * (leaf_cell_header_size + data_size);
 
     BPlusTreeHeader {
         kind: BPlusTreePageKind::Kind,

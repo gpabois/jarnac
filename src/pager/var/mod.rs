@@ -2,7 +2,7 @@ pub mod stream;
 
 use std::io::{Cursor, Read, Write};
 
-use zerocopy::{IntoBytes, TryFromBytes};
+use zerocopy::{IntoBytes, TryFromBytes, Unalign};
 use zerocopy_derive::*;
 
 use super::{
@@ -58,7 +58,7 @@ impl<Slice> AsMut<VarData> for Var<Slice> where Slice: AsMutPageSlice {
 }
 
 
-#[derive(FromBytes, KnownLayout, Immutable)]
+#[derive(TryFromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct VarData {
     header: VarHeader,
