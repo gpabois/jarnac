@@ -700,17 +700,27 @@ impl Mul<u32> for CellId {
 mod tests {
     use std::{error::Error, rc::Rc};
 
+    use zerocopy::FromBytes;
+    use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
+
     use crate::{fs::in_memory::InMemoryFs, pager::{cell::CellPage, page::PageSize, Pager, PagerOptions}};
 
     use super::{CellHeader, CellPageHeader, CellSize};
 
+
+    #[derive(FromBytes, KnownLayout, Immutable, IntoBytes)]
+    #[repr(packed)]
+    struct Foo {
+        header: CellHeader,
+        value: u64
+    }
 
     #[test]
     fn test_cells() -> Result<(), Box<dyn Error>> {
         let fs = Rc::new(InMemoryFs::default());
         let pager = Pager::new(fs, "memory", PageSize::new(4_096), PagerOptions::default())?.into_boxed();
 
-        let header: CellPageHeader = CellPageHeader::new(CellSize::from(500), 4, u16::try_from(size_of::<CellHeader>()).unwrap());
+        let header: CellPageHeader = CellPageHeader::new(CellSize::from(10), 4, u16::try_from(size_of::<CellHeader>()).unwrap());
 
         let pid = pager.new_page()?;
         let mut page =  pager.borrow_mut_page(&pid)?;
@@ -727,6 +737,11 @@ mod tests {
         
         assert_eq!(cpage.previous_sibling(&c1), Some(c2));
         assert_eq!(cpage.iter_ids().collect::<Vec<_>>(), vec![c2, c1]);
+
+        let mut page = cpage.borrow_mut_cell(&c1).unwrap();
+        let foo = Foo::mut_from_bytes(page.as_mut_slice()).unwrap();
+        
+
         Ok(())
     }
 }
