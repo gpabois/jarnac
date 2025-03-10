@@ -691,7 +691,11 @@ mod tests {
         let pager = Pager::new(fs, "memory", PageSize::new(4_096), PagerOptions::default())?;
 
         let mut tree = BPlusTree::new(&pager, &UINT64, None)?;
-        tree.insert(Numeric::from(100u64), &[1, 2, 3, 4])?;
+        
+        for i in 0..1000u64 {
+            tree.insert(Numeric::from(i), &[1, 2, 3, 4])?;
+        }
+
 
         Ok(())
     }
