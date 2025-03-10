@@ -2,63 +2,77 @@ pub mod stream;
 
 use std::io::{Cursor, Read, Write};
 
-use zerocopy::{IntoBytes, TryFromBytes, Unalign};
+use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 use super::{
-    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind}, IPager, PagerResult
+    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager, PagerResult
 };
 
 /// Représente une valeur de taille variable.
-pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice;
+pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice + ?Sized;
 
-impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
+impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     pub fn size(&self) -> u64 {
-        self.as_data().header.total_size
+        self.as_header().total_size
     }
     
     pub fn has_spilled(&self) -> bool {
-        self.as_data().header.has_spilled()
+        self.as_header().has_spilled()
     }
 
-    pub fn copy_into(&self, dest: &mut VarData) -> PagerResult<()> {
-        dest.header = self.as_data().header.clone();
-        dest.in_page.copy_from_slice(&self.as_data().in_page);
+    pub fn copy_into<S2>(&self, dest: &mut Var<S2>) -> PagerResult<()> where S2: AsMutPageSlice + ? Sized {
+        *dest.as_mut_header() = self.as_header().clone();
+        dest.borrow_mut_content().copy_from_slice(self.borrow_content());
         Ok(())
     }   
 
-    fn as_data(&self) -> &VarData {
+    fn borrow_content(&self) -> &PageSlice {
+        &self.0.as_ref()[size_of::<VarHeader>()..]
+    }
+
+    fn as_header(&self) -> &VarHeader {
         self.as_ref()
     }
 }
-
-impl<Slice> Var<Slice> where Slice: AsMutPageSlice {
+impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
     pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
-        self.as_mut().header = write_var_data(data, &mut self.as_mut().in_page, pager)?;
+        let in_page_bytes = &mut self.0.as_mut()[size_of::<VarHeader>()..];
+        *self.as_mut_header() = write_var_data(data, in_page_bytes, pager)?;
         Ok(())
     }
+
+    fn borrow_mut_content(&mut self) -> &mut PageSlice {
+        &mut self.0.as_mut()[size_of::<VarHeader>()..]
+    }
+
+    fn as_mut_header(&mut self) -> &mut VarHeader {
+        self.as_mut()
+    }
 }
 
-impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice {
+impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn as_ref(&self) -> &[u8] {
-        &self.as_data().in_page[..self.as_data().header.in_page_size.try_into().unwrap()]
+        self.borrow_content()
     }
 }
 
-impl<Slice> AsRef<VarData> for Var<Slice> where Slice: AsRefPageSlice {
-    fn as_ref(&self) -> &VarData {
-        VarData::try_ref_from_bytes(self.0.as_ref()).unwrap()
+impl<Slice> AsRef<VarHeader> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
+    fn as_ref(&self) -> &VarHeader {
+        let bytes = &self.0.as_ref()[0..size_of::<VarHeader>()];
+        VarHeader::ref_from_bytes(bytes).unwrap()
     }
 }
 
-impl<Slice> AsMut<VarData> for Var<Slice> where Slice: AsMutPageSlice {
-    fn as_mut(&mut self) -> &mut VarData {
-        VarData::try_mut_from_bytes(self.0.as_mut()).unwrap()
+impl<Slice> AsMut<VarHeader> for Var<Slice> where Slice: AsMutPageSlice + ?Sized {
+    fn as_mut(&mut self) -> &mut VarHeader {
+        let bytes = &mut self.0.as_mut()[0..size_of::<VarHeader>()];
+        VarHeader::mut_from_bytes(bytes).unwrap()
     }
 }
 
 
-#[derive(TryFromBytes, KnownLayout, Immutable)]
+#[derive(FromBytes, KnownLayout, Immutable)]
 #[repr(C)]
 pub struct VarData {
     header: VarHeader,
@@ -94,8 +108,8 @@ impl VarData {
     }
 }
 
-#[derive(FromBytes, KnownLayout, Immutable, Clone)]
-#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Clone)]
+#[repr(C, packed)]
 /// Contient les données nécessaires pour récupérer les données d'une taille dynamique.
 pub struct VarHeader {
     /// La taille totale de la donnée
@@ -111,6 +125,17 @@ impl VarHeader {
         self.in_page_size < self.total_size
     }
 
+    pub fn get_in_page_size(&self) -> u64 {
+        self.in_page_size
+    }
+
+    pub fn get_total_size(&self) -> u64 {
+        self.total_size
+    }
+
+    pub fn get_spill_page(&self) -> Option<PageId> {
+        self.spill_page_id.into()
+    }
 }
 
 pub struct SpillPage<Page>(Page) where Page: AsRefPageSlice;
@@ -327,7 +352,7 @@ mod tests {
         let dsd_header: crate::pager::var::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
-        assert!(dsd_header.spill_page_id == Some(PageId::from(1u64)).into(), "il doit y avoir eu du débordement");
+        assert!(dsd_header.get_spill_page() == Some(PageId::from(1u64)), "il doit y avoir eu du débordement");
 
         // Efface les données stockées dans le tampon.
         data.deref_mut().fill(0);

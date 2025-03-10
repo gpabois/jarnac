@@ -15,7 +15,7 @@ use crate::{
     pager::{
         cell::GlobalCellId,
         page::{
-            self, data, AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
+            AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
         },
         var::VarHeader,
         IPager, PagerResult,
@@ -199,7 +199,7 @@ where
 
         Ok(match maybe_pid {
             Some(pid) => {
-                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid)?.into();
+                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid).and_then(BPTreeLeaf::try_from)?;
 
                 let gid = leaf
                     .iter()
@@ -218,7 +218,7 @@ where
 
         Ok(match maybe_pid {
             Some(pid) => {
-                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid)?.into();
+                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid).and_then(BPTreeLeaf::try_from)?;
 
                 let gid = leaf
                     .iter()
@@ -249,7 +249,7 @@ where
 
         match cell.as_cell().next_sibling() {
             Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), *cid))),
-            None => Ok(leaf.header.next.as_ref().and_then(|next_pid| {
+            None => Ok(leaf.get_next().and_then(|next_pid| {
                 self.borrow_leaf(&next_pid)
                     .unwrap()
                     .iter()
@@ -265,7 +265,7 @@ where
 
         match cell.as_cell().prev_sibling() {
             Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), *cid))),
-            None => Ok(leaf.header.prev.as_ref().and_then(|prev_pid| {
+            None => Ok(leaf.get_prev().and_then(|prev_pid| {
                 self.borrow_leaf(&prev_pid)
                     .unwrap()
                     .iter()
@@ -382,7 +382,7 @@ where
     }
 
     fn borrow_leaf(&self, pid: &PageId) -> PagerResult<BPTreeLeaf<RefPage<'pager>>> {
-        self.pager.borrow_page(pid).map(BPTreeLeaf::from)
+        self.pager.borrow_page(pid).and_then(BPTreeLeaf::try_from)
     }
 }
 
@@ -406,7 +406,7 @@ where
             }
         };
 
-        let mut leaf: BPTreeLeaf<_> = self.pager.borrow_mut_page(&pid)?.into();
+        let mut leaf: BPTreeLeaf<_> = self.pager.borrow_mut_page(&pid).and_then(BPTreeLeaf::try_from)?;
 
         if leaf.is_full() {
             self.split(leaf.as_mut())?;
@@ -479,7 +479,7 @@ where
             }
 
             BPTreeNodeKind::Leaf => {
-                let mut left: BPTreeLeaf<_> = node.into_inner().into();
+                let mut left: BPTreeLeaf<_> = BPTreeLeaf::try_from(node.into_inner())?;
 
                 // On ne divise pas un noeud qui n'est pas plein.
                 if !left.is_full() {
@@ -492,20 +492,20 @@ where
 
                 let key = left.split_into(&mut right)?;
 
-                right.header.prev = Some(*left.as_page().id()).into();
-                left.header.next = Some(*right.as_page().id()).into();
+                right.set_prev(Some(*left.as_page().id()));
+                left.set_next(Some(*right.as_page().id()));
 
-                let parent_id = match left.header.parent.as_ref() {
-                    Some(parent_id) => *parent_id,
+                let parent_id = match left.get_parent() {
+                    Some(parent_id) => parent_id,
                     None => {
                         let pid = self.insert_interior()?;
                         self.as_mut().header.root = Some(pid).into();
-                        left.header.parent = Some(pid).into();
+                        left.set_parent(Some(pid));
                         pid
                     }
                 };
 
-                right.header.parent = left.header.parent;
+                right.set_parent(left.get_parent());
 
                 let mut parent = self.borrow_mut_interior(&parent_id)?;
                 self.insert_in_interior(

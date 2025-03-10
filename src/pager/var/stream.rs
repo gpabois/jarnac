@@ -56,7 +56,7 @@ impl<'pager, Slice: AsRefPageSlice + 'pager> Read for VarReaderState<'pager, Sli
 impl<'pager, Slice: AsRefPageSlice + 'pager> VarReaderState<'pager, Slice> {
     pub fn is_exhausted(&self) -> bool {
         match self {
-            VarReaderState::InPage(cursor) => cursor.position() >= cursor.get_ref().as_data().header.in_page_size,
+            VarReaderState::InPage(cursor) => cursor.position() >= cursor.get_ref().as_header().get_in_page_size(),
             VarReaderState::SpillPage(cursor) => cursor.position() >= cursor.get_ref().as_data().in_page_size,
             VarReaderState::EOS => true,
         }
@@ -69,8 +69,7 @@ impl<'pager, Slice: AsRefPageSlice + 'pager> VarReaderState<'pager, Slice> {
     pub fn next<Pager: IPager>(&mut self, pager: &'pager Pager) -> PagerResult<()> {
         match self {
             VarReaderState::InPage(cursor) => {
-                *self = cursor.get_ref().as_data()
-                    .header.spill_page_id.as_ref()
+                *self = cursor.get_ref().as_header().get_spill_page()
                     .map(|pid| pager.borrow_page(&pid).and_then(SpillPage::try_from).unwrap())
                     .map(Cursor::new)
                     .map(VarReaderState::SpillPage)

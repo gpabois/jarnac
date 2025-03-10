@@ -5,17 +5,26 @@
 //! - allouer/libérer des cellules 
 //! 
 //! # Exigence
-//! Pour que cela marche :
+//! Pour que cela marche :(*cid) * self.cell_size
 //! - l'entête de la page doit contenir, après le nombre magique ([crate::pager::page::PageKind]), [CellPageHeader]
 //! - l'entête de la cellule doit contenir en premier lieu [CellHeader].
 //! 
 //! [CellPage] est utilisé pour piloter les cellules, notamment via :
 //! - [CellPageHeader::push], et ses variantes [CellPageHeader::insert_after] ou [CellPageHeader::insert_before]
 //! - [CellPageHeader::iter]
-
+//! 
+//! # Layout d'une page à cellules
+//! 
+//! | PageKind          | 1 byte    |
+//! | CellPageHeader    | 9 bytes   |
+//! |           ............        | - Espace réservée pour les systèmes employant le découpag en cellules
+//! |-------------------|-----------| < base ^
+//! | CellHeader        | 2 bytes   |        |- cell size  (x capacity)
+//! |...............................|        v
+//! |-------------------|-----------|
 use std::{num::NonZeroU8, ops::{Add, Deref, DerefMut, Mul, Range}};
 
-use zerocopy::TryFromBytes;
+use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use super::{error::PagerError, page::{AsMutPageSlice, AsRefPageSlice, PageId, PageSlice}, PagerResult};
@@ -23,25 +32,33 @@ use crate::prelude::*;
 
 pub struct CellPage<Page>(Page) where Page: AsRefPageSlice;
 
-impl<Page> From<Page> for CellPage<Page> where Page: AsRefPageSlice 
-{
+pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellPageHeader>() + 1);
+
+impl<Page> From<Page> for CellPage<Page> where Page: AsRefPageSlice {
     fn from(value: Page) -> Self {
         Self(value)
     }
 }
-
-impl<Page> AsRef<CellPageData> for CellPage<Page> where Page: AsRefPageSlice {
-    fn as_ref(&self) -> &CellPageData {
-        CellPageData::try_ref_from_bytes(self.0.as_ref()).unwrap()
+impl<Page> AsRef<Page> for CellPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &Page {
+        &self.0
     }
 }
-
-impl<Page> AsMut<CellPageData> for CellPage<Page> where Page: AsMutPageSlice {
-    fn as_mut(&mut self) -> &mut CellPageData {
-        CellPageData::try_mut_from_bytes(self.0.as_mut()).unwrap()
+impl<Page> AsMut<Page> for CellPage<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut Page {
+        &mut self.0
     }
 }
-
+impl<Page> AsRef<CellPageHeader> for CellPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &CellPageHeader {
+        CellPageHeader::ref_from_bytes(&self.0.as_ref()[HEADER_SLICE_RANGE]).unwrap()
+    }
+}
+impl<Page> AsMut<CellPageHeader> for CellPage<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut CellPageHeader {
+        CellPageHeader::mut_from_bytes(&mut self.0.as_mut()[HEADER_SLICE_RANGE]).unwrap()
+    }
+}
 impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     /// Récupère la page après coups.
     pub fn into_inner(self) -> Page {
@@ -51,14 +68,14 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     /// Itère sur les références des cellules de la page
     pub fn iter(&self) -> RefPageCellCursor<'_, Page> 
     {
-        let current = self.as_ref().header.head_cell.into();
+        let current = self.as_header().head_cell.into();
         RefPageCellCursor { page: self, current }        
     }
 
     /// Itère sur les identifiants des cellules de la page
     pub fn iter_ids(&self) -> PageCellIdCursor<'_, Page> 
     {
-        let current = self.as_ref().header.head_cell.into();
+        let current = self.as_header().head_cell.into();
         PageCellIdCursor { page: self, current }
     }
 
@@ -77,9 +94,7 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     /// Récupère un intervalle permettant de cibler une cellule.
     pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> 
     {
-        let cp = self.as_ref();
-        let loc = (*cid) * cp.header.cell_size + cp.header.cell_base;
-        Some(loc.into_range(&cp.header.cell_size))
+        self.as_header().get_cell_range(cid)
     }
 
     /// Retourne la prochaine cellule
@@ -95,23 +110,34 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     }
 
     pub fn len(&self) -> u8 {
-        self.as_ref().len()
+        self.as_header().len()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.as_header().is_full()
+    }
+
+    fn as_header(&self) -> &CellPageHeader {
+        self.as_ref()
     }
 }
-
 impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     /// Initialise les éléments nécessaires pour découper la page en cellules.
-    pub fn new(page: Page, header: CellPageHeader) -> Self
+    pub fn new(page: Page, cell_size: CellSize, capacity: u8, base: u16) -> Self
     {
         let mut cp = Self::from(page);
-        cp.as_mut().header = header;
+        *cp.as_mut_header() = CellPageHeader::new(
+            cell_size, 
+            capacity,
+            base
+        );
         cp
     }
 
     /// Itère sur les références des cellules de la page
     pub fn iter_mut(&mut self) -> MutPageCellCursor<'_, Page> 
     {
-        let current = self.as_ref().header.head_cell.into();
+        let current = self.as_header().get_head();
         MutPageCellCursor { page: self, current }        
     }
 
@@ -157,7 +183,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
             self.borrow_mut_cell(&tail_cid).unwrap().header.next = Some(cid).into();
             self.borrow_mut_cell(&cid).unwrap().header.prev = Some(cid).into();
         } else {
-            self.as_mut().header.head_cell = Some(cid).into();
+            self.as_mut_header().set_head(Some(cid));
         }
 
         Ok(cid)
@@ -185,7 +211,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
                 cell.header.next = Some(next).into();
             },
             None => {
-                self.as_mut().set_head(Some(cid));
+                self.as_mut_header().set_head(Some(cid));
                 self.borrow_mut_cell(&cid).unwrap().header.prev = Some(*after).into();
             },
         };
@@ -207,7 +233,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
         match maybe_prev {
             None => {
-                self.as_mut().set_head(Some(cid));
+                self.as_mut_header().set_head(Some(cid));
                 self.borrow_mut_cell(&cid).unwrap().header.next = Some(*before).into();
             },
             Some(prev) => {
@@ -223,12 +249,12 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
     /// Alloue une nouvelle cellule au sein de la page, si on en a assez.
     fn alloc_page_cell(&mut self) -> PagerResult<CellId> where Page: AsMutPageSlice {
-        if self.as_ref().is_full() {
+        if self.as_header().is_full() {
             return Err(PagerError::new(super::error::PagerErrorKind::CellPageFull));
         }
 
         let cid = self.pop_free_cell().unwrap_or_else(|| {
-            let cid_u8 = self.as_mut().inc_len();
+            let cid_u8 = self.as_mut_header().inc_len();
             CellId(NonZeroU8::new(cid_u8).unwrap())
         });
         
@@ -261,26 +287,26 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     fn push_free_cell(&mut self, cid: &CellId) 
         where Page: AsMutPageSlice
     {
-        self.as_ref().header.free_head_cell.as_ref().inspect(|head| {
+        self.as_header().get_free_head().inspect(|head| {
             self.borrow_mut_cell(&head).unwrap().set_prev_sibling(Some(*cid));
         });
         
-        self.as_mut().set_free_head(Some(*cid));
-        self.as_mut().inc_free_len();
+        self.as_mut_header().set_free_head(Some(*cid));
+        self.as_mut_header().inc_free_len();
     }
 
     /// Retire une cellule de la liste des cellules libres.
     fn pop_free_cell(&mut self) -> Option<CellId> 
     {
-        if let Some(head) = self.as_ref().get_free_head() {
+        if let Some(head) = self.as_header().get_free_head() {
             let maybe_next = self.next_sibling(&head);
             
             maybe_next.inspect(|next| {
                 self.set_previous_sibling(&next, None);
             });
             
-            self.as_mut().set_free_head(maybe_next);
-            self.as_mut().dec_free_len();
+            self.as_mut_header().set_free_head(maybe_next);
+            self.as_mut_header().dec_free_len();
 
             return Some(head)
         }
@@ -306,6 +332,10 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
             self.borrow_mut_cell(cid).unwrap().set_prev_sibling(prev)
         });
     }  
+
+    fn as_mut_header(&mut self) -> &mut CellPageHeader {
+        self.as_mut()
+    }
 }
 
 #[derive(FromBytes, KnownLayout, Immutable)]
@@ -316,58 +346,8 @@ pub struct CellPageData {
     body: [u8]
 }
 
-impl CellPageData {
-    fn is_full(&self) -> bool 
-    {
-        self.len() >= self.header.capacity
-    }
-
-    fn len(&self) -> u8 {
-        self.header.len
-    }
-
-    fn inc_len(&mut self) -> u8 
-    {
-        self.header.len += 1;
-        self.header.len
-    }
-
-    #[allow(dead_code)]
-    fn dec_len<Page>(&mut self) -> u8 
-    {
-        self.header.len -= 1;
-        self.header.len
-    }
-
-    fn dec_free_len(&mut self) 
-    {
-        self.header.free_len -= 1;
-    }
-
-    fn inc_free_len(&mut self) 
-    {
-        self.header.free_len += 1;
-    }
-
-    fn set_head(&mut self, head: Option<CellId>) 
-    {
-        self.header.head_cell = head.into();
-    }
-
-    fn set_free_head(&mut self, head: Option<CellId>) 
-    {
-        self.header.free_head_cell = head.into();
-    }
-
-    fn get_free_head(&self) -> Option<CellId> 
-    {
-        self.header.free_head_cell.into()
-    }
-
-}
-
-#[derive(FromBytes, KnownLayout, Immutable)]
-#[repr(C)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(C, packed)]
 /// En-tête de la page contenant les informations relatives aux cellules qui y sont stockées.
 pub struct CellPageHeader {
     /// Taille d'une cellule
@@ -385,7 +365,6 @@ pub struct CellPageHeader {
     /// Localisation de la base des cellules
     cell_base: u16
 }
-
 impl CellPageHeader {
     pub fn new(cell_size: CellSize, capacity: u8, base: u16) -> Self {
         return Self {
@@ -397,6 +376,55 @@ impl CellPageHeader {
             head_cell: None.into(),
             cell_base: base
         }
+    }
+
+    pub fn get_cell_location(&self, cid: &CellId) -> CellLocation {
+        (*cid) * self.cell_size + self.cell_base
+    }
+
+    pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> {
+        Some(self.get_cell_location(&cid).into_range(self.cell_size))
+    }
+
+    pub fn get_head(&self) -> Option<CellId> {
+        self.head_cell.into()
+    }
+
+    pub fn set_head(&mut self, head: Option<CellId>) {
+        self.head_cell = head.into();
+    }
+
+    fn inc_len(&mut self) -> u8 
+    {
+        self.len += 1;
+        self.len
+    }
+
+    #[allow(dead_code)]
+    fn dec_len<Page>(&mut self) -> u8 
+    {
+        self.len -= 1;
+        self.len
+    }
+
+    fn dec_free_len(&mut self) 
+    {
+        self.free_len -= 1;
+    }
+
+    fn inc_free_len(&mut self) 
+    {
+        self.free_len += 1;
+    }
+
+    fn set_free_head(&mut self, head: Option<CellId>) 
+    {
+        self.free_head_cell = head.into();
+    }
+
+    fn get_free_head(&self) -> Option<CellId> 
+    {
+        self.free_head_cell.into()
     }
 
     pub fn is_full(&self) -> bool {
@@ -442,6 +470,10 @@ impl<Slice> Cell<Slice> where Slice: AsRefPageSlice {
         &self.cid
     }
 
+    pub fn borrow_content(&self) -> &PageSlice {
+        &self.as_slice()[size_of::<CellHeader>()..]
+    }
+
     /// Copie le contenu de la cellule dans une autre cellule.
     pub fn copy_into<S2>(&self, dest: &mut Cell<S2>) where S2: AsMutPageSlice {
         let src_data: &CellData = self.as_ref();
@@ -479,6 +511,10 @@ impl<Slice> Cell<Slice> where Slice: AsMutPageSlice {
     fn set_prev_sibling(&mut self, prev: Option<CellId>) {
         let data: &mut CellData = self.as_mut();
         data.header.prev = prev.into();      
+    }
+
+    pub fn borrow_mut_content(&mut self) -> &mut PageSlice {
+        &mut self.as_mut_slice()[size_of::<CellHeader>()..]
     }
 }
 
@@ -593,6 +629,7 @@ where Page: AsRefPageSlice
 }
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Default)]
+#[repr(C, packed)]
 /// En-tête d'une cellule.
 pub struct CellHeader {
     prev: OptionalCellId,
@@ -641,7 +678,7 @@ impl From<u16> for CellSize {
 pub struct CellLocation(u16);
 
 impl CellLocation {
-    pub fn into_range(self, size: &CellSize) -> Range<usize> {
+    pub fn into_range(self, size: CellSize) -> Range<usize> {
         let start = usize::from(self.0);
         let end = start + usize::from(size.0);
         start..end
@@ -720,12 +757,17 @@ mod tests {
         let fs = Rc::new(InMemoryFs::default());
         let pager = Pager::new(fs, "memory", PageSize::new(4_096), PagerOptions::default())?.into_boxed();
 
-        let header: CellPageHeader = CellPageHeader::new(CellSize::from(10), 4, u16::try_from(size_of::<CellHeader>()).unwrap());
 
         let pid = pager.new_page()?;
         let mut page =  pager.borrow_mut_page(&pid)?;
         
-        let mut cpage = CellPage::new(&mut page, header);
+        let mut cpage = CellPage::new(
+            &mut page, 
+            CellSize::from(10), 
+            4, 
+            u16::try_from(size_of::<CellHeader>()).unwrap()
+        );
+
         assert_eq!(cpage.len(), 0);
 
         let c1 = cpage.push()?;

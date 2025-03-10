@@ -1,16 +1,27 @@
 use std::{mem::forget, ops::{Deref, DerefMut, Index, IndexMut}, slice::SliceIndex};
 
 use zerocopy::{Immutable, KnownLayout, TryFromBytes};
-use zerocopy_derive::{FromBytes, Immutable};
 
 use crate::pager::page::descriptor::PageDescriptor;
 
 use super::{AsMutPageSlice, AsRefPageSlice, MutPage, RefPage};
 
-#[derive(FromBytes, Immutable)]
-#[repr(C)]
 /// A slice of a page
 pub struct PageSlice([u8]);
+
+impl AsRefPageSlice for PageSlice {}
+impl AsRef<PageSlice> for PageSlice {
+    fn as_ref(&self) -> &PageSlice {
+        self
+    }
+}
+
+impl AsMutPageSlice for PageSlice{}
+impl AsMut<PageSlice> for PageSlice {
+    fn as_mut(&mut self) -> &mut PageSlice {
+        self
+    }
+}
 
 impl PageSlice {
     pub fn try_into_ref<T>(&self) -> Result<&T, zerocopy::ConvertError<zerocopy::AlignmentError<&[u8], T>, zerocopy::SizeError<&[u8], T>, zerocopy::ValidityError<&[u8], T>>>

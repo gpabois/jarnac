@@ -1,8 +1,9 @@
 use byteorder::{BigEndian, WriteBytesExt};
 use zerocopy::{byteorder::{BigEndian as ZBigEndian, U16, U32}, FromBytes, I16, I32, I64, U64};
-use zerocopy_derive::{FromBytes, Immutable, KnownLayout};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-#[derive(PartialEq, Eq, Clone, Copy, FromBytes, KnownLayout, Immutable, Default)]
+#[derive(PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, KnownLayout, Immutable, Default)]
+#[repr(C, packed)]
 pub struct Numeric([u8;17]);
 
 impl PartialOrd<Numeric> for Numeric {
