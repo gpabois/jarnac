@@ -181,7 +181,7 @@ pub trait AsBPlusTreeRef: AsRef<Self::BPlusTree> {
 }
 
 /// Arbre B+
-pub struct BPlusTree<'pager, Pager: IPager, Page: 'pager>
+pub struct BPlusTree<'pager, Pager: IPager + ?Sized, Page: 'pager>
 where
     Page: AsRefPageSlice,
 {
@@ -191,7 +191,7 @@ where
 
 impl<'pager, Pager, Page> IRefBPlusTree for BPlusTree<'pager, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
     fn search(&self, key: &BPTreeKey) -> PagerResult<Option<GlobalCellId>> {
@@ -203,8 +203,8 @@ where
 
                 let gid = leaf
                     .iter()
-                    .filter(|cell| cell == key)
-                    .map(|cell| GlobalCellId::new(pid, cell.cid()))
+                    .filter(|&cell| cell == key)
+                    .map(|cell| GlobalCellId::new(pid, *cell.cid()))
                     .next();
 
                 gid
@@ -222,8 +222,8 @@ where
 
                 let gid = leaf
                     .iter()
-                    .filter(|cell| cell <= key)
-                    .map(|cell| GlobalCellId::new(pid, cell.cid()))
+                    .filter(|&cell| cell <= key)
+                    .map(|cell| GlobalCellId::new(pid, *cell.cid()))
                     .next();
 
                 gid
@@ -237,7 +237,7 @@ where
             let leaf = self.borrow_leaf(&pid).unwrap();
             let head = leaf
                 .iter()
-                .map(|cell| BPlusTreeCellId::new(pid, cell.cid()))
+                .map(|cell| BPlusTreeCellId::new(pid, *cell.cid()))
                 .next();
             head
         }))
@@ -253,7 +253,7 @@ where
                 self.borrow_leaf(&next_pid)
                     .unwrap()
                     .iter()
-                    .map(|cell| BPlusTreeCellId::new(next_pid, cell.cid()))
+                    .map(|cell| BPlusTreeCellId::new(next_pid, *cell.cid()))
                     .next()
             })),
         }
@@ -269,7 +269,7 @@ where
                 self.borrow_leaf(&prev_pid)
                     .unwrap()
                     .iter()
-                    .map(|cell| BPlusTreeCellId::new(prev_pid, cell.cid()))
+                    .map(|cell| BPlusTreeCellId::new(prev_pid, *cell.cid()))
                     .last()
             })),
         }
@@ -282,7 +282,7 @@ where
 
 impl<'pager, Pager> BPlusTree<'pager, Pager, MutPage<'pager>>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
 {
     /// Crée un nouvel arbre B+
     ///
@@ -312,7 +312,7 @@ where
 
 impl<Pager, Page> AsRef<BPlusTreePage> for BPlusTree<'_, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
     fn as_ref(&self) -> &BPlusTreePage {
@@ -322,7 +322,7 @@ where
 
 impl<Pager, Page> AsMut<BPlusTreePage> for BPlusTree<'_, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsMutPageSlice,
 {
     fn as_mut(&mut self) -> &mut BPlusTreePage {
@@ -332,7 +332,7 @@ where
 
 impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
     fn node_kind(&self, pid: &PageId) -> PagerResult<BPTreeNodeKind> {
@@ -388,7 +388,7 @@ where
 
 impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsMutPageSlice,
 {
     /// Insère une nouvelle clé/valeur
@@ -414,8 +414,8 @@ where
 
         let before = leaf
             .iter()
-            .filter(|cell| cell <= &key)
-            .map(|cell| cell.cid())
+            .filter(|&cell| cell <= &key)
+            .map(|cell| *cell.cid())
             .last();
 
         let cid = match before {
@@ -433,7 +433,7 @@ where
 
 impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
 where
-    Pager: IPager,
+    Pager: IPager + ?Sized,
     Page: AsMutPageSlice,
 {
     /// Divise un noeud
@@ -454,6 +454,7 @@ where
                 let mut right = self
                     .insert_interior()
                     .and_then(|pid| self.borrow_mut_interior(&pid))?;
+                
                 let key = left.split_into(&mut right)?;
 
                 let parent_id = match left.header.parent.as_ref() {
@@ -570,7 +571,7 @@ where
             page,
             self.as_ref().header.k.try_into().unwrap(),
             self.as_ref().header.interior_cell_size.into(),
-        );
+        )?;
 
         Ok(pid)
     }
@@ -675,11 +676,10 @@ pub struct BPTreeNodePageData {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, rc::Rc};
+    use std::error::Error;
 
     use crate::{
-        fs::in_memory::InMemoryFs,
-        pager::{page::PageSize, Pager, PagerOptions},
+        pager::fixtures::fixture_new_pager,
         value::numeric::{Numeric, UINT64},
     };
 
@@ -687,10 +687,8 @@ mod tests {
 
     #[test]
     pub fn test_insert() -> Result<(), Box<dyn Error>> {
-        let fs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(fs, "memory", PageSize::new(4_096), PagerOptions::default())?;
-
-        let mut tree = BPlusTree::new(&pager, &UINT64, None)?;
+        let pager = fixture_new_pager();
+        let mut tree = BPlusTree::new(pager.as_ref(), &UINT64, None)?;
         
         for i in 0..1000u64 {
             tree.insert(Numeric::from(i), &[1, 2, 3, 4])?;

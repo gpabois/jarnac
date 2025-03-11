@@ -4,10 +4,16 @@ use zerocopy::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::pager::page::descriptor::PageDescriptor;
 
-use super::{AsMutPageSlice, AsRefPageSlice, MutPage, RefPage};
+use super::{AsMutPageSlice, AsRefPageSlice, MutPage, PageSize, RefPage};
 
 /// A slice of a page
 pub struct PageSlice([u8]);
+
+impl PageSlice {
+    pub fn len(&self) -> PageSize {
+        PageSize::from(self.0.len())
+    }
+}
 
 impl AsRefPageSlice for PageSlice {}
 impl AsRef<PageSlice> for PageSlice {

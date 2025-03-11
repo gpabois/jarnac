@@ -77,6 +77,7 @@ pub enum PagerErrorKind {
     InvalidFormat,
     SpilledVar,
     WrongPageKind { expected: PageKind, got: PageKind },
+    CellPageOverflow,
     CellPageFull,
     IoError(io::Error),
 }
@@ -91,12 +92,13 @@ impl Display for PagerErrorKind {
             PagerErrorKind::InvalidPageKind(invalid_kind) => write!(f, "unknown page kind, got {0}", invalid_kind),
             PagerErrorKind::InvalidFormat => write!(f, "invalid pager format"),
             PagerErrorKind::WrongPageKind { expected, got } => {
-                        write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)
-                    }
+                                write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)
+                            }
             PagerErrorKind::IoError(_) => write!(f, "an io error occured"),
             PagerErrorKind::PageNotCached(id) => write!(f, "page {id} not cached"),
             PagerErrorKind::CellPageFull => write!(f, "cell page is full"),
             PagerErrorKind::SpilledVar => write!(f, "var data has spilled"),
+            PagerErrorKind::CellPageOverflow => write!(f, "expected cell space overflows allocated page space"),
         }
     }
 }

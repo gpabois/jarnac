@@ -22,7 +22,8 @@ impl Mul<PageSize> for PageId {
     type Output = PageLocation;
 
     fn mul(self, rhs: PageSize) -> Self::Output {
-        PageLocation((self.0.get() - 1) * u64::from(rhs.0))
+        let rhs_u64: u64 = rhs.into();
+        PageLocation((self.0.get() - 1) * u64::from(rhs_u64))
     }
 }
 

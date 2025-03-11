@@ -16,7 +16,7 @@ use std::ops::{DerefMut, Div, Range};
 use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
-use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader, CellSize}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, var::{Var, VarData}, PagerResult}, value::numeric::Numeric};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, var::{Var, VarData}, PagerResult}, value::numeric::Numeric};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
@@ -89,16 +89,16 @@ impl<Page> AsMut<CellPage<Page>> for BPTreeLeaf<Page> where Page: AsMutPageSlice
 
 impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     /// Crée une nouvelle feuille d'un arbre B+.
-    pub fn new(mut page: Page, k: u8, cell_size: CellSize) -> Self {
+    pub fn new(mut page: Page, k: u8, cell_size: PageSize) -> PagerResult<Self> {
         // initialisation bas-niveau de la page.
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeLeaf as u8;
 
         // initialise le sous-système de cellules
         let base: u16 = (1 + size_of::<CellPageHeader>() + size_of::<BPTreeLeafHeader>()).try_into().unwrap();
-        CellPage::new(&mut page, cell_size, k, base);
+        CellPage::new(&mut page, cell_size, k.into(), base.into())?;
 
-        Self::try_from(page).expect("not a b+ leaf node")
+        Self::try_from(page)
     }
 
     #[allow(dead_code)]
@@ -113,7 +113,11 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     }    
 
     pub fn borrow_mut_cell(&mut self, cid: &CellId) -> BPTreeLeafCell<&mut PageSlice> {
-        self.as_mut_cells().borrow_mut_cell(cid).map(BPTreeLeafCell).unwrap()
+        self.as_mut_cells()
+        .borrow_mut_cell(cid)
+        .map(|cell| unsafe {
+            std::mem::transmute(cell)
+        }).unwrap()
     }
 
     pub fn insert_before(&mut self, before: &CellId) -> PagerResult<CellId> {
@@ -128,9 +132,9 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         let at = self.len().div(2);
         self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
 
-        let key = self.iter().last().map(|cell| cell.borrow_key().clone()).unwrap();
+        let key = self.iter().last().map(|cell| cell.borrow_key()).unwrap();
 
-        Ok(key)
+        Ok(*key)
     }
 
     pub fn set_next(&mut self, next: Option<PageId>) {
@@ -174,22 +178,26 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
         self.as_cells().is_full()
     }
 
-    pub fn len(&self) -> u8 {
+    pub fn len(&self) -> CellCapacity {
         self.as_cells().len()
     }
 
     pub fn borrow_cell(&self, cid: &CellId) -> BPTreeLeafCell<&PageSlice> {
-        self.as_cells().borrow_cell(cid).map(BPTreeLeafCell).unwrap()
+        self.as_cells()
+        .borrow_cell(cid)
+        .map(|cell| unsafe {
+            std::mem::transmute(cell)
+        }).unwrap()
     }
 
     /// Itère sur les cellules du noeud.
-    pub fn iter<'a>(&'a self) -> impl Iterator<Item=BPTreeLeafCell<&'a PageSlice>>
+    pub fn iter<'a>(&'a self) -> impl Iterator<Item=&'a BPTreeLeafCell<PageSlice>>
     {
-        let cp: &CellPage<_> = self.as_ref();
-        cp
-        .iter_ids()
-        .flat_map(move |cid| cp.borrow_cell(&cid))
-        .map(BPTreeLeafCell)
+        self.as_cells()
+        .iter()
+        .map(|cell| unsafe {
+            std::mem::transmute(cell)
+        })
     }
 
 }
@@ -204,46 +212,32 @@ pub struct BPTreeLeafHeader {
 }
 
 /// Cellule d'une feuille contenant une paire clé/valeur.
-pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice;
+pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?Sized;
 
-impl<Slice> AsRef<PageSlice> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice {
+impl<Slice> PartialOrd<Numeric> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
+    fn partial_cmp(&self, other: &Numeric) -> Option<std::cmp::Ordering> {
+        self.borrow_key().partial_cmp(other)
+    }
+}
+
+impl<Slice> AsRef<PageSlice> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn as_ref(&self) -> &PageSlice {
         let idx = usize::from(self.borrow_key().kind().size())..;
         &self.0.as_slice()[idx]
     }
 }
 
-impl<Slice> AsRef<BPTreeLeafCellData> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice {
-    fn as_ref(&self) -> &BPTreeLeafCellData {
-        BPTreeLeafCellData::try_ref_from_bytes(self.0.as_slice()).unwrap()
-    }
-}
-
-impl<Slice> AsMut<BPTreeLeafCellData> for BPTreeLeafCell<Slice> where Slice: AsMutPageSlice {
-    fn as_mut(&mut self) -> &mut BPTreeLeafCellData {
-        BPTreeLeafCellData::try_mut_from_bytes(self.0.as_mut_slice()).unwrap()
-    }
-}
-
-impl<Slice> PartialOrd<Numeric> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice {
-    fn partial_cmp(&self, other: &Numeric) -> Option<std::cmp::Ordering> {
-        let data: &BPTreeLeafCellData = self.as_ref();
-        data.key.partial_cmp(other)
-    }
-}
-
-
-impl<Slice> PartialEq<Numeric> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice {
+impl<Slice> PartialEq<Numeric> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn eq(&self, other: &Numeric) -> bool {
         self.borrow_key().eq(other)
     }
 }
 
 impl<Slice> BPTreeLeafCell<Slice> 
-where Slice: AsRefPageSlice
+where Slice: AsRefPageSlice + ?Sized
 {
-    pub fn cid(&self) -> CellId {
-        self.0.cid
+    pub fn cid(&self) -> &CellId {
+        self.as_cell().id()
     }
 
     pub fn as_cell(&self) -> &Cell<Slice> {
@@ -265,7 +259,7 @@ where Slice: AsRefPageSlice
 }
 
 impl<Slice> BPTreeLeafCell<Slice> 
-where Slice: AsMutPageSlice
+where Slice: AsMutPageSlice + ?Sized
 {
     pub fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
         &mut self.0
@@ -282,11 +276,4 @@ where Slice: AsMutPageSlice
             std::mem::transmute(value_bytes)
         }
     }
-}
-
-#[derive(TryFromBytes, Immutable, KnownLayout)]
-#[repr(C)]
-pub struct BPTreeLeafCellData {
-    key: Numeric,
-    value: VarData
 }

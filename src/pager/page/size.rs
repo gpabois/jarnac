@@ -1,6 +1,8 @@
-use std::ops::{Add, Sub};
+use std::ops::{Add, Mul, Sub};
 
 use zerocopy_derive::*;
+
+use crate::pager::cell::{CellCapacity, CellId};
 
 #[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 /// Taille d'une page
@@ -11,11 +13,43 @@ use zerocopy_derive::*;
 /// 
 /// # Example
 /// Pour un volume entre 2 et 16 tebibytes, le FAT32 impose des blocs d'une taille de 64 Kio.
-pub struct PageSize(pub(super) u16);
+pub struct PageSize(u16);
 
 impl PageSize {
     pub fn new(value: u16) -> Self {
         Self(value)
+    }
+}
+
+impl Mul<CellCapacity> for PageSize {
+    type Output = PageSize;
+
+    fn mul(self, rhs: CellCapacity) -> Self::Output {
+        let rhs_u16: u16 = rhs.into();
+        Self(rhs_u16 * self.0)
+    }
+}
+
+
+impl Mul<CellId> for PageSize {
+    type Output = PageSize;
+
+    fn mul(self, rhs: CellId) -> Self::Output {
+        let rhs_u16: u16 = rhs.into();
+        Self(rhs_u16 * self.0)
+    }
+}
+
+
+impl Into<usize> for PageSize {
+    fn into(self) -> usize {
+        usize::from(self.0)
+    }
+}
+
+impl Into<u64> for PageSize {
+    fn into(self) -> u64 {
+        u64::from(self.0)
     }
 }
 
@@ -25,6 +59,23 @@ impl Add<usize> for PageSize {
     fn add(self, rhs: usize) -> Self::Output {
         let ps_usize: usize = self.0.try_into().unwrap();
         ps_usize + rhs
+    }
+}
+
+impl Add<PageSize> for PageSize {
+    type Output = PageSize;
+
+    fn add(self, rhs: PageSize) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+
+impl Sub<PageSize> for PageSize {
+    type Output = PageSize;
+
+    fn sub(self, rhs: PageSize) -> Self::Output {
+        Self(self.0 - rhs.0)
     }
 }
 
@@ -48,10 +99,3 @@ impl From<usize> for PageSize {
         Self(value.try_into().unwrap())
     }
 }
-
-impl Into<usize> for PageSize {
-    fn into(self) -> usize {
-        self.0.try_into().unwrap()
-    }
-}
-

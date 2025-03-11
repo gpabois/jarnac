@@ -463,3 +463,18 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+pub mod fixtures {
+    use std::rc::Rc;
+
+    use crate::fs::in_memory::InMemoryFs;
+
+    use super::{page::PageSize, BoxedPager, Pager, PagerOptions};
+
+    pub fn fixture_new_pager() -> BoxedPager {
+        let fs = Rc::new(InMemoryFs::default());
+        let pager = Pager::new(fs, "memory", PageSize::new(4_096), PagerOptions::default()).expect("cannot create pager").into_boxed();
+        pager
+    }
+}

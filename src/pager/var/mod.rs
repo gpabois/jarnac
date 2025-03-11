@@ -36,7 +36,7 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     }
 }
 impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
-    pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
+    pub fn set<Pager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> where Pager: IPager + ?Sized {
         let in_page_bytes = &mut self.0.as_mut()[size_of::<VarHeader>()..];
         *self.as_mut_header() = write_var_data(data, in_page_bytes, pager)?;
         Ok(())
@@ -236,7 +236,7 @@ impl SpillPageData {
 }
 
 /// Libère toutes les pages de débordement de la liste chaînée.
-pub fn free_overflow_pages<Pager: IPager>(head: PageId, pager: &Pager) -> PagerResult<()> {
+pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) -> PagerResult<()> {
     let mut current = Some(head);
 
     while let Some(pid) = current {
@@ -275,7 +275,7 @@ pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
 ///
 /// Si les données ne peuvent être stockées intégralement dans la région,
 /// alors la fonction réalise un débordement (Overflow) sur une à plusieurs pages.
-pub fn write_var_data<Pager: IPager>(
+pub fn write_var_data<Pager: IPager + ?Sized>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
