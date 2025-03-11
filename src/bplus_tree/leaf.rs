@@ -13,8 +13,8 @@
 
 use std::ops::{DerefMut, Div, Range};
 
-use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
-use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
+use zerocopy::{FromBytes, IntoBytes};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, var::{Var, VarData}, PagerResult}, value::numeric::Numeric};
 
@@ -106,9 +106,9 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     {
         self
         .as_cells()
-        .iter_ids()
-        .map(|cid| unsafe {
-            std::mem::transmute(self.borrow_cell(&cid))
+        .iter()
+        .map(|cell| unsafe {
+            std::mem::transmute(cell)
         })
     }    
 

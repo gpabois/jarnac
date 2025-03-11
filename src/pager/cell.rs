@@ -72,13 +72,6 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
         RefPageCellCursor { page: self, current }        
     }
 
-    /// Itère sur les identifiants des cellules de la page
-    pub fn iter_ids(&self) -> PageCellIdCursor<'_, Page> 
-    {
-        let current = self.as_header().head_cell.into();
-        PageCellIdCursor { page: self, current }
-    }
-
     /// Emprunte une cellule en lecture seule
     pub fn borrow_cell<'a>(&'a self, cid: &CellId) -> Option<&'a Cell<PageSlice>>
     {
@@ -193,8 +186,8 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     /// Insère une nouvelle cellule à la fin de la liste chaînée.
     pub fn push(&mut self) -> PagerResult<CellId> 
     {
-        let cid = self.alloc_page_cell()?;
-        let maybe_tail_cid = self.iter_ids().last();
+        let cid = self.alloc_cell()?;
+        let maybe_tail_cid = self.iter().map(|cell| cell.id()).last().copied();
 
         if let Some(tail_cid) = maybe_tail_cid {
             self.borrow_mut_cell(&tail_cid).unwrap().as_mut_header().next = Some(cid).into();
@@ -208,7 +201,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
     /// Insère une nouvelle cellule après une autre.
     pub fn insert_after(&mut self, after: &CellId) -> PagerResult<CellId> {
-        let cid = self.alloc_page_cell()?;
+        let cid = self.alloc_cell()?;
 
         // La prochaine cellule après la cellule à insérer
         let maybe_next: Option<CellId> = {
@@ -239,7 +232,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     /// Insère une nouvelle cellule avant une autre.
     pub fn insert_before(&mut self, before: &CellId) -> PagerResult<CellId> 
     {
-        let cid = self.alloc_page_cell()?;
+        let cid = self.alloc_cell()?;
 
         let maybe_prev: Option<CellId> = {
             let cell = self.borrow_mut_cell(&before).unwrap();
@@ -265,7 +258,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     }
 
     /// Alloue une nouvelle cellule au sein de la page, si on en a assez.
-    fn alloc_page_cell(&mut self) -> PagerResult<CellId> where Page: AsMutPageSlice {
+    fn alloc_cell(&mut self) -> PagerResult<CellId> where Page: AsMutPageSlice {
         if self.as_header().is_full() {
             return Err(PagerError::new(PagerErrorKind::CellPageFull));
         }
@@ -355,14 +348,6 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     fn as_mut_header(&mut self) -> &mut CellPageHeader {
         self.as_mut()
     }
-}
-
-#[derive(FromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-pub struct CellPageData {
-    kind: u8,
-    header: CellPageHeader,
-    body: [u8]
 }
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
@@ -751,7 +736,7 @@ mod tests {
 
         
         assert_eq!(cells.previous_sibling(&c1), Some(c2));
-        assert_eq!(cells.iter_ids().collect::<Vec<_>>(), vec![c2, c1]);
+        assert_eq!(cells.iter().map(|cell| cell.id()).copied().collect::<Vec<_>>(), vec![c2, c1]);
 
         Ok(())
     }
