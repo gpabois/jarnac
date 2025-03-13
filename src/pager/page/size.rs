@@ -4,7 +4,7 @@ use zerocopy_derive::*;
 
 use crate::pager::cell::{CellCapacity, CellId};
 
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
 /// Taille d'une page
 /// 
 /// Les valeurs vont jusqu'à [u16::MAX]. C'est à dire jusqu'à 64 Kio.

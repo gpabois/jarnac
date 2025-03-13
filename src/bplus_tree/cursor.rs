@@ -1,4 +1,6 @@
-use crate::{pager::PagerResult, value::numeric::Numeric};
+use std::borrow::Borrow;
+
+use crate::{pager::PagerResult, value::Value};
 
 use super::{AsBPlusTreeRef, BPlusTreeCellId, IRefBPlusTree};
 
@@ -11,8 +13,8 @@ pub struct RefBPlusTreeCursor<Tree> where Tree: AsBPlusTreeRef {
 
 impl<Tree> RefBPlusTreeCursor<Tree> where Tree: AsBPlusTreeRef {
     /// Place le curseur à un endroit 
-    pub fn seek(&mut self, key: &Numeric) -> PagerResult<bool> {
-        self.current = self.tree.as_ref().search(key)?;
+    pub fn seek<K: Borrow<Value>>(&mut self, key: &K) -> PagerResult<bool> {
+        self.current = self.tree.as_ref().search(key.borrow())?;
         Ok(self.current.is_some())
     }
 
