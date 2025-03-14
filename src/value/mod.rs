@@ -5,7 +5,7 @@
 //! Signed integers are between 6-10;
 //! Floats are between 11-12;
 
-use std::{borrow::Borrow, io::Write, ops::Deref};
+use std::{borrow::Borrow, fmt::Display, io::Write, ops::Deref};
 
 use zerocopy::{FromBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -38,8 +38,30 @@ impl<U> IntoValueBuf for U where ValueBuf: From<U> {
     }
 }
 
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct ValueKind(u8);
+
+impl Display for ValueKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self {
+            U8 => f.write_str("u8"),
+            U16 => f.write_str("u16"),
+            U32 => f.write_str("u32"),
+            U64 => f.write_str("u64"),
+            U128 => f.write_str("u128"),
+            I8 => f.write_str("i8"),
+            I16 => f.write_str("i16"),
+            I32 => f.write_str("i32"),
+            I64 => f.write_str("i64"),
+            I128 => f.write_str("i128"),
+            F32 => f.write_str("f32"),
+            F64 => f.write_str("f64"),
+            _ => f.write_str("unknown")
+        }
+    }
+}
+
 impl From<u8> for ValueKind {
     fn from(value: u8) -> Self {
         Self(value)
@@ -53,16 +75,16 @@ impl Into<u8> for ValueKind {
 impl ValueKind {
     /// Détermine la portion dédiée au stockage de la valeur
     pub fn get_slice<'a>(&self, src: &'a [u8]) -> &'a [u8] {
-        if let Some(size) = self.size() {
-            return &src[1..size];
+        if let Some(size) = self.full_size() {
+            return &src[..size];
         }
 
         todo!("implement var-sized data");
     }
 
     pub fn get_mut_slice<'a>(&self, src: &'a mut [u8]) -> &'a mut [u8] {
-        if let Some(size) = self.size() {
-            return &mut src[1..size];
+        if let Some(size) = self.full_size() {
+            return &mut src[..size];
         }
 
         todo!("implement var-sized data");

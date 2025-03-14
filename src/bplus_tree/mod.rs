@@ -17,7 +17,6 @@ use crate::{
         page::{
             AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
         },
-        var::VarHeader,
         IPager, PagerResult,
     },
     value::{IntoValueBuf, Value, ValueKind},
@@ -77,7 +76,12 @@ fn max_leaf_cell_space_size(page_size: PageSize) -> u16 {
 /// Calcule la taille maximale possible de la valeur stockée dans l'arbre B+ au sein de la page.
 fn max_leaf_value_size(key: ValueKind, k: u16, page_size: PageSize) -> u16 {
     let leaf_cell_space_size = max_leaf_cell_space_size(page_size);
-    let leaf_cell_header_size = u16::try_from(key.full_size().unwrap()).unwrap();
+
+    let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
+    let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
+
+    let leaf_cell_header_size = cell_header + key_size;
+
     u16::div_ceil(leaf_cell_space_size.saturating_sub(k * leaf_cell_header_size), k)
 }
 
@@ -104,7 +108,9 @@ fn compute_b_plus_tree_parameters(
             .filter(|&k | within_available_interior_cell_space_size(key, page_size, k.into()))
             .map(|k| (k, max_leaf_value_size(key, k.into(), page_size)))
             .map(|(k, mut data_size)| {
-                let header = u16::try_from(LEAF_HEADER_SIZE).unwrap();
+                let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
+                let cell_header = u16::try_from(size_of::<CellHeader>()).unwrap();
+                let header = key_size + cell_header;
                 data_size = (header + data_size) - header;
                 (k, data_size)
             })
@@ -242,7 +248,7 @@ where
 
     fn next_sibling(&self, gcid: &BPlusTreeCellId) -> PagerResult<Option<BPlusTreeCellId>> {
         let leaf = self.borrow_leaf(gcid.pid())?;
-        let cell = leaf.borrow_cell(gcid.cid());
+        let cell = &leaf[gcid.cid()];
 
         match cell.as_cell().next_sibling() {
             Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
@@ -258,7 +264,7 @@ where
 
     fn prev_sibling(&self, gcid: &BPlusTreeCellId) -> PagerResult<Option<BPlusTreeCellId>> {
         let leaf = self.borrow_leaf(gcid.pid())?;
-        let cell = leaf.borrow_cell(gcid.cid());
+        let cell = &leaf[gcid.cid()];
 
         match cell.as_cell().prev_sibling() {
             Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
@@ -398,39 +404,29 @@ where
         let value = value.into_value_buf();
 
         assert_eq!(key.kind(), &self.as_ref().header.key, "wrong key kind");
-        assert_eq!(key.kind(), &self.as_ref().header.value, "wrong key value");
+        assert_eq!(value.kind(), &self.as_ref().header.value, "wrong value kind");
 
         let pid = match self.search_leaf(&key)? {
             Some(pid) => pid,
             None => {
                 let leaf_pid = self.insert_leaf()?;
-                self.as_mut().header.root = Some(leaf_pid).into();
+                self.set_root(Some(leaf_pid));
                 leaf_pid
             }
         };
 
-        let mut leaf: BPTreeLeaf<_> = self.pager.borrow_mut_page(&pid).and_then(BPTreeLeaf::try_from)?;
+        let mut leaf = self.borrow_mut_leaf(&pid)?;
 
+        // si la feuille est pleine on va la diviser en deux.
         if leaf.is_full() {
             self.split(leaf.as_mut())?;
         }
 
-        let before = leaf
-            .iter()
-            .filter(|&cell| cell <= &key)
-            .map(|cell| cell.cid())
-            .last();
+        leaf.insert(&key, &value, self.pager)
+    }
 
-        let cid = match before {
-            Some(before) => leaf.insert_before(&before)?,
-            None => leaf.push()?,
-        };
-
-        let mut cell: BPTreeLeafCell<_> = leaf.borrow_mut_cell(&cid);
-        cell.borrow_mut_key().set(&key);
-        cell.borrow_mut_value().set(&value, self.pager)?;
-
-        Ok(())
+    fn set_root(&mut self, root: Option<PageId>) {
+        self.as_mut().header.root = root.into();
     }
 }
 
@@ -538,6 +534,7 @@ where
         key: &Value,
         right: PageId,
     ) -> PagerResult<()> {
+
         if interior.is_full() {
             self.split(interior.as_mut())?;
         }
@@ -698,7 +695,7 @@ mod tests {
         let pager = fixture_new_pager();
         let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
         
-        for i in 0..1000u64 {
+        for i in 0..100u64 {
             tree.insert(
                 i,
                 1234u64

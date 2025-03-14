@@ -11,12 +11,12 @@
 //! | Value             | Variable  | < définit par data_size
 //! |-------------------|-----------|
 
-use std::ops::{DerefMut, Div, Range};
+use std::ops::{DerefMut, Div, Index, IndexMut, Range};
 
 use zerocopy::{FromBytes, IntoBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::{Var, VarData}, PagerResult}, value::{numeric::Numeric, Value, ValueBuf, ValueKind}};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::{Var, VarData}, IPager, PagerResult}, value::{numeric::Numeric, Value, ValueBuf, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
@@ -104,6 +104,19 @@ impl<Page> AsMut<CellPage<Page>> for BPTreeLeaf<Page> where Page: AsMutPageSlice
     }
 }
 
+impl<Page> Index<&CellId> for BPTreeLeaf<Page> where Page: AsRefPageSlice {
+    type Output = BPTreeLeafCell<PageSlice>;
+
+    fn index(&self, index: &CellId) -> &Self::Output {
+        self.borrow_cell(index).unwrap()
+    }
+}
+
+impl<Page> IndexMut<&CellId> for BPTreeLeaf<Page> where Page: AsMutPageSlice {
+    fn index_mut(&mut self, index: &CellId) -> &mut Self::Output {
+        self.borrow_mut_cell(index).unwrap()
+    }
+}
 
 impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     /// Crée une nouvelle feuille d'un arbre B+.
@@ -130,20 +143,39 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         })
     }    
 
-    pub fn borrow_mut_cell(&mut self, cid: &CellId) -> BPTreeLeafCell<&mut PageSlice> {
+    pub fn borrow_mut_cell(&mut self, cid: &CellId) -> Option<&mut BPTreeLeafCell<PageSlice>> {
         self.as_mut_cells()
         .borrow_mut_cell(cid)
         .map(|cell| unsafe {
             std::mem::transmute(cell)
-        }).unwrap()
+        })
     }
 
-    pub fn insert_before(&mut self, before: &CellId) -> PagerResult<CellId> {
-        self.as_mut_cells().insert_before(before)
+    pub fn insert<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
+        let before = self
+        .iter()
+        .filter(|&cell| cell <= &key)
+        .map(|cell| cell.cid())
+        .last();
+
+        match before {
+            Some(before) => self.insert_before(&before, &key, &value, pager)?,
+            None => self.push(&key, &value, pager)?,
+        };
+
+        Ok(())
     }
 
-    pub fn push(&mut self) -> PagerResult<CellId> {
-        self.as_mut_cells().push()
+    fn insert_before<Pager: IPager + ?Sized>(&mut self, before: &CellId, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
+        let cid = self.as_mut_cells().insert_before(before)?;
+        self[&cid].initialise(key, value, pager);
+        Ok(cid)    
+    }
+
+    fn push<Pager: IPager + ? Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
+        let cid = self.as_mut_cells().push()?;
+        self[&cid].initialise(key, value, pager);
+        Ok(cid)
     }
 
     pub fn split_into<'a, P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> PagerResult<&Value> where P2: AsMutPageSlice {
@@ -198,12 +230,12 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
         self.as_cells().len()
     }
 
-    pub fn borrow_cell(&self, cid: &CellId) -> BPTreeLeafCell<&PageSlice> {
+    pub fn borrow_cell(&self, cid: &CellId) -> Option<&BPTreeLeafCell<PageSlice>> {
         self.as_cells()
         .borrow_cell(cid)
         .map(|cell| unsafe {
             std::mem::transmute(cell)
-        }).unwrap()
+        })
     }
 
     /// Itère sur les cellules du noeud.
@@ -280,6 +312,12 @@ where Slice: AsRefPageSlice + ?Sized
 impl<Slice> BPTreeLeafCell<Slice> 
 where Slice: AsMutPageSlice + ?Sized
 {
+    /// Initialise la cellule
+    pub fn initialise<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) {
+        self.as_mut_cell().borrow_mut_content().as_mut_bytes()[0] = (*key.kind()).into();
+        self.borrow_mut_key().set(key);
+    }
+
     pub fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
         &mut self.0
     }
@@ -292,7 +330,9 @@ where Slice: AsMutPageSlice + ?Sized
     }
     
     pub fn borrow_mut_value(&mut self) -> &mut Var<PageSlice> {
-        let value_bytes = &mut self.as_mut_cell().borrow_mut_content()[size_of::<Numeric>()..];
+        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
+        let value_bytes = &mut self.as_mut_cell().borrow_mut_content()[kind.full_size().unwrap()..];
+        
         unsafe {
             std::mem::transmute(value_bytes)
         }

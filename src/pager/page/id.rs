@@ -82,6 +82,7 @@ impl PageId {
 }
 
 #[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, Eq)]
+#[repr(C, packed)]
 pub struct OptionalPageId(Option<NonZero<u64>>);
 
 impl AsRef<Option<PageId>> for OptionalPageId {

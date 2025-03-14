@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, ops::{DerefMut, Div, Range, RangeFrom, RangeTo}};
+use std::{cmp::Ordering, ops::{DerefMut, Div, Index, IndexMut, Range, RangeFrom, RangeTo}};
 
 use zerocopy::{FromBytes, IntoBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -10,10 +10,31 @@ pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER
 
 pub struct BPTreeInterior<Page>(CellPage<Page>) where Page: AsRefPageSlice;
 
+impl<Page> Index<&CellId> for BPTreeInterior<Page> where Page: AsRefPageSlice {
+    type Output = BPTreeInteriorCell<PageSlice>;
+
+    fn index(&self, index: &CellId) -> &Self::Output {
+        self.borrow_cell(index).unwrap()
+    }
+}
+
+impl<Page> IndexMut<&CellId> for BPTreeInterior<Page> where Page: AsMutPageSlice {
+    fn index_mut(&mut self, index: &CellId) -> &mut Self::Output {
+        self.borrow_mut_cell(index).unwrap()
+    }
+}
+
 impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
     pub fn try_from(page: Page) -> PagerResult<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTreeInterior.assert(kind).map(|_| Self(CellPage::from(page)))
+    }
+
+    /// Emprunte une cellule en mutation.
+    pub fn borrow_cell(&self, cid: &CellId) -> Option<&BPTreeInteriorCell<PageSlice>> {
+        self.as_cells().borrow_cell(cid).map(|cell| unsafe {
+            std::mem::transmute(cell)
+        })
     }
 }
 
@@ -40,19 +61,24 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
         match maybe_existing_cid {
             None => {
                 // Le lien de gauche est en butée de cellule
-                if self.as_header().tail == Some(left).into() {
+                if self.tail() == Some(left).into() {
                     let cid = self.as_mut_cells().push()?;
 
-                    let cell = self.borrow_mut_cell(&cid).unwrap();
+                    let cell = &mut self[&cid];
+                    cell.initialise(*key.kind());
                     cell.borrow_mut_key().set(key);
                     *cell.borrow_mut_left() = Some(left).into();
+                    
                     self.as_mut_header().tail = Some(right).into();
                 // Le noeud est vide
                 } else {
                     let cid = self.as_mut_cells().push()?;
-                    let cell = self.borrow_mut_cell(&cid).unwrap();
+                    
+                    let cell = &mut self[&cid];
+                    cell.initialise(*key.kind());
                     cell.borrow_mut_key().set(key);
                     *cell.borrow_mut_left() = Some(left).into();
+                    
                     self.as_mut_header().tail = Some(right).into();
                 }
             },
@@ -61,7 +87,8 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
             Some(existing_cid) => {
                 let cid = self.as_mut_cells().insert_after(&existing_cid)?;
                 
-                let cell = self.borrow_mut_cell(&cid).unwrap();
+                let cell = &mut self[&cid];
+                cell.initialise(*key.kind());
                 cell.borrow_mut_key().set(key);
                 *cell.borrow_mut_left() = Some(left).into();
 
@@ -106,12 +133,6 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
     }
 }
 
-impl BPTreeInterior<RefPage<'_>> {
-    pub fn id(&self) -> &PageId {
-        self.as_page().id()
-    }
-}
-
 impl BPTreeInterior<MutPage<'_>> {
     pub fn id(&self) -> &PageId {
         self.as_page().id()
@@ -142,8 +163,12 @@ impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
         self.as_cells().is_full()
     }
     
-    pub fn parent(&self) -> &Option<PageId> {
-        self.as_header().parent.as_ref()
+    pub fn parent(&self) -> Option<PageId> {
+        self.as_header().parent.into()
+    }
+
+    pub fn tail(&self) -> Option<PageId> {
+        self.as_header().tail.into()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &BPTreeInteriorCell<PageSlice>> {
@@ -204,7 +229,7 @@ impl<Page> AsMut<CellPage<Page>> for BPTreeInterior<Page> where Page: AsMutPageS
 }
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
-#[repr(C)]
+#[repr(C, packed)]
 /// L'entête d'un noeud d'un arbre B+
 pub struct BPTreeInteriorHeader {
     /// Pointeur vers le noeud parent
@@ -247,16 +272,19 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?Sized {
 }
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?Sized {
+    pub fn initialise(&mut self, key: ValueKind) {
+        self.as_mut_cell().borrow_mut_content().as_mut_bytes()[Self::KEY_SLICE][0] = key.into();
+    }
     pub fn borrow_mut_key(&mut self) -> &mut Value {
         unsafe {
             std::mem::transmute(self.as_mut_key_slice())
         }
     }
 
-    pub fn borrow_mut_left(&mut self) -> &mut Option<PageId> {
-        unsafe {
-            std::mem::transmute(OptionalPageId::mut_from_bytes(&mut self.as_mut_left_slice()).unwrap())
-        }
+    pub fn borrow_mut_left(&mut self) -> &mut OptionalPageId {
+        OptionalPageId::mut_from_bytes(
+            self.as_mut_left_slice()
+        ).unwrap()
     }
 
     fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
@@ -264,7 +292,9 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?Sized {
     }
 
     fn as_mut_left_slice(&mut self) -> &mut [u8] {
-        &mut self.as_mut_cell().borrow_mut_content().as_mut_bytes()[Self::LEFT_SLICE]
+        &mut self.as_mut_cell()
+            .borrow_mut_content()
+            .as_mut_bytes()[Self::LEFT_SLICE]
     }
 
     fn as_mut_key_slice(&mut self) -> &mut [u8] {
