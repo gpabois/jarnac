@@ -13,33 +13,29 @@ use zerocopy_derive::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        cell::GlobalCellId,
+        cell::{CellHeader, CellPageHeader, GlobalCellId},
         page::{
             AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
         },
         var::VarHeader,
         IPager, PagerResult,
     },
-    value::{numeric::{Numeric, NumericKind}, IntoValueBuf, Value, ValueKind},
+    value::{IntoValueBuf, Value, ValueKind},
 };
 
 pub type BPTreeKey = Value;
 
 pub const MIN_K: u16 = 2;
-pub const KEY_SIZE: usize = size_of::<Numeric>();
-pub const LEAF_HEADER_SIZE: usize = size_of::<BPTreeLeafHeader>();
-pub const LEAF_CELL_HEADER_SIZE: usize = KEY_SIZE + size_of::<VarHeader>();
-pub const INTERIOR_HEADER_SIZE: usize = size_of::<BPTreeInteriorHeader>();
-pub const INTERIOR_CELL_SIZE: usize = size_of::<PageId>() + KEY_SIZE;
+pub const LEAF_HEADER_SIZE: usize = size_of::<BPTreeLeafHeader>() + 1 + size_of::<CellPageHeader>();
+pub const INTERIOR_HEADER_SIZE: usize = size_of::<BPTreeInteriorHeader>() + 1 + size_of::<CellPageHeader>();
 
-fn within_available_interior_cell_space_size(page_size: PageSize, k: u16) -> bool {
-    max_interior_cell_space_size(page_size) >= compute_interior_cell_space_size(k)
+fn within_available_interior_cell_space_size(key: ValueKind, page_size: PageSize, k: u16) -> bool {
+    max_interior_cell_space_size(page_size) >= compute_interior_cell_space_size(key, k)
 }
 
-fn within_available_leaf_cell_space_size(page_size: PageSize, k: u16, data_size: u16) -> bool {
-    max_leaf_cell_space_size(page_size) >= compute_leaf_cell_space_size(k, data_size)
+fn within_available_leaf_cell_space_size(key: ValueKind, page_size: PageSize, k: u16, data_size: u16) -> bool {
+    max_leaf_cell_space_size(page_size) >= compute_leaf_cell_space_size(k, key, data_size)
 }
-
 
 /// Calcule l'espace maximal alloué aux cellules d'un noeud intérieur
 #[inline(always)]
@@ -47,16 +43,28 @@ fn max_interior_cell_space_size(page_size: PageSize) -> u16 {
     page_size - u16::try_from(INTERIOR_HEADER_SIZE).unwrap()
 }
 
-#[inline(always)]
-fn compute_interior_cell_space_size(k: u16) -> u16 {
-    let interior_cell_size = u16::try_from(INTERIOR_CELL_SIZE).unwrap();
-    k * interior_cell_size
+fn compute_interior_cell_size(key: ValueKind) -> u16 {
+    let key_size: u16 = key.full_size().unwrap().try_into().unwrap();
+    let page_id_size: u16 = size_of::<PageId>().try_into().unwrap();
+    let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
+    cell_header + key_size + page_id_size
 }
 
 #[inline(always)]
-fn compute_leaf_cell_space_size(k: u16, data_size: u16) -> u16 {
-    let header = u16::try_from(LEAF_HEADER_SIZE).unwrap();
-    k * (header + data_size).next_power_of_two()
+fn compute_interior_cell_space_size(key: ValueKind, k: u16) -> u16 {
+    k * compute_interior_cell_size(key)
+}
+
+#[inline(always)]
+fn compute_leaf_cell_size(key: ValueKind, data_size: u16) -> u16 {
+    let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
+    let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
+    cell_header + key_size + data_size
+}
+
+#[inline(always)]
+fn compute_leaf_cell_space_size(k: u16, key: ValueKind, data_size: u16) -> u16 {
+    k * compute_leaf_cell_size(key, data_size)
 }
 
 /// Calcule l'espace maximal alloué aux cellules d'une feuille
@@ -66,56 +74,41 @@ fn max_leaf_cell_space_size(page_size: PageSize) -> u16 {
 }
 
 #[inline(always)]
-fn max_k_for_interior_cells(interior_cell_space_size: u16) -> u16 {
-    u16::div_ceil(
-        interior_cell_space_size, 
-        u16::try_from(INTERIOR_CELL_SIZE).unwrap()
-    )
-}
-
-#[inline(always)]
 /// Calcule la taille maximale possible de la valeur stockée dans l'arbre B+ au sein de la page.
-fn max_leaf_value_size(k: u16, page_size: PageSize) -> u16 {
+fn max_leaf_value_size(key: ValueKind, k: u16, page_size: PageSize) -> u16 {
     let leaf_cell_space_size = max_leaf_cell_space_size(page_size);
-    let leaf_cell_header_size = u16::try_from(LEAF_CELL_HEADER_SIZE).unwrap();
+    let leaf_cell_header_size = u16::try_from(key.full_size().unwrap()).unwrap();
     u16::div_ceil(leaf_cell_space_size.saturating_sub(k * leaf_cell_header_size), k)
 }
 
 /// Calcule les paramètres des arbres B+
 fn compute_b_plus_tree_parameters(
     page_size: PageSize,
-    key_kind: ValueKind,
-    value_kind: ValueKind,
-    data_size: Option<u16>,
+    key: ValueKind,
+    value: ValueKind,
 ) -> BPlusTreeHeader {
-    // taille d'une cellule d'un noeud intérieur.
-    let interior_cell_size = u16::try_from(INTERIOR_CELL_SIZE).unwrap();
-
-    // taille de l'entête d'une cellule de la feuille
-    let leaf_cell_header_size = u16::try_from(LEAF_CELL_HEADER_SIZE).unwrap();
-
-    let (k, data_size) = if let Some(data_size) = data_size {
+    let (k, data_size): (u8, u16) = if let Some(data_size) = value.full_size() {
         let k = (1..u8::MAX).into_iter()
-        .filter(|&k| within_available_interior_cell_space_size(page_size, k.into()))
-        .filter(|&k| within_available_leaf_cell_space_size(page_size, k.into(), data_size))
+        .filter(|&k| within_available_interior_cell_space_size(key, page_size, k.into()))
+        .filter(|&k| within_available_leaf_cell_space_size(key, page_size, k.into(), data_size.try_into().unwrap()))
         .last()
         .unwrap_or_default();
 
-        (k, data_size)
+        (k, data_size.try_into().unwrap())
     } else {
         // On va essayer de trouver le tuple (k, data_size) 
         // qui maximise k * (data_size + leaf_cell_header) 
         // tout en étant inférieure à leaf_cell_space_size
         (1..u8::MAX)
             .into_iter()
-            .filter(|&k | within_available_interior_cell_space_size(page_size, k.into()))
-            .map(|k| (k, max_leaf_value_size(k.into(), page_size)))
+            .filter(|&k | within_available_interior_cell_space_size(key, page_size, k.into()))
+            .map(|k| (k, max_leaf_value_size(key, k.into(), page_size)))
             .map(|(k, mut data_size)| {
                 let header = u16::try_from(LEAF_HEADER_SIZE).unwrap();
-                data_size = (header + data_size).next_power_of_two() - header;
+                data_size = (header + data_size) - header;
                 (k, data_size)
             })
-            .filter(|&(k, data_size)| within_available_leaf_cell_space_size(page_size, k.into(), data_size))
+            .filter(|&(k, data_size)| within_available_leaf_cell_space_size(key, page_size, k.into(), data_size))
             .max_by_key(|&(_, data_size)| data_size)
             .unwrap_or_default()
     };
@@ -123,15 +116,17 @@ fn compute_b_plus_tree_parameters(
     assert!(k > 0, "k is zero");
     assert!(data_size > 0, "data size is zero");
 
-    let interior_cell_size = u16::from(k) * interior_cell_size;
-    let leaf_cell_size = u16::from(k) * (leaf_cell_header_size + data_size);
+    let cell_header = u16::try_from(size_of::<CellHeader>()).unwrap();
+
+    let interior_cell_size = compute_interior_cell_size(key) - cell_header;
+    let leaf_cell_size = compute_leaf_cell_size(key, data_size) - cell_header;
 
     BPlusTreeHeader {
         kind: BPlusTreePageKind::Kind,
         interior_cell_size,
         leaf_cell_size,
-        key: key_kind,
-        value: value_kind,
+        key,
+        value,
         data_size,
         k: u16::try_from(k).unwrap(),
         root: None.into(),
@@ -172,7 +167,7 @@ pub trait IRefBPlusTree {
 /// Trait permettant de manipuler un arbre B+ en écriture.
 pub trait IMutBPlusTree: IRefBPlusTree {
     /// Insère une nouvelle valeur
-    fn insert(&mut self, key: Numeric, value: &[u8]) -> PagerResult<()>;
+    fn insert(&mut self, key: &Value, value: &Value) -> PagerResult<()>;
 }
 
 /// Trait permettant d'obtenir une référence sur un arbre B+
@@ -295,10 +290,9 @@ where
         pager: &'pager Pager,
         key_kind: &ValueKind,
         value_kind: &ValueKind,
-        data_size: Option<u16>,
     ) -> PagerResult<Self> {
         // on génère les données qui vont bien pour gérer notre arbre B+
-        let header = compute_b_plus_tree_parameters(pager.page_size(), *key_kind, *value_kind, data_size);
+        let header = compute_b_plus_tree_parameters(pager.page_size(), *key_kind, *value_kind);
 
         let pid = pager.new_page()?;
 
@@ -702,7 +696,7 @@ mod tests {
     #[test]
     pub fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64, None)?;
+        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
         
         for i in 0..1000u64 {
             tree.insert(

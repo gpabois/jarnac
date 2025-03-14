@@ -54,7 +54,7 @@ impl ValueKind {
     /// Détermine la portion dédiée au stockage de la valeur
     pub fn get_slice<'a>(&self, src: &'a [u8]) -> &'a [u8] {
         if let Some(size) = self.size() {
-            return &src[0..size];
+            return &src[1..size];
         }
 
         todo!("implement var-sized data");
@@ -62,7 +62,7 @@ impl ValueKind {
 
     pub fn get_mut_slice<'a>(&self, src: &'a mut [u8]) -> &'a mut [u8] {
         if let Some(size) = self.size() {
-            return &mut src[0..size];
+            return &mut src[1..size];
         }
 
         todo!("implement var-sized data");

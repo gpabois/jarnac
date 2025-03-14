@@ -113,8 +113,8 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeLeaf as u8;
 
         // initialise le sous-système de cellules
-        let base: u16 = (1 + size_of::<CellPageHeader>() + size_of::<BPTreeLeafHeader>()).try_into().unwrap();
-        CellPage::new(&mut page, cell_size, k.into(), base.into())?;
+        let reserved: u16 = size_of::<BPTreeLeafHeader>().try_into().unwrap();
+        CellPage::new(&mut page, cell_size, k.into(), reserved.into())?;
 
         Self::try_from(page)
     }
