@@ -206,7 +206,7 @@ where
                 let gid = leaf
                     .iter()
                     .filter(|&cell| cell == key)
-                    .map(|cell| GlobalCellId::new(pid, *cell.cid()))
+                    .map(|cell| GlobalCellId::new(pid, cell.cid()))
                     .next();
 
                 gid
@@ -225,7 +225,7 @@ where
                 let gid = leaf
                     .iter()
                     .filter(|&cell| cell <= key)
-                    .map(|cell| GlobalCellId::new(pid, *cell.cid()))
+                    .map(|cell| GlobalCellId::new(pid, cell.cid()))
                     .next();
 
                 gid
@@ -239,7 +239,7 @@ where
             let leaf = self.borrow_leaf(&pid).unwrap();
             let head = leaf
                 .iter()
-                .map(|cell| BPlusTreeCellId::new(pid, *cell.cid()))
+                .map(|cell| BPlusTreeCellId::new(pid, cell.cid()))
                 .next();
             head
         }))
@@ -250,12 +250,12 @@ where
         let cell = leaf.borrow_cell(gcid.cid());
 
         match cell.as_cell().next_sibling() {
-            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), *cid))),
+            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
             None => Ok(leaf.get_next().and_then(|next_pid| {
                 self.borrow_leaf(&next_pid)
                     .unwrap()
                     .iter()
-                    .map(|cell| BPlusTreeCellId::new(next_pid, *cell.cid()))
+                    .map(|cell| BPlusTreeCellId::new(next_pid, cell.cid()))
                     .next()
             })),
         }
@@ -266,12 +266,12 @@ where
         let cell = leaf.borrow_cell(gcid.cid());
 
         match cell.as_cell().prev_sibling() {
-            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), *cid))),
+            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
             None => Ok(leaf.get_prev().and_then(|prev_pid| {
                 self.borrow_leaf(&prev_pid)
                     .unwrap()
                     .iter()
-                    .map(|cell| BPlusTreeCellId::new(prev_pid, *cell.cid()))
+                    .map(|cell| BPlusTreeCellId::new(prev_pid, cell.cid()))
                     .last()
             })),
         }
@@ -424,7 +424,7 @@ where
         let before = leaf
             .iter()
             .filter(|&cell| cell <= &key)
-            .map(|cell| *cell.cid())
+            .map(|cell| cell.cid())
             .last();
 
         let cid = match before {

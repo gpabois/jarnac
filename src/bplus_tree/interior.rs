@@ -34,7 +34,7 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
     pub fn insert(&mut self, left: PageId, key: &Value, right: PageId) -> PagerResult<()> {
         let maybe_existing_cid = self.iter()
             .filter(|cell| cell.borrow_left() == &Some(left).into())
-            .map(|cell| *cell.as_cell().id())
+            .map(|cell| cell.as_cell().id())
             .last();
         
         match maybe_existing_cid {

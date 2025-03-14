@@ -10,7 +10,7 @@ use std::{borrow::Borrow, io::Write, ops::Deref};
 use zerocopy::{FromBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::pager::{error::PagerError, PagerResult};
+use crate::pager::{error::PagerError, page::PageSlice, PagerResult};
 pub mod numeric;
 
 pub const U8: ValueKind     = ValueKind(1);
@@ -118,6 +118,13 @@ impl ValueKind {
 }
 
 pub struct Value([u8]);
+impl From<&PageSlice> for &Value {
+    fn from(value: &PageSlice) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
 impl PartialEq<Self> for Value {
     fn eq(&self, other: &Self) -> bool {
         if self.kind() != other.kind() { return false }
@@ -498,6 +505,12 @@ impl TryFrom<&Value> for &ValU32 {
 }
 
 pub struct ValU64([u8]);
+
+impl Into<u64> for &ValU64 {
+    fn into(self) -> u64 {
+        self.deref().get()
+    }
+}
 
 impl PartialEq<Self> for ValU64 {
     fn eq(&self, other: &Self) -> bool {

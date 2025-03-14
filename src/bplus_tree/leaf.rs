@@ -252,7 +252,7 @@ impl<Slice> PartialEq<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSli
 impl<Slice> BPTreeLeafCell<Slice> 
 where Slice: AsRefPageSlice + ?Sized
 {
-    pub fn cid(&self) -> &CellId {
+    pub fn cid(&self) -> CellId {
         self.as_cell().id()
     }
 
