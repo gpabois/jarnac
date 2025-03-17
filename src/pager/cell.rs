@@ -17,12 +17,12 @@
 //! 
 //! | PageKind          | 1 byte    |
 //! | CellPageHeader    | 9 bytes   |
-//! |           ............        | - Espace réservée pour les systèmes employant le découpag en cellules
+//! |           ............        | - Espace réservée pour les systèmes employant le découpage en cellules
 //! |-------------------|-----------| < base ^
 //! | CellHeader        | 2 bytes   |        |- cell size  (x capacity)
 //! |...............................|        v
 //! |-------------------|-----------|
-use std::{fmt::Display, num::NonZeroU8, ops::{AddAssign, Div, Index, IndexMut, Mul, Range, SubAssign}};
+use std::{fmt::Display, mem::MaybeUninit, num::NonZeroU8, ops::{AddAssign, Div, Index, IndexMut, Mul, Range, Sub, SubAssign}};
 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -107,6 +107,10 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
         self.as_header().len()
     }
 
+    pub fn capacity(&self) -> CellCapacity {
+        self.as_header().capacity()
+    }
+
     pub fn is_full(&self) -> bool {
         self.as_header().is_full()
     }
@@ -150,17 +154,19 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     pub fn new(page: Page, content_size: PageSize, capacity: CellCapacity, reserved: PageSize) -> PagerResult<Self>
     {
         let cell_size = PageSize::from(content_size + size_of::<CellHeader>());
-        let base = PageSize::from(reserved + size_of::<CellHeader>());
+        let base = PageSize::from(reserved + size_of::<CellPageHeader>() + 1);
 
         Self::assert_no_overflow(page.as_ref().len(), cell_size, base, capacity)?;
 
         let mut cells = Self::from(page);
         
-        *cells.as_mut_header() = CellPageHeader::new(
-            cell_size, 
-            capacity,
-            base
-        );
+        cells
+            .as_mut_uninit_header()
+            .write(CellPageHeader::new(
+                cell_size, 
+                capacity,
+                base
+            ));
 
         Ok(cells)
     }
@@ -245,11 +251,13 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         
         let cell = self.borrow_mut_cell(&cid).unwrap();
         
-        *cell.as_mut_header() = CellHeader {
+        cell
+            .as_mut_uninit_header()
+            .write(CellHeader {
             id: cid,
             next: None.into(),
             prev: None.into()
-        };
+        });
 
         Ok(cid)
     }
@@ -360,9 +368,15 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     fn as_mut_header(&mut self) -> &mut CellPageHeader {
         self.as_mut()
     }
+
+    fn as_mut_uninit_header(&mut self) -> &mut MaybeUninit<CellPageHeader> {
+        unsafe {
+            std::mem::transmute(self.as_mut_header())
+        }
+    }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug)]
 #[repr(C, packed)]
 /// En-tête de la page contenant les informations relatives aux cellules qui y sont stockées.
 pub struct CellPageHeader {
@@ -399,10 +413,15 @@ impl CellPageHeader {
     }
 
     pub fn get_cell_location(&self, cid: &CellId) -> PageSize {
-       self.cell_size * (*cid) + self.cell_base
+        let rank: u16 = ((*cid) - 1).into();
+        self.cell_size * rank + self.cell_base
     }
 
     pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> {
+        if (cid.0 - 1) >= self.len().0 {
+            return None
+        }
+
         let loc: usize = self.get_cell_location(cid).into();
         let size: usize = self.cell_size.into();
         Some(loc..(loc + size))
@@ -447,12 +466,16 @@ impl CellPageHeader {
         self.free_head_cell.into()
     }
 
+    pub fn capacity(&self) -> CellCapacity {
+        self.capacity
+    }
+
     pub fn is_full(&self) -> bool {
-        self.len >= self.capacity && self.free_len == 0.into()
+        self.len() >= self.capacity()
     }
 
     pub fn len(&self) -> CellCapacity {
-        self.len
+        self.len - self.free_len
     }
 }
 
@@ -536,6 +559,12 @@ impl<Slice> Cell<Slice> where Slice: AsMutPageSlice + ?Sized {
 
     fn as_mut_header(&mut self) -> &mut CellHeader {
         self.as_mut()
+    }
+
+    fn as_mut_uninit_header(&mut self) -> &mut MaybeUninit<CellHeader> {
+        unsafe {
+            std::mem::transmute(self.as_mut_header())
+        }
     }
 }
 
@@ -640,6 +669,26 @@ impl GlobalCellId {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct CellId(u8);
 
+impl PartialEq<CellCapacity> for CellId {
+    fn eq(&self, other: &CellCapacity) -> bool {
+        self.0.eq(&other.0)
+    }
+}
+
+impl PartialOrd<CellCapacity> for CellId {
+    fn partial_cmp(&self, other: &CellCapacity) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+
+impl Sub<u8> for CellId {
+    type Output = u8;
+
+    fn sub(self, rhs: u8) -> Self::Output {
+        self.0 - rhs
+    }
+}
+
 impl From<CellCapacity> for CellId {
     fn from(value: CellCapacity) -> Self {
         Self(value.0.try_into().unwrap())
@@ -676,6 +725,14 @@ impl AddAssign<u8> for CellCapacity {
     }
 }
 
+impl Sub<CellCapacity> for CellCapacity {
+    type Output = CellCapacity;
+
+    fn sub(self, rhs: CellCapacity) -> Self {
+        Self(self.0 - rhs.0)
+    }
+}
+
 impl SubAssign<u8> for CellCapacity {
     fn sub_assign(&mut self, rhs: u8) {
         self.0 -= rhs
@@ -695,7 +752,7 @@ impl From<u8> for CellCapacity {
 }
 
 
-#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct OptionalCellId(Option<NonZeroU8>);
 
 impl Into<Option<CellId>> for OptionalCellId {
@@ -741,7 +798,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{pager::{cell::CellPage, fixtures::fixture_new_pager, page::PageSize}, value::{IntoValueBuf, Value, U64}};
+    use crate::{pager::{cell::{CellCapacity, CellPage}, fixtures::fixture_new_pager, page::PageSize}, value::{IntoValueBuf, Value, U64}};
     use super::CellHeader;
 
     #[test]
@@ -804,14 +861,21 @@ mod tests {
             0_usize.into()
         )?;
 
+        println!("{:#?}", cells.as_header());
+
         let c1 = cells.push()?;
+        println!("{:#?}", cells.as_header());
+
+        println!("{0} / {1}", cells.len(), cells.capacity());
         let c2 = cells.push()?;
+        println!("{0} / {1}", cells.len(), cells.capacity());
         let c3 = cells.push()?;
+        println!("{0} / {1}", cells.len(), cells.capacity());
 
         cells.free_cell(&c2);
 
         assert_eq!(cells.iter().map(|cell| cell.id()).collect::<Vec<_>>(), vec![c1, c3]);
-
+        assert_eq!(cells.len(), CellCapacity(2));
         Ok(())
     }
 

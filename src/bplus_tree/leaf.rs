@@ -11,12 +11,12 @@
 //! | Value             | Variable  | < définit par data_size
 //! |-------------------|-----------|
 
-use std::ops::{DerefMut, Div, Index, IndexMut, Range};
+use std::ops::{DerefMut, Div, Index, IndexMut, Range, RangeFrom};
 
 use zerocopy::{FromBytes, IntoBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::{Var, VarData}, IPager, PagerResult}, value::{numeric::Numeric, Value, ValueBuf, ValueKind}};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, var::Var, IPager, PagerResult}, value::{Value, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
@@ -50,12 +50,6 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     }
 }
 
-impl BPTreeLeaf<RefPage<'_>> {
-    pub fn id(&self) -> &PageId {
-        self.as_page().id()
-    }
-}
-
 impl BPTreeLeaf<MutPage<'_>> {
     pub fn id(&self) -> &PageId {
         self.as_page().id()
@@ -74,6 +68,7 @@ impl<Page> AsRef<Page> for BPTreeLeaf<Page> where Page: AsRefPageSlice {
         self.0.as_ref()
     }
 }
+
 impl<Page> AsMut<Page> for BPTreeLeaf<Page> where Page: AsMutPageSlice {
     fn as_mut(&mut self) -> &mut Page {
         self.0.as_mut()
@@ -168,19 +163,23 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
 
     fn insert_before<Pager: IPager + ?Sized>(&mut self, before: &CellId, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
         let cid = self.as_mut_cells().insert_before(before)?;
-        self[&cid].initialise(key, value, pager);
+        BPTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
         Ok(cid)    
     }
 
     fn push<Pager: IPager + ? Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
         let cid = self.as_mut_cells().push()?;
-        self[&cid].initialise(key, value, pager);
+        BPTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
         Ok(cid)
     }
 
     pub fn split_into<'a, P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> PagerResult<&Value> where P2: AsMutPageSlice {
         let at = self.len().div(2);
+        println!("split node at {at}");
         self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
+
+        println!("{0} | {1}", self.len(), dest.len());
+        
         let key = self.iter().last().map(|cell| cell.borrow_key()).unwrap();
         Ok(key)
     }
@@ -228,6 +227,10 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
 
     pub fn len(&self) -> CellCapacity {
         self.as_cells().len()
+    }
+
+    pub fn capacity(&self) -> CellCapacity {
+        self.as_cells().capacity()
     }
 
     pub fn borrow_cell(&self, cid: &CellId) -> Option<&BPTreeLeafCell<PageSlice>> {
@@ -293,29 +296,37 @@ where Slice: AsRefPageSlice + ?Sized
     }
 
     pub fn borrow_key(&self) -> &Value {
-        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
-        let bytes = kind.get_slice(self.as_cell().borrow_content());
-        unsafe {
-            std::mem::transmute(bytes)
-        }
+        let slice = &self.as_cell().borrow_content()[self.key_range()];
+        Value::from_ref(slice)
     }
 
     pub fn borrow_value(&self) -> &Var<PageSlice> {
-        let value_bytes = &self.as_cell().borrow_content()[size_of::<Numeric>()..];        
-        unsafe {
-            std::mem::transmute(value_bytes)
-        }     
+        let bytes = &self.as_cell().borrow_content()[self.value_range()];
+        Var::from_ref_slice(bytes)   
     }
-    
+
+    fn value_range(&self) -> RangeFrom<usize> {
+        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
+        let full_size = kind.full_size().unwrap();
+        return full_size..    
+    }
+
+    fn key_range(&self) -> Range<usize> {
+        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
+        let full_size = kind.full_size().unwrap();
+        return 0..full_size
+    }
+
+
 }
 
-impl<Slice> BPTreeLeafCell<Slice> 
-where Slice: AsMutPageSlice + ?Sized
-{
+impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
     /// Initialise la cellule
-    pub fn initialise<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) {
-        self.as_mut_cell().borrow_mut_content().as_mut_bytes()[0] = (*key.kind()).into();
-        self.borrow_mut_key().set(key);
+    pub fn initialise<Pager: IPager + ?Sized>(cell: &mut Self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
+        cell.as_mut_cell().borrow_mut_content().as_mut_bytes()[0] = (*key.kind()).into();
+        cell.borrow_mut_key().set(key);
+        cell.borrow_mut_value().set(value, pager)?;
+        Ok(())
     }
 
     pub fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
@@ -323,18 +334,14 @@ where Slice: AsMutPageSlice + ?Sized
     }
 
     pub fn borrow_mut_key(&mut self) -> &mut Value {
-        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
-        unsafe {
-            std::mem::transmute(kind.get_mut_slice(self.as_mut_cell().borrow_mut_content()))
-        }
+        let range = self.key_range();
+        let bytes = &mut self.as_mut_cell().borrow_mut_content()[range];
+        Value::from_mut(bytes)
     }
     
     pub fn borrow_mut_value(&mut self) -> &mut Var<PageSlice> {
-        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
-        let value_bytes = &mut self.as_mut_cell().borrow_mut_content()[kind.full_size().unwrap()..];
-        
-        unsafe {
-            std::mem::transmute(value_bytes)
-        }
+        let range = self.value_range();
+        let bytes = &mut self.as_mut_cell().borrow_mut_content()[range];
+        Var::from_mut_slice(bytes)   
     }
 }

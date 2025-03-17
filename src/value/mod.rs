@@ -193,6 +193,19 @@ impl Deref for Value {
     }
 }
 impl Value {
+    pub(crate) fn from_ref(bytes: &[u8]) -> &Self {
+        unsafe {
+            std::mem::transmute(bytes)
+        }
+    }
+
+    pub(crate) fn from_mut(bytes: &mut [u8]) -> &mut Self {
+        unsafe {
+            std::mem::transmute(bytes)
+        }
+    }
+
+
     pub fn kind(&self) -> &ValueKind {
         unsafe {
             std::mem::transmute(&self.0[0])
@@ -244,7 +257,14 @@ impl Value {
     }
 }
 
+/// Valeur entièrement détenue par l'objet (Owned value)
 pub struct ValueBuf(Vec<u8>);
+
+impl ValueBuf {
+    pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
 
 impl PartialEq<Self> for ValueBuf {
     fn eq(&self, other: &Self) -> bool {

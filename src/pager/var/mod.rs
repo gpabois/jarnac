@@ -1,20 +1,62 @@
 pub mod stream;
 
-use std::io::{Cursor, Read, Write};
+use std::{borrow::Borrow, io::{Cursor, Read, Write}, ops::Range};
 
 use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
 use zerocopy_derive::*;
+
+
+use crate::value::{Value, ValueBuf};
 
 use super::{
     page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager, PagerResult
 };
 
+pub enum VarValue<'data> {
+    Unspilled(&'data Value),
+    Spilled(ValueBuf)
+}
+
+impl VarValue<'_> {
+    pub fn to_owned(self) -> ValueBuf {
+        Borrow::<Value>::borrow(&self).to_owned()
+    }
+}
+
+impl Borrow<Value> for VarValue<'_> {
+    fn borrow(&self) -> &Value {
+        match self {
+            VarValue::Unspilled(value) => value,
+            VarValue::Spilled(value_buf) => &value_buf,
+        }
+    }
+}
+
 /// Représente une valeur de taille variable.
 pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice + ?Sized;
 
 impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
-    pub fn size(&self) -> u64 {
+    pub const HEADER_RANGE: Range<usize> = 1..(1+size_of::<VarHeader>());
+    pub const DATA_BASE: usize = 1+size_of::<VarHeader>();
+
+    pub(crate) fn from_ref_slice(slice: &Slice) -> &Self {
+        unsafe {
+            std::mem::transmute(slice)
+        }
+    }
+
+    pub fn len(&self) -> u64 {
         self.as_header().total_size
+    }
+
+    pub fn get<Pager>(&self, pager: &Pager) -> PagerResult<VarValue<'_>> where Pager: IPager {
+        if self.has_spilled() {
+            let mut buf = Vec::<u8>::default();
+            read_dynamic_sized_data(self.as_header(), &mut buf, self.borrow_content(), pager)?;
+            Ok(VarValue::Spilled(ValueBuf::from_bytes(buf)))
+        } else {
+            Ok(VarValue::Unspilled(Value::from_ref(self.borrow_content())))
+        }
     }
     
     pub fn has_spilled(&self) -> bool {
@@ -27,23 +69,43 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
         Ok(())
     }   
 
+    fn data_range(&self) -> Range<usize> {
+        let in_page_size = usize::try_from(self.as_header().get_in_page_size()).unwrap();
+        Self::DATA_BASE..(Self::DATA_BASE + in_page_size)
+    }
+
     fn borrow_content(&self) -> &PageSlice {
-        &self.0.as_ref()[size_of::<VarHeader>()..]
+        &self.0.as_ref()[self.data_range()]
     }
 
     fn as_header(&self) -> &VarHeader {
         self.as_ref()
     }
 }
+
 impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
-    pub fn set<Pager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> where Pager: IPager + ?Sized {
-        let in_page_bytes = &mut self.0.as_mut()[size_of::<VarHeader>()..];
-        *self.as_mut_header() = write_var_data(data, in_page_bytes, pager)?;
+    pub(crate) fn from_mut_slice(slice: &mut Slice) -> &mut Self {
+        unsafe {
+            std::mem::transmute(slice)
+        }
+    }
+
+    pub fn set<Pager>(&mut self, data: &Value, pager: &Pager) -> PagerResult<()> where Pager: IPager + ?Sized {
+        *self.as_mut_header() = write_var_data(
+            data, 
+            self.borrow_mut_data_in_page_space(), 
+            pager
+        )?;
         Ok(())
     }
 
     fn borrow_mut_content(&mut self) -> &mut PageSlice {
-        &mut self.0.as_mut()[size_of::<VarHeader>()..]
+        let range = self.data_range();
+        &mut self.0.as_mut()[range]
+    }
+
+    fn borrow_mut_data_in_page_space(&mut self) -> &mut PageSlice {
+        &mut self.0.as_mut()[Self::DATA_BASE..]
     }
 
     fn as_mut_header(&mut self) -> &mut VarHeader {
@@ -59,54 +121,16 @@ impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
 
 impl<Slice> AsRef<VarHeader> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn as_ref(&self) -> &VarHeader {
-        let bytes = &self.0.as_ref()[0..size_of::<VarHeader>()];
-        VarHeader::ref_from_bytes(bytes).unwrap()
+        VarHeader::ref_from_bytes(&self.0.as_ref()[Self::HEADER_RANGE]).unwrap()
     }
 }
 
 impl<Slice> AsMut<VarHeader> for Var<Slice> where Slice: AsMutPageSlice + ?Sized {
     fn as_mut(&mut self) -> &mut VarHeader {
-        let bytes = &mut self.0.as_mut()[0..size_of::<VarHeader>()];
-        VarHeader::mut_from_bytes(bytes).unwrap()
+        VarHeader::mut_from_bytes(&mut self.0.as_mut()[Self::HEADER_RANGE]).unwrap()
     }
 }
 
-
-#[derive(FromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-pub struct VarData {
-    header: VarHeader,
-    in_page: [u8]
-}
-
-impl AsRef<[u8]> for VarData {
-    fn as_ref(&self) -> &[u8] {
-        &self.in_page
-    }
-}
-
-impl VarData {
-    pub fn size(&self) -> u64 {
-        self.header.total_size
-    }
-    
-    /// Est-ce que le contenu de la donnée a débordé sur d'autres pages ?
-    pub fn has_spilled(&self) -> bool {
-        self.header.has_spilled()
-    }
-
-    /// Ecris la donnée.
-    pub fn set<Pager: IPager>(&mut self, data: &[u8], pager: &Pager) -> PagerResult<()> {
-        self.header = write_var_data(data, &mut self.in_page, pager)?;
-        Ok(())
-    }
-
-    pub fn copy_into(&self, dest: &mut VarData) -> PagerResult<()> {
-        dest.header = self.header.clone();
-        dest.in_page.copy_from_slice(&self.in_page);
-        Ok(())
-    }
-}
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Clone)]
 #[repr(C, packed)]
@@ -143,7 +167,7 @@ pub struct SpillPage<Page>(Page) where Page: AsRefPageSlice;
 impl<Page> SpillPage<Page> where Page: AsRefPageSlice {
     pub fn try_from(page: Page) -> PagerResult<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into().unwrap();
-        PageKind::Overflow.assert(kind).map(|_| Self(page))
+        PageKind::Spill.assert(kind).map(|_| Self(page))
     }
 
     pub fn as_data(&self) -> &SpillPageData {
@@ -174,7 +198,7 @@ impl<Page> AsRef<[u8]> for SpillPage<Page> where Page: AsRefPageSlice {
 #[repr(u8)]
 #[allow(dead_code)]
 enum SpillKind {
-    Spill = PageKind::Overflow as u8
+    Spill = PageKind::Spill as u8
 }
 
 #[derive(TryFromBytes, KnownLayout, Immutable)]
@@ -207,7 +231,7 @@ impl SpillPageData {
     where Page: AsMutPageSlice
     {
         page.as_mut().fill(0);
-        page.as_mut().as_mut_bytes()[0] = PageKind::Overflow as u8;
+        page.as_mut().as_mut_bytes()[0] = PageKind::Spill as u8;
         Self::try_mut_from_bytes(page.as_mut()).unwrap()
     }
 

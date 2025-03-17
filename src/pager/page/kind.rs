@@ -11,7 +11,7 @@ pub enum PageKind {
     /// Une page libre (cf [crate::pager::free])
     Free = 0,
     /// Une page de débordement (cf [crate::pager::spill])
-    Overflow = 1,
+    Spill = 1,
     /// La page d'entrée d'un arbre B+ (cf [crate::bp_tree::BPlusTreePage])
     BPlusTree = 2,
     /// La page représentant un noeud intérieur d'un arbre B+ (cf [crate::bp_tree::BPTreeInteriorPage])
@@ -24,7 +24,7 @@ impl Display for PageKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PageKind::Free => write!(f, "free"),
-            PageKind::Overflow => write!(f, "spill"),
+            PageKind::Spill => write!(f, "spill"),
             PageKind::BPlusTree => write!(f, "b+ tree"),
             PageKind::BPlusTreeInterior => write!(f, "b+ tree interior"),
             PageKind::BPlusTreeLeaf => write!(f, "b+ tree leaf"),
@@ -49,7 +49,7 @@ impl TryFrom<u8> for PageKind {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Free),
-            1 => Ok(Self::Overflow),
+            1 => Ok(Self::Spill),
             2 => Ok(Self::BPlusTree),
             3 => Ok(Self::BPlusTreeInterior),
             4 => Ok(Self::BPlusTreeLeaf),

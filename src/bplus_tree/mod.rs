@@ -4,22 +4,24 @@
 pub mod cursor;
 mod interior;
 mod leaf;
+mod descriptor;
 
+
+use descriptor::{BPTreeDescriptor, BPlusTreeHeader};
 use interior::*;
 use leaf::*;
 
-use zerocopy::{IntoBytes, TryFromBytes};
+use zerocopy::TryFromBytes;
 use zerocopy_derive::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
     pager::{
-        cell::{CellHeader, CellPageHeader, GlobalCellId},
+        cell::{CellHeader, CellPageHeader, GlobalCellId}, 
         page::{
-            AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, RefPage
-        },
-        IPager, PagerResult,
+            AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPage
+        }, var::VarHeader, IPager, PagerResult
     },
-    value::{IntoValueBuf, Value, ValueKind},
+    value::{Value, ValueKind},
 };
 
 pub type BPTreeKey = Value;
@@ -58,7 +60,8 @@ fn compute_interior_cell_space_size(key: ValueKind, k: u16) -> u16 {
 fn compute_leaf_cell_size(key: ValueKind, data_size: u16) -> u16 {
     let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
     let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
-    cell_header + key_size + data_size
+    let value_var_header: u16 = size_of::<VarHeader>().try_into().unwrap();
+    cell_header + key_size + data_size + value_var_header
 }
 
 #[inline(always)]
@@ -109,8 +112,9 @@ fn compute_b_plus_tree_parameters(
             .map(|k| (k, max_leaf_value_size(key, k.into(), page_size)))
             .map(|(k, mut data_size)| {
                 let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
+                let var_size = u16::try_from(size_of::<VarHeader>()).unwrap();
                 let cell_header = u16::try_from(size_of::<CellHeader>()).unwrap();
-                let header = key_size + cell_header;
+                let header = key_size + cell_header + var_size;
                 data_size = (header + data_size) - header;
                 (k, data_size)
             })
@@ -128,13 +132,12 @@ fn compute_b_plus_tree_parameters(
     let leaf_cell_size = compute_leaf_cell_size(key, data_size) - cell_header;
 
     BPlusTreeHeader {
-        kind: BPlusTreePageKind::Kind,
         interior_cell_size,
         leaf_cell_size,
         key,
         value,
         data_size,
-        k: u16::try_from(k).unwrap(),
+        k,
         root: None.into(),
     }
 }
@@ -188,8 +191,10 @@ pub struct BPlusTree<'pager, Pager: IPager + ?Sized, Page: 'pager>
 where
     Page: AsRefPageSlice,
 {
+    /// Le pager où sont stockées les noeuds de l'arbre
     pager: &'pager Pager,
-    page: Page,
+    /// Descripteur de l'arbre, contient les métadonnées nécessaires à sa manipulation
+    desc: BPTreeDescriptor<Page>,
 }
 
 impl<'pager, Pager, Page> IRefBPlusTree for BPlusTree<'pager, Pager, Page>
@@ -278,7 +283,7 @@ where
         }
     }
 
-    fn borrow_cell(&self, gcid: &BPlusTreeCellId) -> PagerResult<BPTreeLeafCell<RefPage<'_>>> {
+    fn borrow_cell(&self, _gcid: &BPlusTreeCellId) -> PagerResult<BPTreeLeafCell<RefPage<'_>>> {
         todo!()
     }
 }
@@ -297,39 +302,16 @@ where
         key_kind: &ValueKind,
         value_kind: &ValueKind,
     ) -> PagerResult<Self> {
+        assert!(key_kind.full_size().is_some(), "the key must be of a sized-type");
+
         // on génère les données qui vont bien pour gérer notre arbre B+
         let header = compute_b_plus_tree_parameters(pager.page_size(), *key_kind, *value_kind);
 
-        let pid = pager.new_page()?;
+        let page = pager.new_page()
+            .and_then(|pid| pager.borrow_mut_page(&pid))
+            .and_then(|page| BPTreeDescriptor::new(page, header))?;
 
-        let mut page = pager.borrow_mut_page(&pid)?;
-        page.fill(0);
-        page.as_mut_bytes()[0] = PageKind::BPlusTree as u8;
-
-        let bp_page = BPlusTreePage::try_mut_from_bytes(&mut page).unwrap();
-        bp_page.header = header;
-
-        Ok(Self { pager, page })
-    }
-}
-
-impl<Pager, Page> AsRef<BPlusTreePage> for BPlusTree<'_, Pager, Page>
-where
-    Pager: IPager + ?Sized,
-    Page: AsRefPageSlice,
-{
-    fn as_ref(&self) -> &BPlusTreePage {
-        BPlusTreePage::try_ref_from_bytes(self.page.as_ref()).unwrap()
-    }
-}
-
-impl<Pager, Page> AsMut<BPlusTreePage> for BPlusTree<'_, Pager, Page>
-where
-    Pager: IPager + ?Sized,
-    Page: AsMutPageSlice,
-{
-    fn as_mut(&mut self) -> &mut BPlusTreePage {
-        BPlusTreePage::try_mut_from_bytes(self.page.as_mut()).unwrap()
+        Ok(Self { pager, desc: page })
     }
 }
 
@@ -338,6 +320,10 @@ where
     Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
+    pub fn desc(&self) -> &BPTreeDescriptor<Page> {
+        &self.desc
+    }
+
     fn node_kind(&self, pid: &PageId) -> PagerResult<BPTreeNodeKind> {
         let page = self.pager.borrow_page(pid)?;
         let node_page = BPTreeNodePageData::try_ref_from_bytes(&page)?;
@@ -345,7 +331,7 @@ where
     }
 
     fn search_head_leaf(&self) -> PagerResult<Option<PageId>> {
-        let mut current: Option<PageId> = self.as_ref().header.root.into();
+        let mut current = self.desc.root();
 
         while let Some(pid) = current.as_ref() {
             match self.node_kind(&pid)? {
@@ -367,10 +353,10 @@ where
 
     /// Recherche une feuille contenant potentiellement la clé
     fn search_leaf(&self, key: &Value) -> PagerResult<Option<PageId>> {
-        let mut current: Option<PageId> = self.as_ref().header.root.into();
+        let mut current: Option<PageId> = self.desc.root();
 
         // Le type de la clé passée en argument doit être celle supportée par l'arbre.
-        assert_eq!(key.kind(), &self.as_ref().header.key, "wrong key type");
+        assert_eq!(key.kind(), &self.desc.key_kind(), "wrong key type");
 
         while let Some(pid) = current.as_ref() {
             if self.node_kind(pid)? == BPTreeNodeKind::Leaf {
@@ -399,35 +385,33 @@ where
     Page: AsMutPageSlice,
 {
     /// Insère une nouvelle clé/valeur
-    pub fn insert<K: IntoValueBuf, V: IntoValueBuf>(&mut self, key: K, value: V) -> PagerResult<()> {
-        let key = key.into_value_buf();
-        let value = value.into_value_buf();
+    pub fn insert(&mut self, key: &Value, value: &Value) -> PagerResult<()> {
 
-        assert_eq!(key.kind(), &self.as_ref().header.key, "wrong key kind");
-        assert_eq!(value.kind(), &self.as_ref().header.value, "wrong value kind");
+        assert_eq!(key.kind(), &self.desc.key_kind(), "wrong key kind");
+        assert_eq!(value.kind(), &self.desc.value_kind(), "wrong value kind");
 
-        let pid = match self.search_leaf(&key)? {
+        let leaf_pid = match self.search_leaf(&key)? {
             Some(pid) => pid,
             None => {
                 let leaf_pid = self.insert_leaf()?;
-                self.set_root(Some(leaf_pid));
+                self.desc.set_root(Some(leaf_pid));
                 leaf_pid
             }
         };
 
-        let mut leaf = self.borrow_mut_leaf(&pid)?;
+        let mut leaf = self.borrow_mut_leaf(&leaf_pid)?;
 
         // si la feuille est pleine on va la diviser en deux.
         if leaf.is_full() {
             self.split(leaf.as_mut())?;
         }
 
-        leaf.insert(&key, &value, self.pager)
+
+        leaf.insert(key, value, self.pager).inspect(|_| {
+            println!("{0} / {1} [{2}]", leaf.len(), leaf.capacity(), self.desc.k());
+        })
     }
 
-    fn set_root(&mut self, root: Option<PageId>) {
-        self.as_mut().header.root = root.into();
-    }
 }
 
 impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
@@ -464,7 +448,7 @@ where
                     Some(parent_id) => parent_id,
                     None => {
                         let pid = self.insert_interior()?;
-                        self.as_mut().header.root = Some(pid).into();
+                        self.desc.set_root(Some(pid));
                         left.set_parent(Some(pid));
                         pid
                     }
@@ -483,7 +467,7 @@ where
             }
 
             BPTreeNodeKind::Leaf => {
-                let mut left: BPTreeLeaf<_> = BPTreeLeaf::try_from(node.into_inner())?;
+                let mut left = BPTreeLeaf::try_from(node.into_inner())?;
 
                 // On ne divise pas un noeud qui n'est pas plein.
                 if !left.is_full() {
@@ -503,7 +487,7 @@ where
                     Some(parent_id) => parent_id,
                     None => {
                         let pid = self.insert_interior()?;
-                        self.as_mut().header.root = Some(pid).into();
+                        self.desc.set_root(Some(pid));
                         left.set_parent(Some(pid));
                         pid
                     }
@@ -572,8 +556,8 @@ where
 
         BPTreeLeaf::new(
             page,
-            self.as_ref().header.k.try_into().unwrap(),
-            self.as_ref().header.interior_cell_size.into(),
+            self.desc.k(),
+            self.desc.leaf_cell_size()
         )?;
 
         Ok(pid)
@@ -586,47 +570,14 @@ where
 
         BPTreeInterior::new(
             page,
-            self.as_ref().header.k.try_into().unwrap(),
-            self.as_ref().header.leaf_cell_size.into(),
+            self.desc.k(),
+            self.desc.interior_cell_size()
         )?;
 
         Ok(pid)
     }
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable)]
-#[repr(u8)]
-enum BPlusTreePageKind {
-    Kind = PageKind::BPlusTree as u8,
-}
-
-#[derive(TryFromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-pub struct BPlusTreeHeader {
-    kind: BPlusTreePageKind,
-    /// Type de la clé
-    key: ValueKind,
-    /// Type de la valeur
-    value: ValueKind,
-    /// Taille d'une cellule d'une feuille
-    leaf_cell_size: u16,
-    /// Taille d'une cellule d'un noeud intérieur
-    interior_cell_size: u16,
-    /// La taille de la donnée stockable dans une cellule d'une feuille
-    data_size: u16,
-    /// Nombre maximum de clés dans l'arbre B+
-    k: u16,
-    /// Pointeur vers la racine
-    root: OptionalPageId,
-}
-
-#[derive(TryFromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-/// La page contenant la définition de l'arbre B+.
-pub struct BPlusTreePage {
-    header: BPlusTreeHeader,
-    body: [u8],
-}
 
 #[derive(TryFromBytes, KnownLayout, Immutable, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
@@ -685,7 +636,7 @@ mod tests {
 
     use crate::{
         pager::fixtures::fixture_new_pager,
-        value::U64
+        value::{IntoValueBuf, U64}
     };
 
     use super::BPlusTree;
@@ -694,14 +645,13 @@ mod tests {
     pub fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
         let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
-        
-        for i in 0..100u64 {
+
+        for i in 0..91u64 {
             tree.insert(
-                i,
-                1234u64
+                &i.into_value_buf(),
+                &1234u64.into_value_buf()
             )?;
         }
-
 
         Ok(())
     }
