@@ -100,7 +100,7 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
             .freelist
             .borrow_mut()
             .pop()
-            .unwrap_or_else(|| PageId::from(self.pages.borrow().len()));
+            .unwrap_or_else(|| PageId::from(self.pages.borrow().len() + 1));
 
         let mut file = self
             .file

@@ -12,6 +12,13 @@ use super::{location::PageLocation, size::PageSize};
 /// Les valeurs vont de 1 à [u64::MAX]
 pub struct PageId(pub(super)NonZero<u64>);
 
+impl std::fmt::Display for PageId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PageId#")?;
+        self.0.fmt(f)
+    }
+}
+
 impl PageId {
     pub(crate) fn new(value: u64) -> Self {
         Self(NonZero::new(value).expect("page id must be > 0"))
@@ -66,12 +73,6 @@ impl From<u64> for PageId {
 impl Into<u64> for PageId {
     fn into(self) -> u64 {
         self.0.get()
-    }
-}
-
-impl std::fmt::Display for PageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
     }
 }
 

@@ -623,11 +623,11 @@ mod tests {
     use super::{BPlusTree, IRefBPlusTree};
 
     #[test]
-    pub fn test_insert() -> Result<(), Box<dyn Error>> {
+    fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
         let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
 
-        for i in 0..91u64 {
+        for i in 0..500u64 {
             tree.insert(
                 &i.into_value_buf(),
                 &1234u64.into_value_buf()
@@ -635,7 +635,7 @@ mod tests {
         }
 
         let var = tree.search(&10_u64.into_value_buf())?.unwrap();
-        let value = var.try_borrow()?.try_as_u64()?.to_owned();
+        let value = var.get(pager.as_ref())?.try_as_u64()?.to_owned();
 
         assert_eq!(value, 1234u64);
 

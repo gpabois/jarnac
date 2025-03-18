@@ -140,6 +140,25 @@ impl ValueKind {
 }
 
 pub struct Value([u8]);
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match *self.kind() {
+            U8 => self.try_as_u8().unwrap().fmt(f),
+            U16 => self.try_as_u16().unwrap().fmt(f),
+            U32 => self.try_as_u32().unwrap().fmt(f),
+            U64 => self.try_as_u64().unwrap().fmt(f),
+            U128 => self.try_as_u128().unwrap().fmt(f),
+            I8 => self.try_as_i8().unwrap().fmt(f),
+            I16 => self.try_as_i16().unwrap().fmt(f),
+            I32 => self.try_as_i32().unwrap().fmt(f),
+            I64 => self.try_as_i64().unwrap().fmt(f),
+            I128 => self.try_as_i128().unwrap().fmt(f),
+            _ => write!(f, ":unknown:")
+        }
+    }
+}
+
 impl From<&PageSlice> for &Value {
     fn from(value: &PageSlice) -> Self {
         unsafe {
@@ -821,9 +840,11 @@ mod tests {
     fn test_partial_ord() {
         let v1 = 10u8.into_value_buf();
         let v2 = 11u8.into_value_buf();
+        let v4 = 12u8.into_value_buf();
         let v3 = 11u16.into_value_buf();
 
         assert!(v1 <= v2, "v2 must be >= v1");
+        assert!(v4 > v2, "v4 must be > v2");
         assert!(!(v1 <= v3), "v3 must not be compared to v1 as they are not of the same kind");
     }
 }

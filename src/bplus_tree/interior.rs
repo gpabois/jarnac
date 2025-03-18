@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, ops::{DerefMut, Div, Index, IndexMut, Range}};
+use std::{cmp::Ordering, fmt::Display, ops::{DerefMut, Div, Index, IndexMut, Range}};
 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -9,6 +9,26 @@ pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeInteriorHeader>());
 
 pub struct BPTreeInterior<Page>(CellPage<Page>) where Page: AsRefPageSlice;
+
+impl<Page> Display for BPTreeInterior<Page> where Page: AsRefPageSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BPTreeInterior[")?;
+        self.iter()
+        .try_for_each(|cell| {
+            cell.left().unwrap().fmt(f)?;
+            write!(f, " | ")?;
+            cell.borrow_key().fmt(f)?;
+            write!(f, " | ")
+        })?;
+
+        if let Some(tail) = self.tail() {
+            write!(f, "{tail}")?;
+        }
+
+        write!(f, "]")?;
+        Ok(())
+    }
+}
 
 impl<Page> Index<&CellId> for BPTreeInterior<Page> where Page: AsRefPageSlice {
     type Output = BPTreeInteriorCell<PageSlice>;
@@ -80,8 +100,7 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
             Some(existing_cid) => {
                 let cid = self.as_mut_cells().insert_after(&existing_cid)?;
                 let cell = &mut self[&cid];
-                cell.initialise(key, left);
-                self[&existing_cid].set_left(Some(right));
+                cell.initialise(key, right);
             },
 
         };
@@ -139,8 +158,8 @@ impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
     pub fn search_child(&self, key: &Value) -> PageId 
     {       
         let maybe_child: Option<PageId> = self.iter()
-        .filter(|&interior| interior <= key)
-        .last()
+        .filter(|&interior| interior.borrow_key() >= key)
+        .next()
         .map(|interior| interior.left().clone())
         .unwrap_or_else(|| self.as_header().tail())
         .into();
@@ -336,8 +355,17 @@ mod tests {
         let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
         
         let mut interior = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
-        interior.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;
-        interior.search_child(&ValueBuf::from(100_u64));
+        interior.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;   
+        interior.insert(PageId::new(100), &ValueBuf::from(110_u64), PageId::new(300))?;
+        interior.insert(PageId::new(200), &ValueBuf::from(120_u64), PageId::new(400))?;
+
+        println!("{interior}");
+        
+        let pid = interior.search_child(&ValueBuf::from(110_u64));
+        assert_eq!(pid, PageId::new(300));
+
+        let pid = interior.search_child(&ValueBuf::from(300_u64));
+        assert_eq!(pid, PageId::new(400));
 
         Ok(())
     }
