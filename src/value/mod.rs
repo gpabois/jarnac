@@ -5,7 +5,7 @@
 //! Signed integers are between 6-10;
 //! Floats are between 11-12;
 
-use std::{borrow::Borrow, fmt::Display, io::Write, ops::Deref};
+use std::{borrow::Borrow, collections::HashMap, fmt::Display, io::Write, ops::Deref};
 
 use zerocopy::{FromBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -25,6 +25,8 @@ pub const I64: ValueKind    = ValueKind(9);
 pub const I128: ValueKind   = ValueKind(10);
 pub const F32: ValueKind    = ValueKind(11);
 pub const F64: ValueKind    = ValueKind(12);
+
+pub const STR: ValueKind    = ValueKind(13);
 
 const ARRAY_KIND_FLAG: u8 = 128;
 
@@ -57,6 +59,7 @@ impl Display for ValueKind {
             I128 => f.write_str("i128"),
             F32 => f.write_str("f32"),
             F64 => f.write_str("f64"),
+            STR => f.write_str("str"),
             _ => f.write_str("unknown")
         }
     }
@@ -459,6 +462,14 @@ impl From<i128> for ValueBuf {
     fn from(value: i128) -> Self {
         let mut buf = vec![I128.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
+        Self(buf)
+    }
+}
+
+impl From<&str> for ValueBuf {
+    fn from(value: &str) -> Self {
+        let mut buf = vec![STR.into()];
+        buf.write_all(value.as_bytes()).unwrap();
         Self(buf)
     }
 }
