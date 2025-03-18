@@ -1,7 +1,7 @@
 //! Arbre B+
 //!
 //! Le système permet d'indexer une valeur de taille variable ou fixe avec une clé signée/non-signée d'une taille d'au plus 64 bits (cf [crate::value::numeric]).
-pub mod cursor;
+//pub mod cursor;
 mod interior;
 mod leaf;
 mod descriptor;
@@ -18,8 +18,8 @@ use crate::{
     pager::{
         cell::{CellHeader, CellPageHeader, GlobalCellId}, 
         page::{
-            AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPage
-        }, var::VarHeader, IPager, PagerResult
+            AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPage, RefPageSlice
+        }, var::{Var, VarHeader}, IPager, PagerResult
     },
     value::{Value, ValueKind},
 };
@@ -146,9 +146,9 @@ fn compute_b_plus_tree_parameters(
 pub type BPlusTreeCellId = GlobalCellId;
 
 /// Trait permettant de manipuler un arbre B+ en lecture.
-pub trait IRefBPlusTree {
+pub trait IRefBPlusTree<'pager> {
     /// Cherche une cellule clé/valeur à partir de la clé passée en argument.
-    fn search(&self, key: &Value) -> PagerResult<Option<BPlusTreeCellId>>;
+    fn search(&self, key: &Value) -> PagerResult<Option<Var<RefPageSlice<'pager>>>>;
 
     /// Cherche la cellule la plus proche dont la valeur est supérieure ou égale.
     fn search_nearest_ceil(&self, key: &Value) -> PagerResult<Option<BPlusTreeCellId>> {
@@ -174,16 +174,9 @@ pub trait IRefBPlusTree {
 }
 
 /// Trait permettant de manipuler un arbre B+ en écriture.
-pub trait IMutBPlusTree: IRefBPlusTree {
+pub trait IMutBPlusTree<'pager>: IRefBPlusTree<'pager> {
     /// Insère une nouvelle valeur
     fn insert(&mut self, key: &Value, value: &Value) -> PagerResult<()>;
-}
-
-/// Trait permettant d'obtenir une référence sur un arbre B+
-///
-/// Le trait permet d'éviter des types complexes.
-pub trait AsBPlusTreeRef: AsRef<Self::BPlusTree> {
-    type BPlusTree: IRefBPlusTree;
 }
 
 /// Arbre B+
@@ -197,28 +190,19 @@ where
     desc: BPTreeDescriptor<Page>,
 }
 
-impl<'pager, Pager, Page> IRefBPlusTree for BPlusTree<'pager, Pager, Page>
+impl<'pager, Pager, Page> IRefBPlusTree<'pager> for BPlusTree<'pager, Pager, Page>
 where
     Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
-    fn search(&self, key: &BPTreeKey) -> PagerResult<Option<GlobalCellId>> {
+    fn search(&self, key: &BPTreeKey) -> PagerResult<Option<Var<RefPageSlice<'pager>>>> {
         let maybe_pid = self.search_leaf(key)?;
 
-        Ok(match maybe_pid {
-            Some(pid) => {
-                let leaf: BPTreeLeaf<_> = self.pager.borrow_page(&pid).and_then(BPTreeLeaf::try_from)?;
-
-                let gid = leaf
-                    .iter()
-                    .filter(|&cell| cell == key)
-                    .map(|cell| GlobalCellId::new(pid, cell.cid()))
-                    .next();
-
-                gid
-            }
-            None => None,
-        })
+        if let Some(pid) = maybe_pid {
+            return Ok(self.borrow_leaf(&pid)?.into_value(key))
+        }
+        
+        Ok(None)
     }
 
     fn search_nearest_floor(&self, key: &Value) -> PagerResult<Option<BPlusTreeCellId>> {
@@ -339,7 +323,7 @@ where
                     let interior = self.borrow_interior(pid)?;
                     current = interior
                         .iter()
-                        .flat_map(|cell| cell.borrow_left().clone())
+                        .flat_map(|cell| cell.left().clone())
                         .next();
                 }
                 BPTreeNodeKind::Leaf => {
@@ -406,10 +390,7 @@ where
             self.split(leaf.as_mut())?;
         }
 
-
-        leaf.insert(key, value, self.pager).inspect(|_| {
-            println!("{0} / {1} [{2}]", leaf.len(), leaf.capacity(), self.desc.k());
-        })
+        leaf.insert(key, value, self.pager)
     }
 
 }
@@ -639,7 +620,7 @@ mod tests {
         value::{IntoValueBuf, U64}
     };
 
-    use super::BPlusTree;
+    use super::{BPlusTree, IRefBPlusTree};
 
     #[test]
     pub fn test_insert() -> Result<(), Box<dyn Error>> {
@@ -652,6 +633,11 @@ mod tests {
                 &1234u64.into_value_buf()
             )?;
         }
+
+        let var = tree.search(&10_u64.into_value_buf())?.unwrap();
+        let value = var.try_borrow()?.try_as_u64()?.to_owned();
+
+        assert_eq!(value, 1234u64);
 
         Ok(())
     }

@@ -1,7 +1,7 @@
 use std::ops::DerefMut;
 
 use crate::{pager::{page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSize}, PagerResult}, value::ValueKind};
-use zerocopy::{FromBytes, IntoBytes};
+use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
 pub struct BPTreeDescriptor<Page>(Page) where Page: AsRefPageSlice;

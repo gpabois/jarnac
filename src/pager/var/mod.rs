@@ -1,6 +1,6 @@
 pub mod stream;
 
-use std::{borrow::Borrow, io::{Cursor, Read, Write}, ops::Range};
+use std::{borrow::Borrow, io::{Cursor, Read, Write}, ops::{Deref, Range}};
 
 use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
 use zerocopy_derive::*;
@@ -9,7 +9,7 @@ use zerocopy_derive::*;
 use crate::value::{Value, ValueBuf};
 
 use super::{
-    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager, PagerResult
+    error::{PagerError, PagerErrorKind}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager, PagerResult
 };
 
 pub enum VarValue<'data> {
@@ -20,6 +20,14 @@ pub enum VarValue<'data> {
 impl VarValue<'_> {
     pub fn to_owned(self) -> ValueBuf {
         Borrow::<Value>::borrow(&self).to_owned()
+    }
+}
+
+impl Deref for VarValue<'_> {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        self.borrow()
     }
 }
 
@@ -35,6 +43,12 @@ impl Borrow<Value> for VarValue<'_> {
 /// Représente une valeur de taille variable.
 pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice + ?Sized;
 
+impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
+    pub fn from_owned_slice(slice: Slice) -> Self {
+        Self(slice)
+    }
+}
+
 impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     pub const HEADER_RANGE: Range<usize> = 1..(1+size_of::<VarHeader>());
     pub const DATA_BASE: usize = 1+size_of::<VarHeader>();
@@ -49,7 +63,17 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
         self.as_header().total_size
     }
 
-    pub fn get<Pager>(&self, pager: &Pager) -> PagerResult<VarValue<'_>> where Pager: IPager {
+    /// Essaye de récupérer la valeur si cette dernière n'a pas débordée ailleurs.
+    pub fn try_borrow(&self) -> PagerResult<&Value> {
+        if !self.has_spilled() {
+            Ok(Value::from_ref(self.borrow_content()))
+        } else {
+            Err(PagerError::new(PagerErrorKind::SpilledVar))
+        }
+    }
+
+    /// Récupère la valeur qui peut avoir débordée ailleurs.
+    pub fn get<Pager>(&self, pager: &Pager) -> PagerResult<VarValue<'_>> where Pager: IPager + ?Sized {
         if self.has_spilled() {
             let mut buf = Vec::<u8>::default();
             read_dynamic_sized_data(self.as_header(), &mut buf, self.borrow_content(), pager)?;
@@ -274,7 +298,7 @@ pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) 
 }
 
 /// Lit les données d'une taille dynamique dans une région d'une page.
-pub fn read_dynamic_sized_data<Pager: IPager, W: Write>(
+pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
     header: &VarHeader,
     dest: &mut W,
     src: &[u8],

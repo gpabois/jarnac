@@ -108,7 +108,7 @@ impl<Idx> PageSliceIndex for Idx where Idx: SliceIndex<[u8], Output = [u8]>{}
 
 /// Transforme une référence sur une page en référence sur une tranche de la page.
 pub trait IntoRefPageSlice {
-    type RefPageSlice: AsRefPageSlice;
+    type RefPageSlice: AsRefPageSlice + IntoRefPageSlice;
 
     fn into_page_slice<Idx: PageSliceIndex>(self, idx: Idx) -> Self::RefPageSlice;
 }

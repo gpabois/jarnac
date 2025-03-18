@@ -13,10 +13,10 @@
 
 use std::ops::{DerefMut, Div, Index, IndexMut, Range, RangeFrom};
 
-use zerocopy::{FromBytes, IntoBytes};
+use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, var::Var, IPager, PagerResult}, value::{Value, ValueKind}};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::Var, IPager, PagerResult}, value::{Value, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
@@ -24,16 +24,46 @@ pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER
 /// Représente une feuille d'un arbre B+.
 pub struct BPTreeLeaf<Page>(CellPage<Page>) where Page: AsRefPageSlice;
 
+impl<Page> Clone for BPTreeLeaf<Page> where Page: AsRefPageSlice + Clone {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<'pager> BPTreeLeaf<MutPage<'pager>> {
+    pub fn into_ref(self) -> BPTreeLeaf<RefPage<'pager>> {
+        BPTreeLeaf(self.0.into_ref())
+    }
+}
+
 impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
     pub fn try_from(page: Page) -> PagerResult<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTreeLeaf.assert(kind).map(|_| Self(CellPage::from(page)))
     }
 
+    pub fn borrow_value<'a>(&'a self, key: &Value) -> Option<&'a Var<PageSlice>>{
+        self.iter().filter(|&cell| cell == key).map(|cell| cell.borrow_value()).last()
+    }
+
     fn as_cells(&self) -> &CellPage<Page> {
         self.as_ref()
     }
+}
 
+impl<Page> BPTreeLeaf<Page> where Page: IntoRefPageSlice + Clone + AsRefPageSlice {
+    pub fn into_iter(self) -> impl Iterator<Item=BPTreeLeafCell<Page::RefPageSlice>> {
+        self.0
+        .into_iter()
+        .map(BPTreeLeafCell)
+    }
+
+    pub fn into_value(self, key: &Value) -> Option<Var<<<<Page as IntoRefPageSlice>::RefPageSlice as IntoRefPageSlice>::RefPageSlice as IntoRefPageSlice>::RefPageSlice>> {
+        self.into_iter()
+        .filter(|cell| cell == key)
+        .map(|cell| cell.into_value())
+        .last()
+    }
 }
 
 impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
@@ -175,11 +205,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
 
     pub fn split_into<'a, P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> PagerResult<&Value> where P2: AsMutPageSlice {
         let at = self.len().div(2);
-        println!("split node at {at}");
-        self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
-
-        println!("{0} | {1}", self.len(), dest.len());
-        
+        self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;       
         let key = self.iter().last().map(|cell| cell.borrow_key()).unwrap();
         Ok(key)
     }
@@ -229,6 +255,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
         self.as_cells().len()
     }
 
+    #[allow(dead_code)]
     pub fn capacity(&self) -> CellCapacity {
         self.as_cells().capacity()
     }
@@ -265,13 +292,6 @@ pub struct BPTreeLeafHeader {
 /// Cellule d'une feuille contenant une paire clé/valeur.
 pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?Sized;
 
-impl<Slice> AsRef<PageSlice> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
-    fn as_ref(&self) -> &PageSlice {
-        let idx = usize::from(self.borrow_key().kind().size().unwrap())..;
-        &self.0.as_slice()[idx]
-    }
-}
-
 impl<Slice> PartialOrd<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn partial_cmp(&self, other: &Value) -> Option<std::cmp::Ordering> {
         self.borrow_key().partial_cmp(other)
@@ -281,6 +301,14 @@ impl<Slice> PartialOrd<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSl
 impl<Slice> PartialEq<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn eq(&self, other: &Value) -> bool {
         self.borrow_key().eq(other)
+    }
+}
+
+impl<Slice> BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + IntoRefPageSlice {
+    pub fn into_value(self) -> Var<<Slice::RefPageSlice as IntoRefPageSlice>::RefPageSlice> {
+        let idx = self.value_range();
+        let slice = self.0.into_content_slice().into_page_slice(idx);
+        Var::from_owned_slice(slice)
     }
 }
 
@@ -296,23 +324,27 @@ where Slice: AsRefPageSlice + ?Sized
     }
 
     pub fn borrow_key(&self) -> &Value {
-        let slice = &self.as_cell().borrow_content()[self.key_range()];
+        let slice = &self.as_cell().as_content_slice()[self.key_range()];
         Value::from_ref(slice)
     }
 
     pub fn borrow_value(&self) -> &Var<PageSlice> {
-        let bytes = &self.as_cell().borrow_content()[self.value_range()];
+        let bytes = &self.as_cell().as_content_slice()[self.value_range()];
         Var::from_ref_slice(bytes)   
     }
 
+    fn kind(&self) -> ValueKind {
+        ValueKind::from(self.as_cell().as_content_slice().as_bytes()[0])
+    }
+
     fn value_range(&self) -> RangeFrom<usize> {
-        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
+        let kind = self.kind();
         let full_size = kind.full_size().unwrap();
         return full_size..    
     }
 
     fn key_range(&self) -> Range<usize> {
-        let kind = ValueKind::from(self.as_cell().borrow_content().as_bytes()[0]);
+        let kind = self.kind();
         let full_size = kind.full_size().unwrap();
         return 0..full_size
     }
@@ -323,7 +355,7 @@ where Slice: AsRefPageSlice + ?Sized
 impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
     /// Initialise la cellule
     pub fn initialise<Pager: IPager + ?Sized>(cell: &mut Self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
-        cell.as_mut_cell().borrow_mut_content().as_mut_bytes()[0] = (*key.kind()).into();
+        cell.as_mut_cell().as_mut_content_slice().as_mut_bytes()[0] = (*key.kind()).into();
         cell.borrow_mut_key().set(key);
         cell.borrow_mut_value().set(value, pager)?;
         Ok(())
@@ -335,13 +367,63 @@ impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
 
     pub fn borrow_mut_key(&mut self) -> &mut Value {
         let range = self.key_range();
-        let bytes = &mut self.as_mut_cell().borrow_mut_content()[range];
+        let bytes = &mut self.as_mut_cell().as_mut_content_slice()[range];
         Value::from_mut(bytes)
     }
     
     pub fn borrow_mut_value(&mut self) -> &mut Var<PageSlice> {
         let range = self.value_range();
-        let bytes = &mut self.as_mut_cell().borrow_mut_content()[range];
+        let bytes = &mut self.as_mut_cell().as_mut_content_slice()[range];
         Var::from_mut_slice(bytes)   
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use crate::{bplus_tree::BPlusTree, pager::fixtures::fixture_new_pager, value::{IntoValueBuf, ValueBuf, U64}};
+
+    #[test]
+    fn test_insert() -> Result<(), Box<dyn Error>> {
+        let pager = fixture_new_pager();
+        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
+        
+        let mut leaf = tree
+            .insert_leaf()
+            .and_then(|pid| tree.borrow_mut_leaf(&pid))?;
+
+        
+        leaf.insert(
+            &ValueBuf::from(90_u64), 
+            &ValueBuf::from(5678_u64), 
+            pager.as_ref()
+        )?;
+        
+        leaf.insert(
+            &ValueBuf::from(100_u64), 
+            &ValueBuf::from(1234_u64), 
+            pager.as_ref()
+        )?;
+
+        leaf.insert(
+            &ValueBuf::from(110_u64), 
+            &ValueBuf::from(891011_u64), 
+            pager.as_ref()
+        )?;
+
+        let maybe_value = leaf.borrow_value(&100_u64.into_value_buf());
+
+        assert!(maybe_value.is_some());
+        let value = maybe_value.unwrap();
+        assert_eq!(
+            1234_u64, 
+            value
+                .get(pager.as_ref())?
+                .try_as_u64()?
+                .to_owned()
+        );
+
+        Ok(())
     }
 }

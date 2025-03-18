@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 
 use crate::{pager::PagerResult, value::Value};
 
-use super::{AsBPlusTreeRef, BPlusTreeCellId, IRefBPlusTree};
+use super::{AsBPlusTreeRef, BPlusTreeCellId};
 
 
 /// Un curseur sur un arbre B+

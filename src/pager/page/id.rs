@@ -81,7 +81,7 @@ impl PageId {
     }
 }
 
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, Eq)]
+#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(C, packed)]
 pub struct OptionalPageId(Option<NonZero<u64>>);
 

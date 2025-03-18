@@ -548,6 +548,12 @@ impl TryFrom<&Value> for &ValU32 {
 
 pub struct ValU64([u8]);
 
+impl ValU64 {
+    pub fn to_owned(&self) -> u64 {
+        self.into()
+    }
+}
+
 impl Into<u64> for &ValU64 {
     fn into(self) -> u64 {
         self.deref().get()
