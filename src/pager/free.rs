@@ -1,6 +1,6 @@
 
 use zerocopy_derive::*;
-use zerocopy::{IntoBytes, TryFromBytes};
+use zerocopy::TryFromBytes;
 
 use super::{
     page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind}, IPagerInternals, PagerResult

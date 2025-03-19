@@ -27,7 +27,7 @@ use std::{fmt::Display, mem::MaybeUninit, num::NonZeroU8, ops::{AddAssign, Div, 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use super::{error::{PagerError, PagerErrorKind}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageId, PageSize, PageSlice, RefPage, RefPageSlice}, PagerResult};
+use super::{error::{PagerError, PagerErrorKind}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageId, PageSize, PageSlice, RefPage}, PagerResult};
 use crate::prelude::*;
 
 /// Sous-sytème permettant de découper une page en cellules de tailles égales
@@ -883,11 +883,11 @@ impl Mul<u32> for CellId {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::Cell, error::Error};
+    use std::error::Error;
 
     use itertools::Itertools;
 
-    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize}, value::{IntoValueBuf, Value, U64}};
+    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize}, value::{IntoValueBuf, Value, GetValueKind}};
     use super::CellHeader;
 
     #[test]
@@ -968,7 +968,7 @@ mod tests {
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(U64.full_size().unwrap());
+        let content_size = PageSize::from(u64::get_value_kind().full_size().unwrap());
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(U64.full_size().unwrap());
+        let content_size = PageSize::from(u64::get_value_kind().full_size().unwrap());
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
@@ -1016,14 +1016,12 @@ mod tests {
         
         let src_values = src.iter()
             .map::<&Value, _>(|cell| cell.as_content_slice().into())
-            .map(|value| value.try_as_u64().unwrap())
-            .map::<u64, _>(|value| value.into())
+            .map(|value| value.cast::<u64>().to_owned())
             .collect_vec();
         
         let dest_values = dest.iter()
             .map::<&Value, _>(|cell| cell.as_content_slice().into())
-            .map(|value| value.try_as_u64().unwrap())
-            .map::<u64, _>(|value| value.into())
+            .map(|value| value.cast::<u64>().to_owned())
             .collect_vec();
         
         assert_eq!(dest_values, vec![3u64, 4u64]);

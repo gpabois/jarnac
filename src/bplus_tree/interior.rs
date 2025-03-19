@@ -347,12 +347,12 @@ impl<Slice> PartialOrd<Value> for BPTreeInteriorCell<Slice> where Slice: AsRefPa
 mod tests {
     use std::error::Error;
 
-    use crate::{bplus_tree::BPlusTree, pager::{fixtures::fixture_new_pager, page::PageId}, value::{ValueBuf, U64}};
+    use crate::{bplus_tree::BPlusTree, pager::{fixtures::fixture_new_pager, page::PageId}, value::ValueBuf};
 
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>>{
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
+        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
         
         let mut interior = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
         interior.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;   

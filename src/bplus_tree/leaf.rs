@@ -382,12 +382,12 @@ impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
 mod tests {
     use std::error::Error;
 
-    use crate::{bplus_tree::BPlusTree, pager::fixtures::fixture_new_pager, value::{IntoValueBuf, ValueBuf, U64}};
+    use crate::{bplus_tree::BPlusTree, pager::fixtures::fixture_new_pager, value::{IntoValueBuf, ValueBuf}};
 
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
+        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
         
         let mut leaf = tree
             .insert_leaf()
@@ -395,14 +395,14 @@ mod tests {
 
         
         leaf.insert(
-            &ValueBuf::from(90_u64), 
-            &ValueBuf::from(5678_u64), 
+            &90_u64.into_value_buf(), 
+            &5678_u64.into_value_buf(), 
             pager.as_ref()
         )?;
         
         leaf.insert(
-            &ValueBuf::from(100_u64), 
-            &ValueBuf::from(1234_u64), 
+            &100_u64.into_value_buf(), 
+            &1234_u64.into_value_buf(), 
             pager.as_ref()
         )?;
 
@@ -420,8 +420,8 @@ mod tests {
             1234_u64, 
             value
                 .get(pager.as_ref())?
-                .try_as_u64()?
-                .to_owned()
+                .cast::<u64>()
+                .to_owned()  
         );
 
         Ok(())

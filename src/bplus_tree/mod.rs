@@ -21,7 +21,7 @@ use crate::{
             AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPage, RefPageSlice
         }, var::{Var, VarHeader}, IPager, PagerResult
     },
-    value::{Value, ValueKind},
+    value::{GetValueKind, Value, ValueKind},
 };
 
 pub type BPTreeKey = Value;
@@ -281,15 +281,16 @@ where
     /// key_size: puissance de 2 (2^key_size), maximum 3
     /// key_signed: la clé est signée +/-
     /// data_size: la taille de la donnée à stocker, None si la taille est dynamique ou indéfinie.
-    pub fn new(
+    pub fn new<K: GetValueKind, V: GetValueKind>(
         pager: &'pager Pager,
-        key_kind: &ValueKind,
-        value_kind: &ValueKind,
     ) -> PagerResult<Self> {
+        let key_kind = K::get_value_kind();
+        let value_kind = V::get_value_kind();
+
         assert!(key_kind.full_size().is_some(), "the key must be of a sized-type");
 
         // on génère les données qui vont bien pour gérer notre arbre B+
-        let header = compute_b_plus_tree_parameters(pager.page_size(), *key_kind, *value_kind);
+        let header = compute_b_plus_tree_parameters(pager.page_size(), key_kind, value_kind);
 
         let page = pager.new_page()
             .and_then(|pid| pager.borrow_mut_page(&pid))
@@ -617,7 +618,7 @@ mod tests {
 
     use crate::{
         pager::fixtures::fixture_new_pager,
-        value::{IntoValueBuf, U64}
+        value::IntoValueBuf
     };
 
     use super::{BPlusTree, IRefBPlusTree};
@@ -625,7 +626,7 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new(pager.as_ref(), &U64, &U64)?;
+        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
 
         for i in 0..500u64 {
             tree.insert(
@@ -635,7 +636,7 @@ mod tests {
         }
 
         let var = tree.search(&10_u64.into_value_buf())?.unwrap();
-        let value = var.get(pager.as_ref())?.try_as_u64()?.to_owned();
+        let value = var.get(pager.as_ref())?.cast::<u64>().to_owned();
 
         assert_eq!(value, 1234u64);
 
