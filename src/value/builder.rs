@@ -1,26 +1,11 @@
-use super::{array::Array, document::Document, IntoValuePath};
+use super::{array::Array, document::Document, path::IntoValuePath, FromValueBuilder, GetValueKind, IntoValueBuf, Value, ValueBuf, ValueKind};
 
 /// Type utilisé pour construire des valeurs stockables en base.
 pub enum ValueBuilder {   
-    U8(u8),
-    U16(u16),
-    U32(u32),
-    U64(u64),
-    U128(u128),
-
-    I8(u8),
-    I16(u16),
-    I32(u32),
-    I64(u64),
-    I128(u128),
-
-    F32(f32),
-    F64(f64),
-
-    Str(String),
-
     Document(Document),
     Array(Array),
+    Str(String),
+    Other(ValueBuf)
 }
 
 impl ValueBuilder {
@@ -45,6 +30,28 @@ impl ValueBuilder {
         }
     }
 
+    pub fn cast<T: GetValueKind + FromValueBuilder + ?Sized>(&self) -> &T::Output {
+        self.kind().assert_eq(&T::KIND).expect("wrong types");
+        T::borrow_value(self)
+    }
+
+    pub fn cast_mut<T: GetValueKind + FromValueBuilder + ?Sized>(&mut self) -> &mut T::Output {
+        self.kind().assert_eq(&T::KIND).expect("wrong types");
+        T::borrow_mut_value(self)
+    }
+
+    pub fn is<T: GetValueKind + ?Sized>(&self) -> bool {
+        self.kind() == &T::KIND
+    }
+
+    pub fn kind(&self) -> &ValueKind {
+        match self {
+            ValueBuilder::Document(_) => &Document::KIND,
+            ValueBuilder::Array(_) => todo!(),
+            ValueBuilder::Str(_) => &str::KIND,
+            ValueBuilder::Other(value_buf) => value_buf.kind(),
+        }
+    }
 }
 
 impl From<Document> for ValueBuilder {
@@ -58,7 +65,10 @@ impl From<&Value> for ValueBuilder {
         if value.is::<Document>() {
             return Self::Document(value.cast::<Document>().to_owned())
         }
-        Self::Value(value.to_owned())
+        if value.is::<str>() {
+            return Self::Str(value.cast::<str>().to_owned())
+        }
+        Self::Other(value.to_owned())
     }
 }
 
@@ -66,8 +76,9 @@ impl IntoValueBuf for ValueBuilder {
     fn into_value_buf(self) -> ValueBuf {
         match self {
             ValueBuilder::Document(document) => document.into_value_buf(),
-            ValueBuilder::Value(value) => value,
             ValueBuilder::Array(array) => array.into_value_buf(),
+            ValueBuilder::Str(string) => string.into_value_buf(),
+            ValueBuilder::Other(value) => value,
         }
     }
 }

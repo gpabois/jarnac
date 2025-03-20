@@ -4,14 +4,12 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::pager::{error::PagerError, PagerResult};
 
-use super::{FromValue, GetValueKind, IntoValueBuf, IntoValueBuilder, IntoValuePath, Value, ValueBuf, ValueBuilder, ValueKind, DOCUMENT, KV_PAIR};
+use super::{FromValue, GetValueKind, IntoValueBuf, IntoValueBuilder, path::IntoValuePath, Value, ValueBuf, ValueBuilder, ValueKind, DOCUMENT_KIND, KV_PAIR_KIND};
 
 pub struct KeyValue([u8]);
 
 impl GetValueKind for KeyValue {
-    fn get_value_kind() -> ValueKind {
-        KV_PAIR
-    }
+    const KIND: ValueKind = KV_PAIR_KIND;
 }
 impl Deref for KeyValue {
     type Target = [u8];
@@ -24,7 +22,7 @@ impl KeyValue {
     /// Lit une paire clé/valeur depuis la base de la tranche.
     pub fn read_from_slice(slice: &[u8]) -> &Self {
         let kind = ValueKind::from(slice[0]);
-        KeyValue::get_value_kind().assert_eq(&kind).expect("not a kv pair");
+        KeyValue::KIND.assert_eq(&kind).expect("not a kv pair");
 
         let key_len = usize::try_from(Self::read_key_len(slice)).unwrap();
         let val_len = usize::try_from(Self::read_value_len(slice)).unwrap();
@@ -75,8 +73,8 @@ impl KeyValue {
     }
 }
 
-pub struct ValDocument([u8]);
-impl ValDocument {
+pub struct DocumentRef([u8]);
+impl DocumentRef {
     const KV_BASE: usize = 1;
 
     pub fn iter(&self) -> DocAttributesIter<'_> {
@@ -95,32 +93,38 @@ impl ValDocument {
             .collect()
     }
 }
-impl Deref for ValDocument {
+impl Deref for DocumentRef {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl TryFrom<&Value> for &ValDocument {
+impl TryFrom<&Value> for &DocumentRef {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        DOCUMENT.assert_eq(value.kind())?;
+        DOCUMENT_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
         }
     }
 }
-impl GetValueKind for ValDocument {
-    fn get_value_kind() -> super::ValueKind {
-        DOCUMENT
+impl TryFrom<&mut Value> for &mut DocumentRef {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        DOCUMENT_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
     }
 }
 
 pub struct DocAttributesIter<'a> {
-    doc: &'a ValDocument,
+    doc: &'a DocumentRef,
     base: usize
 }
 impl<'a> Iterator for DocAttributesIter<'a> {
@@ -142,16 +146,18 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 pub struct Document(HashMap<String, ValueBuilder>);
 
 impl GetValueKind for Document {
-    fn get_value_kind() -> ValueKind {
-        DOCUMENT
-    }
+    const KIND: ValueKind = DOCUMENT_KIND;
 }
 
 impl FromValue for Document {
-    type Output = ValDocument;
+    type Output = DocumentRef;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
@@ -198,8 +204,7 @@ impl Document {
 
 impl IntoValueBuf for Document {
     fn into_value_buf(self) -> ValueBuf {
-        let mut buf: Vec<u8> = vec![ValDocument::get_value_kind().into()];
-
+        let mut buf: Vec<u8> = vec![Document::KIND.into()];
 
         for kv in self.0.into_iter().map(IntoValueBuf::into_value_buf) {
             buf.write_all(&kv).unwrap();
@@ -219,10 +224,13 @@ mod tests {
         
         let mut sub = Document::default();
         sub.insert("bar", "hello world !");
+        sub.insert("barbar", 128u8);
 
 
         doc.insert("foo", sub);
-        
 
+        assert!(doc["foo"].is::<Document>());
+        assert!(doc["foo.bar"].cast::<str>() == "hello world !");
+        assert!(doc["foo.barbar"].cast::<u8>() == &128u8);
     }
 }

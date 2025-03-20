@@ -139,6 +139,7 @@ fn compute_b_plus_tree_parameters(
         data_size,
         k,
         root: None.into(),
+        len: 0
     }
 }
 
@@ -147,6 +148,7 @@ pub type BPlusTreeCellId = GlobalCellId;
 
 /// Trait permettant de manipuler un arbre B+ en lecture.
 pub trait IRefBPlusTree<'pager> {
+    fn len(&self) -> u64;
     /// Cherche une cellule clé/valeur à partir de la clé passée en argument.
     fn search(&self, key: &Value) -> PagerResult<Option<Var<RefPageSlice<'pager>>>>;
 
@@ -270,6 +272,10 @@ where
     fn borrow_cell(&self, _gcid: &BPlusTreeCellId) -> PagerResult<BPTreeLeafCell<RefPage<'_>>> {
         todo!()
     }
+    
+    fn len(&self) -> u64 {
+        self.desc.len()
+    }
 }
 
 impl<'pager, Pager> BPlusTree<'pager, Pager, MutPage<'pager>>
@@ -284,8 +290,8 @@ where
     pub fn new<K: GetValueKind, V: GetValueKind>(
         pager: &'pager Pager,
     ) -> PagerResult<Self> {
-        let key_kind = K::get_value_kind();
-        let value_kind = V::get_value_kind();
+        let key_kind = K::KIND;
+        let value_kind = V::KIND;
 
         assert!(key_kind.full_size().is_some(), "the key must be of a sized-type");
 
@@ -298,6 +304,7 @@ where
 
         Ok(Self { pager, desc: page })
     }
+
 }
 
 impl<'pager, Pager, Page> BPlusTree<'pager, Pager, Page>
@@ -391,7 +398,7 @@ where
             self.split(leaf.as_mut())?;
         }
 
-        leaf.insert(key, value, self.pager)
+        leaf.insert(key, value, self.pager).inspect(|_| self.desc.inc_len())
     }
 
 }
@@ -401,6 +408,7 @@ where
     Pager: IPager + ?Sized,
     Page: AsMutPageSlice,
 {
+
     /// Divise un noeud
     ///
     /// Cette opération est utilisée lors d'une insertion si le noeud est plein.
@@ -426,7 +434,7 @@ where
 
                 // récupère le parent du noeud à gauche
                 // si aucun parent n'existe alors on crée un noeud intérieur.
-                let parent_id = match left.parent().clone() {
+                let parent_id = match left.parent() {
                     Some(parent_id) => parent_id,
                     None => {
                         let pid = self.insert_interior()?;
@@ -436,8 +444,9 @@ where
                     }
                 };
 
-                right.set_parent(left.parent().clone());
+                right.set_parent(left.parent());
                 let mut parent = self.borrow_mut_interior(&parent_id)?;
+                
                 self.insert_in_interior(
                     &mut parent,
                     *left.id(),
@@ -628,7 +637,7 @@ mod tests {
         let pager = fixture_new_pager();
         let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
 
-        for i in 0..500u64 {
+        for i in 0..500_000u64 {
             tree.insert(
                 &i.into_value_buf(),
                 &1234u64.into_value_buf()
@@ -636,9 +645,9 @@ mod tests {
         }
 
         let var = tree.search(&10_u64.into_value_buf())?.unwrap();
-        let value = var.get(pager.as_ref())?.cast::<u64>().to_owned();
+        let value = var.get(pager.as_ref())?;
 
-        assert_eq!(value, 1234u64);
+        assert_eq!(value.cast::<u64>(), &1234u64);
 
         Ok(())
     }

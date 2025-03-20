@@ -136,3 +136,27 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         self.pages.borrow().contains_key(pid)
     }
 }
+
+#[cfg(test)]
+mod test {
+    use std::error::Error;
+
+    use crate::pager::{fixtures::fixture_new_pager, page::{AsMutPageSlice, AsRefPageSlice, PageId}};
+
+    #[test]
+    fn test_stress() -> Result<(), Box<dyn Error>> {
+        let pager = fixture_new_pager();
+
+        for _ in 1..100_000 {
+            let mut page = pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?;
+            page.as_mut_bytes()[0] = 128_u8;
+        }
+
+        for i in (1..100_000).into_iter().map(PageId::new) {
+            let page = pager.borrow_page(&i)?;
+            assert_eq!(page.as_bytes()[0], 128_u8);
+        }
+
+        Ok(())
+    }
+}

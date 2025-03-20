@@ -8,32 +8,32 @@
 pub mod document;
 pub mod array;
 pub mod builder;
+pub mod path;
 
-use std::{borrow::Borrow, collections::VecDeque, fmt::Display, io::Write, ops::Deref};
+use std::{borrow::{Borrow, BorrowMut}, fmt::Display, io::Write, ops::{Deref, DerefMut}};
 
 use builder::ValueBuilder;
-use document::Document;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::pager::{error::PagerError, page::PageSlice, PagerResult};
 
-const U8: ValueKind     = ValueKind(1);
-const U16: ValueKind    = ValueKind(2);
-const U32: ValueKind    = ValueKind(3);
-const U64: ValueKind    = ValueKind(4);
-const U128: ValueKind   = ValueKind(5);
-const I8: ValueKind     = ValueKind(6);
-const I16: ValueKind    = ValueKind(7);
-const I32: ValueKind    = ValueKind(8);
-const I64: ValueKind    = ValueKind(9);
-const I128: ValueKind   = ValueKind(10);
-const F32: ValueKind    = ValueKind(11);
-const F64: ValueKind    = ValueKind(12);
+const U8_KIND: ValueKind = ValueKind(1);
+const U16_KIND: ValueKind = ValueKind(2);
+const U32_KIND: ValueKind = ValueKind(3);
+const U64_KIND: ValueKind = ValueKind(4);
+const U128_KIND: ValueKind = ValueKind(5);
+const I8_KIND: ValueKind = ValueKind(6);
+const I16_KIND: ValueKind = ValueKind(7);
+const I32_KIND: ValueKind = ValueKind(8);
+const I64_KIND: ValueKind = ValueKind(9);
+const I128_KIND: ValueKind = ValueKind(10);
+const F32_KIND: ValueKind = ValueKind(11);
+const F64_KIND: ValueKind = ValueKind(12);
 
-const STR: ValueKind    = ValueKind(13);
-const DOCUMENT: ValueKind = ValueKind(14);
-const KV_PAIR: ValueKind = ValueKind(15);
+const STR_KIND: ValueKind    = ValueKind(13);
+const DOCUMENT_KIND: ValueKind = ValueKind(14);
+const KV_PAIR_KIND: ValueKind = ValueKind(15);
 
 const ARRAY_KIND_FLAG: u8 = 128;
 
@@ -42,50 +42,29 @@ pub trait IntoValueBuilder {
 }
 
 pub trait FromValueBuilder {
-    type Output;
+    type Output: ?Sized;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self;
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self;
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output;
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output;
 }
-
-pub trait IntoValuePath{
-    fn into_value_path(self) -> ValuePath;
-}
-
-impl<V> IntoValuePath for V where ValuePath: From<V> {
-    fn into_value_path(self) -> ValuePath {
-        self.into()
-    }
-}
-
-pub struct ValuePath(VecDeque<String>);
-
-impl ValuePath {
-    pub fn pop(&mut self) -> Option<String> {
-        self.0.pop_front()
-    }
-}
-
-impl From<&str> for ValuePath {
-    fn from(value: &str) -> Self {
-        Self(value.split(".").into_iter().map(|seg| seg.to_owned()).collect())
-    }
-}
-
-
 
 pub trait GetValueKind {
-    fn get_value_kind() -> ValueKind;
+    const KIND: ValueKind;
 }
 
 pub trait FromValue: GetValueKind {
     type Output: ?Sized;
 
-    fn from_value(value: &Value) -> &Self::Output {
-        Self::try_from_value(value).expect("wrong value type")
+    fn ref_from_value(value: &Value) -> &Self::Output {
+        Self::try_ref_from_value(value).expect("wrong value type")
     }
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output>;
+    fn mut_from_value(value: &mut Value) -> &mut Self::Output {
+        Self::try_mut_from_value(value).expect("wrong value type")
+    }
+
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output>;
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output>;
 }
 
 pub trait IntoValueBuf {
@@ -106,19 +85,19 @@ pub struct ValueKind(u8);
 impl Display for ValueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
-            U8 => f.write_str("u8"),
-            U16 => f.write_str("u16"),
-            U32 => f.write_str("u32"),
-            U64 => f.write_str("u64"),
-            U128 => f.write_str("u128"),
-            I8 => f.write_str("i8"),
-            I16 => f.write_str("i16"),
-            I32 => f.write_str("i32"),
-            I64 => f.write_str("i64"),
-            I128 => f.write_str("i128"),
-            F32 => f.write_str("f32"),
-            F64 => f.write_str("f64"),
-            STR => f.write_str("str"),
+            U8_KIND => f.write_str("u8"),
+            U16_KIND => f.write_str("u16"),
+            U32_KIND => f.write_str("u32"),
+            U64_KIND => f.write_str("u64"),
+            U128_KIND => f.write_str("u128"),
+            I8_KIND => f.write_str("i8"),
+            I16_KIND => f.write_str("i16"),
+            I32_KIND => f.write_str("i32"),
+            I64_KIND => f.write_str("i64"),
+            I128_KIND => f.write_str("i128"),
+            F32_KIND => f.write_str("f32"),
+            F64_KIND => f.write_str("f64"),
+            STR_KIND => f.write_str("str"),
             _ => f.write_str("unknown")
         }
     }
@@ -154,7 +133,7 @@ impl ValueKind {
     
     pub fn assert_eq(&self, other: &ValueKind) -> PagerResult<()> {
         if *other != *self {
-            return Err(PagerError::new(crate::pager::error::PagerErrorKind::WrongValueKind { expected: U8, got: *other }))
+            return Err(PagerError::new(crate::pager::error::PagerErrorKind::WrongValueKind { expected: U8_KIND, got: *other }))
         }
 
         Ok(())
@@ -191,11 +170,11 @@ impl ValueKind {
     /// Un retour à None signifie que la valeur est de taille variable.
     pub fn size(&self) -> Option<usize> {
         match *self {
-            U8 | I8 => Some(1),
-            U16 | I16 => Some(2),
-            U32 | I32 | F32 => Some(4),
-            U64 | I64 | F64 => Some(8),
-            U128 | I128 => Some(16),
+            U8_KIND | I8_KIND => Some(1),
+            U16_KIND | I16_KIND => Some(2),
+            U32_KIND | I32_KIND | F32_KIND => Some(4),
+            U64_KIND | I64_KIND | F64_KIND => Some(8),
+            U128_KIND | I128_KIND => Some(16),
             _ => None
         }
     }
@@ -205,19 +184,19 @@ pub struct Value([u8]);
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self.kind() {
-            U8 => self.cast::<u8>().fmt(f),
-            U16 => self.cast::<u16>().fmt(f),
-            U32 => self.cast::<u32>().fmt(f),
-            U64 => self.cast::<u64>().fmt(f),
-            U128 => self.cast::<u128>().fmt(f),
-            I8 => self.cast::<i8>().fmt(f),
-            I16 => self.cast::<i16>().fmt(f),
-            I32 => self.cast::<i32>().fmt(f),
-            I64 => self.cast::<i64>().fmt(f),
-            I128 => self.cast::<i128>().fmt(f),
-            F32 => self.cast::<f32>().fmt(f),
-            F64 => self.cast::<f64>().fmt(f),
-            STR => self.cast::<str>().fmt(f),
+            U8_KIND => self.cast::<u8>().fmt(f),
+            U16_KIND => self.cast::<u16>().fmt(f),
+            U32_KIND => self.cast::<u32>().fmt(f),
+            U64_KIND => self.cast::<u64>().fmt(f),
+            U128_KIND => self.cast::<u128>().fmt(f),
+            I8_KIND => self.cast::<i8>().fmt(f),
+            I16_KIND => self.cast::<i16>().fmt(f),
+            I32_KIND => self.cast::<i32>().fmt(f),
+            I64_KIND => self.cast::<i64>().fmt(f),
+            I128_KIND => self.cast::<i128>().fmt(f),
+            F32_KIND => self.cast::<f32>().fmt(f),
+            F64_KIND => self.cast::<f64>().fmt(f),
+            STR_KIND => self.cast::<str>().fmt(f),
             _ => write!(f, ":unknown:")
         }
     }
@@ -234,19 +213,19 @@ impl PartialEq<Self> for Value {
         if self.kind() != other.kind() { return false }
 
         match *self.kind() {
-            U8 => self.cast::<u8>().eq(other.cast::<u8>()),
-            U16 => self.cast::<u16>().eq(other.cast::<u16>()),
-            U32 => self.cast::<u32>().eq(other.cast::<u32>()),
-            U64 => self.cast::<u64>().eq(other.cast::<u64>()),
-            U128 => self.cast::<u128>().eq(other.cast::<u128>()),
-            I8 => self.cast::<i8>().eq(other.cast::<i8>()),
-            I16 => self.cast::<i16>().eq(other.cast::<i16>()),
-            I32 => self.cast::<i32>().eq(other.cast::<i32>()),
-            I64 => self.cast::<i64>().eq(other.cast::<i64>()),
-            I128 => self.cast::<i128>().eq(other.cast::<i128>()),
-            F32 => self.cast::<f32>().eq(other.cast::<f32>()),
-            F64 => self.cast::<f64>().eq(other.cast::<f64>()),
-            STR => self.cast::<str>().eq(other.cast::<str>()),
+            U8_KIND => self.cast::<u8>().eq(other.cast::<u8>()),
+            U16_KIND => self.cast::<u16>().eq(other.cast::<u16>()),
+            U32_KIND => self.cast::<u32>().eq(other.cast::<u32>()),
+            U64_KIND => self.cast::<u64>().eq(other.cast::<u64>()),
+            U128_KIND => self.cast::<u128>().eq(other.cast::<u128>()),
+            I8_KIND => self.cast::<i8>().eq(other.cast::<i8>()),
+            I16_KIND => self.cast::<i16>().eq(other.cast::<i16>()),
+            I32_KIND => self.cast::<i32>().eq(other.cast::<i32>()),
+            I64_KIND => self.cast::<i64>().eq(other.cast::<i64>()),
+            I128_KIND => self.cast::<i128>().eq(other.cast::<i128>()),
+            F32_KIND => self.cast::<f32>().eq(other.cast::<f32>()),
+            F64_KIND => self.cast::<f64>().eq(other.cast::<f64>()),
+            STR_KIND => self.cast::<str>().eq(other.cast::<str>()),
             _ => false
         }
     }
@@ -256,18 +235,18 @@ impl PartialOrd<Self> for Value {
         if self.kind() != other.kind() { return None }
 
         match *self.kind() {
-            U8 => self.cast::<u8>().partial_cmp(other.cast::<u8>()),
-            U16 => self.cast::<u16>().partial_cmp(other.cast::<u16>()),
-            U32 => self.cast::<u32>().partial_cmp(other.cast::<u32>()),
-            U64 => self.cast::<u64>().partial_cmp(other.cast::<u64>()),
-            U128 => self.cast::<u128>().partial_cmp(other.cast::<u128>()),
-            I8 => self.cast::<i8>().partial_cmp(other.cast::<i8>()),
-            I16 => self.cast::<i16>().partial_cmp(other.cast::<i16>()),
-            I32 => self.cast::<i32>().partial_cmp(other.cast::<i32>()),
-            I64 => self.cast::<i64>().partial_cmp(other.cast::<i64>()),
-            I128 => self.cast::<i128>().partial_cmp(other.cast::<i128>()),
-            F32 => self.cast::<f32>().partial_cmp(other.cast::<f32>()),
-            F64 => self.cast::<f64>().partial_cmp(other.cast::<f64>()),
+            U8_KIND => self.cast::<u8>().partial_cmp(other.cast::<u8>()),
+            U16_KIND => self.cast::<u16>().partial_cmp(other.cast::<u16>()),
+            U32_KIND => self.cast::<u32>().partial_cmp(other.cast::<u32>()),
+            U64_KIND => self.cast::<u64>().partial_cmp(other.cast::<u64>()),
+            U128_KIND => self.cast::<u128>().partial_cmp(other.cast::<u128>()),
+            I8_KIND => self.cast::<i8>().partial_cmp(other.cast::<i8>()),
+            I16_KIND => self.cast::<i16>().partial_cmp(other.cast::<i16>()),
+            I32_KIND => self.cast::<i32>().partial_cmp(other.cast::<i32>()),
+            I64_KIND => self.cast::<i64>().partial_cmp(other.cast::<i64>()),
+            I128_KIND => self.cast::<i128>().partial_cmp(other.cast::<i128>()),
+            F32_KIND => self.cast::<f32>().partial_cmp(other.cast::<f32>()),
+            F64_KIND => self.cast::<f64>().partial_cmp(other.cast::<f64>()),
             _ => None
         }
     }
@@ -292,12 +271,16 @@ impl Value {
         }
     }
 
-    pub fn is<T: GetValueKind>(&self) -> bool {
-        T::get_value_kind().assert_eq(self.kind()).is_ok()
+    pub fn is<T: GetValueKind + ?Sized>(&self) -> bool {
+        T::KIND.assert_eq(self.kind()).is_ok()
     }
 
     pub fn cast<T: FromValue + ?Sized>(&self) -> &T::Output {
-        T::from_value(self)
+        T::ref_from_value(self)
+    }
+
+    pub fn cast_mut<T: FromValue + ?Sized>(&mut self) -> &mut T::Output {
+        T::mut_from_value(self)
     }
 
     pub fn kind(&self) -> &ValueKind {
@@ -315,6 +298,11 @@ impl Value {
 #[derive(Hash, Eq)]
 /// Valeur entièrement détenue par l'objet (Owned value)
 pub struct ValueBuf(Vec<u8>);
+impl std::fmt::Display for ValueBuf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
 impl ValueBuf {
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
         Self(bytes)
@@ -341,11 +329,23 @@ impl Deref for ValueBuf {
         self.borrow()
     }
 }
+impl DerefMut for ValueBuf {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.borrow_mut()
+    }
+}
 impl ToOwned for Value {
     type Owned = ValueBuf;
 
     fn to_owned(&self) -> Self::Owned {
         ValueBuf(self.0.to_owned())
+    }
+}
+impl BorrowMut<Value> for ValueBuf {
+    fn borrow_mut(&mut self) -> &mut Value {
+        unsafe {
+            std::mem::transmute(self.0.as_mut_slice())
+        }
     }
 }
 impl Borrow<Value> for ValueBuf {
@@ -357,7 +357,7 @@ impl Borrow<Value> for ValueBuf {
 }
 impl From<(String, ValueBuilder)> for ValueBuf {
     fn from(kv: (String, ValueBuilder)) -> Self {
-        let mut buf: Vec<u8> = vec![KV_PAIR.into()];
+        let mut buf: Vec<u8> = vec![KV_PAIR_KIND.into()];
         let v = kv.1.into_value_buf();
         let k = kv.0;
         let size: u32 = u32::try_from(k.len() + v.len()).unwrap();
@@ -369,12 +369,12 @@ impl From<(String, ValueBuilder)> for ValueBuf {
 }
 impl From<u8> for ValueBuf {
     fn from(value: u8) -> Self {       
-        Self(vec![U8.into(), value])
+        Self(vec![U8_KIND.into(), value])
     }
 }
 impl From<&[u8]> for ValueBuf {
     fn from(value: &[u8]) -> Self {
-        let kind = U8.as_array();
+        let kind = U8_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
         let mut buf = Vec::<u8>::with_capacity(1 + 4 + usize::try_from(len).unwrap());
         buf.push(kind.into());
@@ -385,14 +385,14 @@ impl From<&[u8]> for ValueBuf {
 }
 impl From<u16> for ValueBuf {
     fn from(value: u16) -> Self {
-        let mut buf = vec![U16.into()];
+        let mut buf = vec![U16_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<&[u16]> for ValueBuf {
     fn from(value: &[u16]) -> Self {
-        let kind = U16.as_array();
+        let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
         let mut buf = Vec::<u8>::with_capacity(1 + 4 + usize::try_from(len).unwrap() * size_of::<u16>());
         buf.push(kind.into());
@@ -405,14 +405,14 @@ impl From<&[u16]> for ValueBuf {
 }
 impl From<u32> for ValueBuf {
     fn from(value: u32) -> Self {
-        let mut buf = vec![U32.into()];
+        let mut buf = vec![U32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<&[u32]> for ValueBuf {
     fn from(value: &[u32]) -> Self {
-        let kind = U16.as_array();
+        let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
         let mut buf = Vec::<u8>::with_capacity(1 + 4 + usize::try_from(len).unwrap() * size_of::<u32>());
         buf.push(kind.into());
@@ -425,14 +425,14 @@ impl From<&[u32]> for ValueBuf {
 }
 impl From<u64> for ValueBuf {
     fn from(value: u64) -> Self {
-        let mut buf = vec![U64.into()];
+        let mut buf = vec![U64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<&[u64]> for ValueBuf {
     fn from(value: &[u64]) -> Self {
-        let kind = U16.as_array();
+        let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
         let mut buf = Vec::<u8>::with_capacity(1 + 4 + usize::try_from(len).unwrap() * size_of::<u64>());
         buf.push(kind.into());
@@ -445,14 +445,14 @@ impl From<&[u64]> for ValueBuf {
 }
 impl From<u128> for ValueBuf {
     fn from(value: u128) -> Self {
-        let mut buf = vec![U128.into()];
+        let mut buf = vec![U128_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<&[u128]> for ValueBuf {
     fn from(value: &[u128]) -> Self {
-        let kind = U16.as_array();
+        let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
         let mut buf = Vec::<u8>::with_capacity(1 + 4 + usize::try_from(len).unwrap() * size_of::<u128>());
         buf.push(kind.into());
@@ -465,47 +465,47 @@ impl From<&[u128]> for ValueBuf {
 }
 impl From<i8> for ValueBuf {
     fn from(value: i8) -> Self {       
-        Self(vec![I8.into(), unsafe {std::mem::transmute(value)}])
+        Self(vec![I8_KIND.into(), unsafe {std::mem::transmute(value)}])
     }
 }
 impl From<i16> for ValueBuf {
     fn from(value: i16) -> Self {
-        let mut buf = vec![I16.into()];
+        let mut buf = vec![I16_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<i32> for ValueBuf {
     fn from(value: i32) -> Self {
-        let mut buf = vec![I32.into()];
+        let mut buf = vec![I32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<i64> for ValueBuf {
     fn from(value: i64) -> Self {
-        let mut buf = vec![I64.into()];
+        let mut buf = vec![I64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<i128> for ValueBuf {
     fn from(value: i128) -> Self {
-        let mut buf = vec![I128.into()];
+        let mut buf = vec![I128_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<f32> for ValueBuf {
     fn from(value: f32) -> Self {
-        let mut buf = vec![F32.into()];
+        let mut buf = vec![F32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
 impl From<f64> for ValueBuf {
     fn from(value: f64) -> Self {
-        let mut buf = vec![F64.into()];
+        let mut buf = vec![F64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
@@ -517,41 +517,67 @@ impl From<String> for ValueBuf {
 }
 impl From<&str> for ValueBuf {
     fn from(value: &str) -> Self {
-        let mut buf = vec![STR.into()];
+        let mut buf = vec![STR_KIND.into()];
         buf.write_all(value.as_bytes()).unwrap();
         Self(buf)
     }
 }
 
 #[derive(Debug)]
-pub struct ValU8([u8]);
-impl PartialEq<Self> for ValU8 {
+pub struct U8([u8]);
+impl U8 {
+    pub fn set(&mut self, value: u8) {
+        *self.deref_mut() = value
+    }
+}
+impl PartialEq<Self> for U8 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialEq<u8> for ValU8 {
-    fn eq(&self, other: &u8) -> bool {
-        self.deref() == other
-    }
-}
-impl PartialOrd<Self> for ValU8 {
+impl PartialOrd<Self> for U8 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValU8 {
+impl PartialEq<u8> for U8 {
+    fn eq(&self, other: &u8) -> bool {
+        self.deref() == other
+    }
+}
+impl PartialOrd<u8> for U8 {
+    fn partial_cmp(&self, other: &u8) -> Option<std::cmp::Ordering> {
+        self.deref().partial_cmp(other)
+    }
+}
+impl Deref for U8 {
     type Target = u8;
 
     fn deref(&self) -> &Self::Target {
         &self.0[1]
     }
 }
-impl TryFrom<&Value> for &ValU8 {
+impl DerefMut for U8 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0[1]
+    }
+}
+impl TryFrom<&Value> for &U8 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        U8.assert_eq(value.kind())?;
+        U8_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut U8 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        U8_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -559,29 +585,51 @@ impl TryFrom<&Value> for &ValU8 {
     }
 }
 
-pub struct ValU16([u8]);
-impl PartialEq<Self> for ValU16 {
+
+pub struct U16([u8]);
+impl U16 {
+    pub fn set(&mut self, value: u16) {
+        self.deref_mut().set(value)
+    }
+}
+impl PartialEq<Self> for U16 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValU16 {
+impl PartialOrd<Self> for U16 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValU16 {
+impl Deref for U16 {
     type Target = zerocopy::U16<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::U16::<LittleEndian>::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValU16 {
+impl DerefMut for U16 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::U16::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &U16 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        U16.assert_eq(value.kind())?;
+        U16_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut U16 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        U16_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -589,29 +637,59 @@ impl TryFrom<&Value> for &ValU16 {
     }
 }
 
-pub struct ValU32([u8]);
-impl PartialEq<Self> for ValU32 {
+pub struct U32([u8]);
+impl U32 {
+    pub fn to_owned(&self) -> u32 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: u32) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<u32> for &U32 {
+    fn into(self) -> u32 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for U32 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValU32 {
+impl PartialOrd<Self> for U32 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValU32 {
+impl Deref for U32 {
     type Target = zerocopy::U32<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::U32::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValU32 {
+impl DerefMut for U32 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::U32::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &U32 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        U32.assert_eq(value.kind())?;
+        U32_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut U32 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        U32_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -619,39 +697,69 @@ impl TryFrom<&Value> for &ValU32 {
     }
 }
 
-pub struct ValU64([u8]);
-impl ValU64 {
+pub struct U64([u8]);
+impl std::fmt::Debug for U64 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{0}", self.deref())
+    }
+}
+impl U64 {
     pub fn to_owned(&self) -> u64 {
         self.into()
     }
+
+    pub fn set(&mut self, value: u64) {
+        self.deref_mut().set(value)
+    }
 }
-impl Into<u64> for &ValU64 {
+impl Into<u64> for &U64 {
     fn into(self) -> u64 {
         self.deref().get()
     }
 }
-impl PartialEq<Self> for ValU64 {
+impl PartialEq<Self> for U64 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValU64 {
+impl PartialOrd<Self> for U64 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValU64 {
+impl PartialEq<u64> for U64 {
+    fn eq(&self, other: &u64) -> bool {
+        self.deref().eq(other)
+    }
+}
+impl Deref for U64 {
     type Target = zerocopy::U64<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::U64::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValU64 {
+impl DerefMut for U64 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::U64::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &U64 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        U64.assert_eq(value.kind())?;
+        U64_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut U64 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        U64_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -659,29 +767,60 @@ impl TryFrom<&Value> for &ValU64 {
     }
 }
 
-pub struct ValU128([u8]);
-impl PartialEq<Self> for ValU128 {
+
+pub struct U128([u8]);
+impl U128 {
+    pub fn to_owned(&self) -> u128 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: u128) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<u128> for &U128 {
+    fn into(self) -> u128 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for U128 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValU128 {
+impl PartialOrd<Self> for U128 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValU128 {
+impl Deref for U128 {
     type Target = zerocopy::U128<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::U128::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValU128 {
+impl DerefMut for U128 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::U128::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &U128 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        U128.assert_eq(value.kind())?;
+        U128_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut U128 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        U128_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -689,18 +828,32 @@ impl TryFrom<&Value> for &ValU128 {
     }
 }
 
-pub struct ValI8([u8]);
-impl PartialEq<Self> for ValI8 {
+pub struct I8([u8]);
+impl I8 {
+    pub fn to_owned(&self) -> i8 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: i8) {
+        *self.deref_mut() = value
+    }
+}
+impl Into<i8> for &I8 {
+    fn into(self) -> i8 {
+        *self.deref()
+    }
+}
+impl PartialEq<Self> for I8 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValI8 {
+impl PartialOrd<Self> for I8 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValI8 {
+impl Deref for I8 {
     type Target = i8;
 
     fn deref(&self) -> &Self::Target {
@@ -709,11 +862,29 @@ impl Deref for ValI8 {
         }
     }
 }
-impl TryFrom<&Value> for &ValI8 {
+impl DerefMut for I8 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe {
+            std::mem::transmute(&mut self.0[1])
+        }
+    }
+}
+impl TryFrom<&Value> for &I8 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        I8.assert_eq(value.kind())?;
+        I8_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut I8 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        I8_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -721,29 +892,59 @@ impl TryFrom<&Value> for &ValI8 {
     }
 }
 
-pub struct ValI16([u8]);
-impl PartialEq<Self> for ValI16 {
+pub struct I16([u8]);
+impl I16 {
+    pub fn to_owned(&self) -> i16 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: i16) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<i16> for &I16 {
+    fn into(self) -> i16 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for I16 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValI16 {
+impl PartialOrd<Self> for I16 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValI16 {
+impl Deref for I16 {
     type Target = zerocopy::I16<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::I16::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValI16 {
+impl DerefMut for I16 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::I16::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &I16 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        I16.assert_eq(value.kind())?;
+        I16_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut I16 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        I16_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -751,29 +952,59 @@ impl TryFrom<&Value> for &ValI16 {
     }
 }
 
-pub struct ValI32([u8]);
-impl PartialEq<Self> for ValI32 {
+pub struct I32([u8]);
+impl I32 {
+    pub fn to_owned(&self) -> i32 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: i32) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<i32> for &I32 {
+    fn into(self) -> i32 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for I32 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValI32 {
+impl PartialOrd<Self> for I32 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValI32 {
+impl Deref for I32 {
     type Target = zerocopy::I32<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::I32::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValI32 {
+impl DerefMut for I32 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::I32::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &I32 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        I32.assert_eq(value.kind())?;
+        I32_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut I32 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        I32_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -781,29 +1012,59 @@ impl TryFrom<&Value> for &ValI32 {
     }
 }
 
-pub struct ValI64([u8]);
-impl PartialEq<Self> for ValI64 {
+pub struct I64([u8]);
+impl I64 {
+    pub fn to_owned(&self) -> i64 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: i64) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<i64> for &I64 {
+    fn into(self) -> i64 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for I64 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValI64 {
+impl PartialOrd<Self> for I64 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValI64 {
+impl Deref for I64 {
     type Target = zerocopy::I64<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::I64::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValI64 {
+impl DerefMut for I64 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::I64::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &I64 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        I64.assert_eq(value.kind())?;
+        I64_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut I64 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        I64_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -811,29 +1072,59 @@ impl TryFrom<&Value> for &ValI64 {
     }
 }
 
-pub struct ValI128([u8]);
-impl PartialEq<Self> for ValI128 {
+pub struct I128([u8]);
+impl I128 {
+    pub fn to_owned(&self) -> i128 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: i128) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<i128> for &I128 {
+    fn into(self) -> i128 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for I128 {
     fn eq(&self, other: &Self) -> bool {
         self.deref() == other.deref()
     }
 }
-impl PartialOrd<Self> for ValI128 {
+impl PartialOrd<Self> for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl Deref for ValI128 {
+impl Deref for I128 {
     type Target = zerocopy::I128<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::I128::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValI128 {
+impl DerefMut for I128 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::I128::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &I128 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        I128.assert_eq(value.kind())?;
+        I128_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut I128 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        I128_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -841,39 +1132,69 @@ impl TryFrom<&Value> for &ValI128 {
     }
 }
 
-pub struct ValF32([u8]);
-impl PartialEq<Self> for ValF32 {
+pub struct F32([u8]);
+impl F32 {
+    pub fn to_owned(&self) -> f32 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: f32) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<f32> for &F32 {
+    fn into(self) -> f32 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for F32 {
     fn eq(&self, other: &Self) -> bool {
         self.deref().eq(other.deref())
     }
 }
-impl PartialOrd<Self> for ValF32 {
+impl PartialOrd<Self> for F32 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl PartialEq<f32> for ValF32 {
+impl PartialEq<f32> for F32 {
     fn eq(&self, other: &f32) -> bool {
         self.deref().eq(other)
     }
 }
-impl PartialOrd<f32> for ValF32 {
+impl PartialOrd<f32> for F32 {
     fn partial_cmp(&self, other: &f32) -> Option<std::cmp::Ordering> {
         self.deref().get().partial_cmp(other)
     }
 }
-impl Deref for ValF32 {
+impl Deref for F32 {
     type Target = zerocopy::F32<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::F32::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValF32 {
+impl DerefMut for F32 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::F32::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &F32 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        F32.assert_eq(value.kind())?;
+        F32_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut F32 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        F32_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -881,39 +1202,69 @@ impl TryFrom<&Value> for &ValF32 {
     }
 }
 
-pub struct ValF64([u8]);
-impl PartialEq<Self> for ValF64 {
+pub struct F64([u8]);
+impl F64 {
+    pub fn to_owned(&self) -> f64 {
+        self.into()
+    }
+
+    pub fn set(&mut self, value: f64) {
+        self.deref_mut().set(value)
+    }
+}
+impl Into<f64> for &F64 {
+    fn into(self) -> f64 {
+        self.deref().get()
+    }
+}
+impl PartialEq<Self> for F64 {
     fn eq(&self, other: &Self) -> bool {
         self.deref().eq(other.deref())
     }
 }
-impl PartialOrd<Self> for ValF64 {
+impl PartialOrd<Self> for F64 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.deref())
     }
 }
-impl PartialEq<f64> for ValF64 {
+impl PartialEq<f64> for F64 {
     fn eq(&self, other: &f64) -> bool {
         self.deref().eq(other)
     }
 }
-impl PartialOrd<f64> for ValF64 {
+impl PartialOrd<f64> for F64 {
     fn partial_cmp(&self, other: &f64) -> Option<std::cmp::Ordering> {
         self.deref().get().partial_cmp(other)
     }
 }
-impl Deref for ValF64 {
+impl Deref for F64 {
     type Target = zerocopy::F64<LittleEndian>;
 
     fn deref(&self) -> &Self::Target {
         zerocopy::F64::ref_from_bytes(&self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &ValF64 {
+impl DerefMut for F64 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        zerocopy::F64::mut_from_bytes(&mut self.0[1..]).unwrap()
+    }
+}
+impl TryFrom<&Value> for &F64 {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        F64.assert_eq(value.kind())?;
+        F64_KIND.assert_eq(value.kind())?;
+
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut F64 {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        F64_KIND.assert_eq(value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -922,28 +1273,28 @@ impl TryFrom<&Value> for &ValF64 {
 }
 
 #[derive(Debug)]
-pub struct ValStr([u8]);
-impl PartialEq<str> for ValStr {
-    fn eq(&self, other: &str) -> bool {
-        self.deref().eq(other)
-    }
-}
-impl PartialEq<Self> for ValStr {
-    fn eq(&self, other: &Self) -> bool {
-        self.deref().eq(other.deref())
-    }
-}
-impl std::fmt::Display for ValStr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.deref().fmt(f)
-    }
-}
-impl ValStr {
+pub struct Str([u8]);
+impl Str {
     pub fn to_owned(&self) -> String {
         self.deref().to_owned()
     }
 }
-impl Deref for ValStr {
+impl PartialEq<str> for Str {
+    fn eq(&self, other: &str) -> bool {
+        self.deref().eq(other)
+    }
+}
+impl PartialEq<Self> for Str {
+    fn eq(&self, other: &Self) -> bool {
+        self.deref().eq(other.deref())
+    }
+}
+impl std::fmt::Display for Str {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+impl Deref for Str {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
@@ -952,367 +1303,522 @@ impl Deref for ValStr {
         }
     }
 }
-impl TryFrom<&Value> for &ValStr {
+impl TryFrom<&Value> for &Str {
     type Error = PagerError;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
-        STR.assert_eq(value.kind())?;
+        STR_KIND.assert_eq(value.kind())?;
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+impl TryFrom<&mut Value> for &mut Str {
+    type Error = PagerError;
+
+    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+        STR_KIND.assert_eq(value.kind())?;
         unsafe {
             Ok(std::mem::transmute(value))
         }
     }
 }
 
+
 impl FromValueBuilder for u8 {
     type Output = Self;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::U8(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::U8(val) = value {
-            val
-        }
-        panic!("not an unsigned byte")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for u8 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for u8 {
-    fn get_value_kind() -> ValueKind {
-        U8
-    }
+    const KIND: ValueKind = U8_KIND;
 }
 
 impl FromValue for u8 {
-    type Output = ValU8;
+    type Output = U8;
     
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
 impl FromValueBuilder for u16 {
-    type Output = Self;
+    type Output = U16;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::U16(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
-        panic!("not an unsigned word")
+        panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::U16(val) = value {
-            val
-        }
-        panic!("not an unsigned word")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for u16 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for u16 {
-    fn get_value_kind() -> ValueKind {
-        U16
-    }
+    const KIND: ValueKind = U16_KIND;
 }
 
 impl FromValue for u16 {
-    type Output = ValU16;
+    type Output = U16;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
 impl FromValueBuilder for u32 {
-    type Output = Self;
+    type Output = U32;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::U32(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
-        panic!("not an u32")
+        panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::U32(val) = value {
-            val
-        }
-        panic!("not an u32")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for u32 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for u32 {
-    fn get_value_kind() -> ValueKind {
-        U32
-    }
+    const KIND: ValueKind = U32_KIND;
 }
 impl FromValue for u32 {
-    type Output = ValU32;
+    type Output = U32;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 impl FromValueBuilder for u64 {
-    type Output = Self;
+    type Output = U64;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::U64(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::U64(val) = value {
-            val
-        }
-        panic!("not an unsigned byte")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 impl IntoValueBuilder for u64 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 impl GetValueKind for u64 {
-    fn get_value_kind() -> ValueKind {
-        U64
-    }
+    const KIND: ValueKind = U64_KIND;
 }
 impl FromValue for u64 {
-    type Output = ValU64;
+    type Output = U64;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
 impl FromValueBuilder for u128 {
-    type Output = Self;
+    type Output = U128;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::U128(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::U128(val) = value {
-            val
-        }
-        panic!("not an unsigned byte")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for u128 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 impl GetValueKind for u128 {
-    fn get_value_kind() -> ValueKind {
-        U128
-    }
+    const KIND: ValueKind = U128_KIND;
 }
 impl FromValue for u128 {
-    type Output = ValU128;
+    type Output = U128;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
 impl FromValueBuilder for i8 {
-    type Output = Self;
+    type Output = I8;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self {
-        if let ValueBuilder::I8(val) = value {
-            val
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self {
-        if let ValueBuilder::I8(val) = value {
-            val
-        }
-        panic!("not an unsigned byte")
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 impl IntoValueBuilder for i8 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 impl GetValueKind for i8 {
-    fn get_value_kind() -> ValueKind {
-        I8
-    }
+    const KIND: ValueKind = I8_KIND;
 }
 impl FromValue for i8 {
-    type Output = ValI8;
+    type Output = I8;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
     }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
+    }
 }
+impl FromValueBuilder for i16 {
+    type Output = I16;
 
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
+    }
+}
 impl IntoValueBuilder for i16 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 impl GetValueKind for i16 {
-    fn get_value_kind() -> ValueKind {
-        I16
-    }
+    const KIND: ValueKind = I16_KIND;
 }
 impl FromValue for i16 {
-    type Output = ValI16;
+    type Output = I16;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
     }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
+    }
 }
+impl FromValueBuilder for i32 {
+    type Output = I32;
 
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
+    }
+}
 impl IntoValueBuilder for i32 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 impl GetValueKind for i32 {
-    fn get_value_kind() -> ValueKind {
-        I32
-    }
+    const KIND: ValueKind = I32_KIND;
 }
 impl FromValue for i32 {
-    type Output = ValI32;
+    type Output = I32;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
     }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
+    }
 }
+impl FromValueBuilder for i64 {
+    type Output = I64;
 
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
+    }
+}
 impl IntoValueBuilder for i64 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for i64 {
-    fn get_value_kind() -> ValueKind {
-        I64
-    }
+    const KIND: ValueKind = I64_KIND;
 }
 impl FromValue for i64 {
-    type Output = ValI64;
+    type Output = I64;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
 impl IntoValueBuilder for i128 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
+impl FromValueBuilder for i128 {
+    type Output = I128;
 
-impl GetValueKind for i128 {
-    fn get_value_kind() -> ValueKind {
-        I128
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
     }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
+    }
+}
+impl GetValueKind for i128 {
+    const KIND: ValueKind = I128_KIND;
 }
 
 impl FromValue for i128 {
-    type Output = ValI128;
+    type Output = I128;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
+impl FromValueBuilder for f32 {
+    type Output = F32;
+
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
+    }
+}
 impl IntoValueBuilder for f32 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for f32 {
-    fn get_value_kind() -> ValueKind {
-        F32
-    }
+    const KIND: ValueKind = F32_KIND;
 }
 
 impl FromValue for f32 {
-    type Output = ValF32;
+    type Output = F32;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
+    }
+}
+
+impl FromValueBuilder for f64 {
+    type Output = F64;
+
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for f64 {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for f64 {
-    fn get_value_kind() -> ValueKind {
-        F64
+    const KIND: ValueKind = F64_KIND;
+}
+
+
+impl FromValue for f64 {
+    type Output = F64;
+
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+        value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 
-impl FromValue for f64 {
-    type Output = ValF64;
+impl FromValueBuilder for str {
+    type Output = Str;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
-        value.try_into()    
+    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
+        if let ValueBuilder::Other(val) = value {
+           return val.cast::<Self>()
+        }
+        panic!("not an unsigned byte")
+    }
+
+    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
+        if let ValueBuilder::Other(buf) = value {
+            return buf.cast_mut::<Self>()
+         }
+         panic!("not an unsigned byte")
     }
 }
 
 impl IntoValueBuilder for &str {
     fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Value(self.into_value_buf())
+        ValueBuilder::Other(self.into_value_buf())
     }
 }
 
 impl GetValueKind for str {
-    fn get_value_kind() -> ValueKind {
-        STR
-    }
+    const KIND: ValueKind = STR_KIND;
 }
 
 impl FromValue for str {
-    type Output = ValStr;
+    type Output = Str;
 
-    fn try_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
         value.try_into()    
+    }
+    
+    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+        value.try_into()
     }
 }
 

@@ -209,7 +209,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
         self
         .iter()
-        .skip(at.into())
+        .skip(usize::from(at) + 1)
         .try_for_each::<_, PagerResult<()>>(|src_cell| {
             let cid = dest.push()?;
             src_cell.copy_into(&mut dest[&cid]); 
@@ -260,13 +260,18 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         }
 
         let cid = self.pop_free_cell()
-        .unwrap_or_else(|| {
-            self.as_mut_header()
-                .inc_len()
-                .into()
-        });
+            .unwrap_or_else(|| {
+                self.as_mut_header()
+                    .inc_len()
+                    .into()
+            });
         
-        let cell = self.borrow_mut_cell(&cid).unwrap();
+        
+        let len = self.len();
+        let cap = self.capacity();
+        println!("{cid} / {len} / {cap} / {0} / {1}", self.as_header().free_len, self.is_full());
+        
+        let cell = self.borrow_mut_cell(&cid).expect(&format!("missing cell {cid} {0}/{1}", len, cap));
         
         cell
             .as_mut_uninit_header()
@@ -320,7 +325,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         self[next].set_previous_sibling(Some(*cid));
     }  
 
-    fn free_cell(&mut self, cid: &CellId) {
+    pub fn free_cell(&mut self, cid: &CellId) {
         self.detach_cell(cid);
         self.push_free_cell(cid);
     }
@@ -435,14 +440,14 @@ impl CellPageHeader {
     }
 
     pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> {
-        if (cid.0 - 1) >= self.capacity.0 {
-            return None
+        if cid.0 <= self.capacity.0 {
+            let loc: usize = self.get_cell_location(cid).into();
+            let size: usize = self.cell_size.into();
+    
+            return Some(loc..(loc + size))
         }
 
-        let loc: usize = self.get_cell_location(cid).into();
-        let size: usize = self.cell_size.into();
-
-        Some(loc..(loc + size))
+        None
     }
 
     pub fn get_head(&self) -> Option<CellId> {
@@ -962,13 +967,17 @@ mod tests {
         assert_eq!(cells.iter().map(|cell| cell.id()).collect::<Vec<_>>(), vec![c1, c3]);
         assert_eq!(cells.len(), CellCapacity(2));
 
+        let c4 = cells.alloc_cell()?;
+
+        assert_eq!(c2, c4);
+
         Ok(())
     }
 
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(u64::get_value_kind().full_size().unwrap());
+        let content_size = PageSize::from(u64::KIND.full_size().unwrap());
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
@@ -991,7 +1000,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(u64::get_value_kind().full_size().unwrap());
+        let content_size = PageSize::from(u64::KIND.full_size().unwrap());
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 

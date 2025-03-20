@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fmt::Display, ops::{DerefMut, Div, Index, IndexMut, Ran
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, PagerResult}, value::{Value, ValueKind}};
+use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, PagerResult}, value::{Value, ValueBuf, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeInteriorHeader>());
@@ -115,17 +115,27 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
         })
     }
    
-    pub fn split_into<P2>(&mut self, dest: &mut BPTreeInterior<P2>) -> PagerResult<&Value> where P2: AsMutPageSlice {
+    pub fn split_into<P2>(&mut self, dest: &mut BPTreeInterior<P2>) -> PagerResult<ValueBuf> where P2: AsMutPageSlice {
         let at = self.as_cells().len().div(2);
+        
         self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
+        dest.set_tail(self.tail());
 
-        let key = self.iter().last().map(|cell| cell.borrow_key()).unwrap();
+        let (to_remove, pivot, new_left_tail) = self.iter().last().map(|cell| (cell.0.id(), cell.borrow_key().to_owned(), cell.left().unwrap())).unwrap();
+        
+        self.as_mut_cells().free_cell(&to_remove);
+        self.set_tail(Some(new_left_tail));
 
-        Ok(key)
+        
+        Ok(pivot)
     }
 
     pub fn set_parent(&mut self, parent: Option<PageId>) {
         self.as_mut_header().parent = parent.into()
+    }
+
+    pub fn set_tail(&mut self, tail: Option<PageId>) {
+        self.as_mut_header().tail = tail.into()
     }
 
     fn as_mut_cells(&mut self) -> &mut CellPage<Page> {
@@ -163,6 +173,10 @@ impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
         .map(|interior| interior.left().clone())
         .unwrap_or_else(|| self.as_header().tail())
         .into();
+
+        if maybe_child.is_none() {
+            println!("{self}");
+        }
 
         maybe_child.expect("should have a child to perform the search")
     }
@@ -368,5 +382,27 @@ mod tests {
         assert_eq!(pid, PageId::new(400));
 
         Ok(())
+    }
+
+    #[test]
+    fn test_split_at() -> Result<(), Box<dyn Error>> {
+        let pager = fixture_new_pager();
+        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        
+        let mut left = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
+        left.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;   
+        left.insert(PageId::new(100), &ValueBuf::from(110_u64), PageId::new(300))?;
+        left.insert(PageId::new(200), &ValueBuf::from(140_u64), PageId::new(400))?;
+        left.insert(PageId::new(200), &ValueBuf::from(120_u64), PageId::new(500))?;
+
+        println!("{left}");
+
+        let mut right = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
+        
+        let key = left.split_into(&mut right)?;
+
+        println!("{left} | {key} | {right}");
+
+        Ok(())  
     }
 }

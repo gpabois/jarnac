@@ -13,6 +13,7 @@
 
 use std::ops::{DerefMut, Div, Index, IndexMut, Range, RangeFrom};
 
+use itertools::Itertools;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
@@ -24,6 +25,19 @@ pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER
 /// Représente une feuille d'un arbre B+.
 pub struct BPTreeLeaf<Page>(CellPage<Page>) where Page: AsRefPageSlice;
 
+impl<Page> std::fmt::Display for BPTreeLeaf<Page> where Page: AsRefPageSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BPTreeLeaf[")?;
+        
+        self.iter()
+        .map(|cell| cell.borrow_key().to_string())
+        .join(" | ")
+        .fmt(f)?;
+
+        write!(f, "]")
+    }
+}
+
 impl<Page> Clone for BPTreeLeaf<Page> where Page: AsRefPageSlice + Clone {
     fn clone(&self) -> Self {
         Self(self.0.clone())
@@ -31,6 +45,7 @@ impl<Page> Clone for BPTreeLeaf<Page> where Page: AsRefPageSlice + Clone {
 }
 
 impl<'pager> BPTreeLeaf<MutPage<'pager>> {
+    #[allow(dead_code)]
     pub fn into_ref(self) -> BPTreeLeaf<RefPage<'pager>> {
         BPTreeLeaf(self.0.into_ref())
     }
@@ -42,6 +57,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
         PageKind::BPlusTreeLeaf.assert(kind).map(|_| Self(CellPage::from(page)))
     }
 
+    #[allow(dead_code)]
     pub fn borrow_value<'a>(&'a self, key: &Value) -> Option<&'a Var<PageSlice>>{
         self.iter().filter(|&cell| cell == key).map(|cell| cell.borrow_value()).last()
     }
@@ -179,7 +195,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     pub fn insert<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
         let before = self
         .iter()
-        .filter(|&cell| cell <= &key)
+        .filter(|&cell| cell >= &key)
         .map(|cell| cell.cid())
         .last();
 
@@ -423,6 +439,52 @@ mod tests {
                 .cast::<u64>()
                 .to_owned()  
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split() -> Result<(), Box<dyn Error>> {
+        let pager = fixture_new_pager();
+        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        
+        let mut left = tree
+            .insert_leaf()
+            .and_then(|pid| tree.borrow_mut_leaf(&pid))?;
+
+        let mut right = tree
+            .insert_leaf()
+            .and_then(|pid| tree.borrow_mut_leaf(&pid))?;
+        
+        left.insert(
+            &90_u64.into_value_buf(), 
+            &5678_u64.into_value_buf(), 
+            pager.as_ref()
+        )?;
+        
+        left.insert(
+            &100_u64.into_value_buf(), 
+            &1234_u64.into_value_buf(), 
+            pager.as_ref()
+        )?;
+
+        left.insert(
+            &ValueBuf::from(110_u64), 
+            &ValueBuf::from(891011_u64), 
+            pager.as_ref()
+        )?;
+
+        left.insert(
+            &ValueBuf::from(120_u64), 
+            &ValueBuf::from(891011_u64), 
+            pager.as_ref()
+        )?;
+
+        println!("{left}");
+
+        let key = left.split_into(&mut right)?.to_owned();
+
+        println!("{left} | {key} | {right}");
 
         Ok(())
     }

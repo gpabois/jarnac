@@ -101,8 +101,8 @@ impl Display for PagerErrorKind {
             PagerErrorKind::PageNotCached(id) => write!(f, "page {id} not cached"),
             PagerErrorKind::CellPageFull => write!(f, "cell page is full"),
             PagerErrorKind::SpilledVar => write!(f, "var data has spilled"),
-            PagerErrorKind::CellPageOverflow => write!(f, "expected cell space overflows allocated page space"),
-            PagerErrorKind::WrongValueKind { expected, got } => todo!(),
+            PagerErrorKind::CellPageOverflow => write!(f, "cell space overflows allocated page space"),
+            PagerErrorKind::WrongValueKind { expected, got } => write!(f, "expecting value type {expected}, got {got} instead"),
         }
     }
 }

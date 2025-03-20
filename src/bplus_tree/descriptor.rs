@@ -12,6 +12,10 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
         PageKind::BPlusTree.assert(kind).map(|_| Self(page))
     }
 
+    pub fn len(&self) -> u64 {
+        self.as_header().len
+    }
+
     pub fn k(&self) -> u8 {
         self.as_header().k
     }
@@ -51,6 +55,14 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
         *desc.as_mut_header() = header;
 
         Ok(desc)   
+    }
+
+    pub fn inc_len(&mut self) {
+        self.as_mut_header().len += 1;
+    }
+
+    pub fn dec_len(&mut self) {
+        self.as_mut_header().len -= 1;
     }
 
     pub fn set_root(&mut self, root: Option<PageId>) {
@@ -94,4 +106,6 @@ pub struct BPlusTreeHeader {
     pub(super) k: u8,
     /// Pointeur vers la racine
     pub(super) root: OptionalPageId,
+    /// Nombre d'éléments stockés
+    pub(super) len: u64
 }

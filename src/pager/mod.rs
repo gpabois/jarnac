@@ -464,7 +464,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
 pub mod fixtures {
     use std::rc::Rc;
 

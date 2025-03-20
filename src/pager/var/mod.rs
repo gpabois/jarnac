@@ -2,7 +2,7 @@ pub mod stream;
 
 use std::{borrow::Borrow, io::{Cursor, Read, Write}, ops::{Deref, Range}};
 
-use zerocopy::{FromBytes, IntoBytes, TryFromBytes};
+use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
