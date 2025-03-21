@@ -381,11 +381,11 @@ impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
         Ok(())
     }
 
-    pub fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
+    pub(crate) fn as_mut_cell(&mut self) -> &mut Cell<Slice> {
         &mut self.0
     }
 
-    pub fn borrow_mut_key(&mut self) -> &mut Value {
+    pub(crate) fn borrow_mut_key(&mut self) -> &mut Value {
         let range = self.key_range();
         let bytes = &mut self.as_mut_cell().as_mut_content_slice()[range];
         Value::from_mut(bytes)
