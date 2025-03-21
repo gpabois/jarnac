@@ -1,6 +1,5 @@
 use std::{fmt::Debug, marker::PhantomData, ptr::NonNull};
-
-use crate::pager::PagerResult;
+use crate::result::Result;
 
 use super::{MutPage, PageId, PageSlice, RefPage};
 
@@ -112,7 +111,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Emprunte les données de la page en lecture.
-    pub fn try_borrow(&self) -> PagerResult<RefPage<'_>> {
+    pub fn try_borrow(&self) -> Result<RefPage<'_>> {
         RefPage::try_new(self.clone())
     }
 
@@ -124,7 +123,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Emprunte les données de la page en écriture.
-    pub fn try_borrow_mut(&self, dry: bool) -> PagerResult<MutPage<'_>> {
+    pub fn try_borrow_mut(&self, dry: bool) -> Result<MutPage<'_>> {
         MutPage::try_new_with_options(self.clone(), dry)
     }
 

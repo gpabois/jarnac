@@ -4,12 +4,11 @@ use std::{
     ops::Deref,
 };
 
-use crate::fs::IFileSystem;
+use crate::{error::{Error, ErrorKind}, fs::IFileSystem, result::Result};
 
 use super::{
-    error::{PagerError, PagerErrorKind},
     logs::PagerLogs,
-    IPagerInternals, PagerResult,
+    IPagerInternals, 
 };
 
 /// Transaction atomique sur le fichier paginé.
@@ -31,7 +30,7 @@ where
 
     /// Commit toutes les pages au sein du disque.
     /// Rollback en cas d'erreur.
-    pub fn commit(self, file: &mut Fs::File<'_>) -> PagerResult<()> {
+    pub fn commit(self, file: &mut Fs::File<'_>) -> Result<()> {
         let mut logs = PagerLogs::open(&self.path, &self.fs)?;
         // Sauvegarde l'entête du fichier.
         logs.log_pager_header(file)?;
@@ -52,7 +51,7 @@ where
 
                 // Aïe, une page sale est toujours empruntée en écriture...
                 if cpage.is_mut_borrowed() {
-                    return Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed));
+                    return Err(Error::new(ErrorKind::PageCurrentlyBorrowed));
                 }
 
                 

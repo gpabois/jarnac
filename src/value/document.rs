@@ -2,7 +2,7 @@ use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::pager::{error::PagerError, PagerResult};
+use crate::{error::Error, result::Result};
 
 use super::{FromValue, GetValueKind, IntoValueBuf, IntoValueBuilder, path::IntoValuePath, Value, ValueBuf, ValueBuilder, ValueKind, DOCUMENT_KIND, KV_PAIR_KIND};
 
@@ -101,9 +101,9 @@ impl Deref for DocumentRef {
     }
 }
 impl TryFrom<&Value> for &DocumentRef {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         DOCUMENT_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -112,9 +112,9 @@ impl TryFrom<&Value> for &DocumentRef {
     }
 }
 impl TryFrom<&mut Value> for &mut DocumentRef {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         DOCUMENT_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -152,11 +152,11 @@ impl GetValueKind for Document {
 impl FromValue for Document {
     type Output = DocumentRef;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }

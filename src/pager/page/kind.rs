@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::pager::{error::{PagerError, PagerErrorKind}, PagerResult};
+use crate::{error::{Error, ErrorKind}, result::Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -33,9 +33,9 @@ impl Display for PageKind {
 }
 
 impl PageKind {
-    pub fn assert(&self, to: PageKind) -> PagerResult<()> {
+    pub fn assert(&self, to: PageKind) -> Result<()> {
         (*self == to).then_some(()).ok_or_else(|| {
-            PagerError::new(PagerErrorKind::WrongPageKind {
+            Error::new(ErrorKind::WrongPageKind {
                 expected: to,
                 got: *self,
             })
@@ -44,16 +44,16 @@ impl PageKind {
 }
 
 impl TryFrom<u8> for PageKind {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Free),
             1 => Ok(Self::Spill),
             2 => Ok(Self::BPlusTree),
             3 => Ok(Self::BPlusTreeInterior),
             4 => Ok(Self::BPlusTreeLeaf),
-            invalid_code => Err(PagerError::new(PagerErrorKind::InvalidPageKind(invalid_code))),
+            invalid_code => Err(Error::new(ErrorKind::InvalidPageKind(invalid_code))),
         }
     }
 }

@@ -11,3 +11,5 @@ pub mod pager;
 pub mod value;
 pub mod bplus_tree;
 pub mod prelude;
+pub mod error;
+pub mod result;

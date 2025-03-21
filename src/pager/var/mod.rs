@@ -6,10 +6,10 @@ use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::value::{Value, ValueBuf};
+use crate::{error::{Error, ErrorKind}, result::Result, value::{Value, ValueBuf}};
 
 use super::{
-    error::{PagerError, PagerErrorKind}, page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager, PagerResult
+    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager
 };
 
 pub enum VarValue<'data> {
@@ -64,16 +64,16 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     }
 
     /// Essaye de récupérer la valeur si cette dernière n'a pas débordée ailleurs.
-    pub fn try_borrow(&self) -> PagerResult<&Value> {
+    pub fn try_borrow(&self) -> Result<&Value> {
         if !self.has_spilled() {
             Ok(Value::from_ref(self.borrow_content()))
         } else {
-            Err(PagerError::new(PagerErrorKind::SpilledVar))
+            Err(Error::new(ErrorKind::SpilledVar))
         }
     }
 
     /// Récupère la valeur qui peut avoir débordée ailleurs.
-    pub fn get<Pager>(&self, pager: &Pager) -> PagerResult<VarValue<'_>> where Pager: IPager + ?Sized {
+    pub fn get<Pager>(&self, pager: &Pager) -> Result<VarValue<'_>> where Pager: IPager + ?Sized {
         if self.has_spilled() {
             let mut buf = Vec::<u8>::default();
             read_dynamic_sized_data(self.as_header(), &mut buf, self.borrow_content(), pager)?;
@@ -87,7 +87,7 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
         self.as_header().has_spilled()
     }
 
-    pub fn copy_into<S2>(&self, dest: &mut Var<S2>) -> PagerResult<()> where S2: AsMutPageSlice + ? Sized {
+    pub fn copy_into<S2>(&self, dest: &mut Var<S2>) -> Result<()> where S2: AsMutPageSlice + ? Sized {
         *dest.as_mut_header() = self.as_header().clone();
         dest.borrow_mut_content().copy_from_slice(self.borrow_content());
         Ok(())
@@ -114,7 +114,7 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         }
     }
 
-    pub fn set<Pager>(&mut self, data: &Value, pager: &Pager) -> PagerResult<()> where Pager: IPager + ?Sized {
+    pub fn set<Pager>(&mut self, data: &Value, pager: &Pager) -> Result<()> where Pager: IPager + ?Sized {
         *self.as_mut_header() = write_var_data(
             data, 
             self.borrow_mut_data_in_page_space(), 
@@ -189,7 +189,7 @@ impl VarHeader {
 pub struct SpillPage<Page>(Page) where Page: AsRefPageSlice;
 
 impl<Page> SpillPage<Page> where Page: AsRefPageSlice {
-    pub fn try_from(page: Page) -> PagerResult<Self> {
+    pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into().unwrap();
         PageKind::Spill.assert(kind).map(|_| Self(page))
     }
@@ -284,7 +284,7 @@ impl SpillPageData {
 }
 
 /// Libère toutes les pages de débordement de la liste chaînée.
-pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) -> PagerResult<()> {
+pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) -> Result<()> {
     let mut current = Some(head);
 
     while let Some(pid) = current {
@@ -303,7 +303,7 @@ pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
     dest: &mut W,
     src: &[u8],
     pager: &Pager,
-) -> PagerResult<()> {
+) -> Result<()> {
     let in_page_data = &src[..header.in_page_size.try_into().unwrap()];
     dest.write_all(in_page_data)?;
 
@@ -327,7 +327,7 @@ pub fn write_var_data<Pager: IPager + ?Sized>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
-) -> PagerResult<VarHeader> {
+) -> Result<VarHeader> {
     let total_size = data.len();
     let mut remaining: usize = total_size;
 
@@ -398,8 +398,8 @@ mod tests {
         let mut dest: [u8;100] = [0;100];
 
         let dsd_header: crate::pager::var::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
-        assert!(dsd_header.in_page_size == dest.len().try_into().unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
-        assert!(dsd_header.total_size == data.len().try_into().unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
+        assert!(dsd_header.in_page_size == u64::try_from(dest.len()).unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
+        assert!(dsd_header.total_size == u64::try_from(data.len()).unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.get_spill_page() == Some(PageId::from(1u64)), "il doit y avoir eu du débordement");
 
         // Efface les données stockées dans le tampon.

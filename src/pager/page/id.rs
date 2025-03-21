@@ -42,7 +42,7 @@ impl PartialEq<u64> for PageId {
 
 impl PartialOrd<u64> for PageId {
     fn partial_cmp(&self, other: &u64) -> Option<std::cmp::Ordering> {
-        self.0.get().partial_cmp(other)
+        (self.0.get() - 1).partial_cmp(other)
     }
 }
 

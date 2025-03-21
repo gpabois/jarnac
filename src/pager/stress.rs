@@ -8,9 +8,9 @@ use std::{
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
-use crate::fs::{FileOpenOptions, FilePtr, IFileSystem};
+use crate::{fs::{FileOpenOptions, FilePtr, IFileSystem}, result::Result};
 
-use super::{page::{descriptor::PageDescriptor, PageId, PageSize}, PagerResult};
+use super::page::{descriptor::PageDescriptor, PageId, PageSize};
 
 /// Gestion du *stress mémoire* sur le système de pagination.
 ///
@@ -19,9 +19,9 @@ use super::{page::{descriptor::PageDescriptor, PageId, PageSize}, PagerResult};
 /// de données, généralement un disque mémoire.
 pub trait IPagerStress {
     /// Décharge une page de la mémoire.
-    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()>;
+    fn discharge(&self, src: &PageDescriptor<'_>) -> Result<()>;
     /// Récupère une page en mémoire.
-    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()>;
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()>;
     /// Vérifie si la page est déchargée.
     fn contains(&self, pid: &PageId) -> bool;
 }
@@ -30,11 +30,11 @@ impl<U> IPagerStress for Rc<U>
 where
     U: IPagerStress,
 {
-    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> Result<()> {
         self.deref().discharge(src)
     }
 
-    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()> {
         self.deref().retrieve(dest)
     }
 
@@ -55,11 +55,11 @@ impl BoxedPagerStress {
 }
 
 impl IPagerStress for BoxedPagerStress {
-    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> Result<()> {
         self.0.discharge(src)
     }
 
-    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()> {
         self.0.retrieve(dest)
     }
 
@@ -95,7 +95,7 @@ impl<Fs: IFileSystem> FsPagerStress<Fs> {
 }
 
 impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
-    fn discharge(&self, src: &PageDescriptor<'_>) -> PagerResult<()> {
+    fn discharge(&self, src: &PageDescriptor<'_>) -> Result<()> {
         let pid: PageId = self
             .freelist
             .borrow_mut()
@@ -117,7 +117,7 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         Ok(())
     }
 
-    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> PagerResult<()> {
+    fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()> {
         let pid = self.pages.borrow().get(&dest.id()).copied().map(PageId::from).unwrap();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
@@ -137,9 +137,51 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
     }
 }
 
+pub mod stubs {
+    use std::{cell::RefCell, collections::HashMap, io::Write};
+
+    use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, PageId}, result::Result};
+
+    use super::IPagerStress;
+
+    #[derive(Default)]
+    /// Bouchon récupérant les décharges du cache
+    pub struct StressStub(RefCell<HashMap<PageId, Vec<u8>>>);
+
+    impl IPagerStress for StressStub {
+        fn discharge(&self, src: &super::PageDescriptor<'_>) -> Result<()> {
+            let mut buf = Vec::<u8>::new();
+            buf.write_all(src.borrow().as_bytes())?;
+            //println!("décharge {0} {buf:?}", src.id());
+            self.0.borrow_mut().insert(*src.id(), buf);
+            Ok(())
+        }
+
+        fn retrieve(&self, dest: &mut super::PageDescriptor<'_>) -> Result<()> {
+            let pid = dest.id();
+            let mut space = self.0.borrow_mut();
+            let buf = space.get(&pid).unwrap();
+            //println!("récupère {pid} {buf:?}");
+            dest.borrow_mut(false)
+                .as_mut_bytes()
+                .write_all(buf)?;
+
+            space.remove(&dest.id());
+            Ok(())
+        }
+
+        fn contains(&self, pid: &PageId) -> bool {
+            self.0.borrow().contains_key(pid)
+        }
+    }
+
+}
+
 #[cfg(test)]
 mod test {
-    use std::error::Error;
+    use std::{error::Error, io::Write};
+
+    use byteorder::{ReadBytesExt, LE};
 
     use crate::pager::{fixtures::fixture_new_pager, page::{AsMutPageSlice, AsRefPageSlice, PageId}};
 
@@ -147,14 +189,14 @@ mod test {
     fn test_stress() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
 
-        for _ in 1..100_000 {
+        for i in 1..100_000u64 {
             let mut page = pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?;
-            page.as_mut_bytes()[0] = 128_u8;
+            page.as_mut_bytes().write_all(&i.to_le_bytes()).unwrap();
         }
 
-        for i in (1..100_000).into_iter().map(PageId::new) {
+        for i in (1..100_000u64).into_iter().map(PageId::new) {
             let page = pager.borrow_page(&i)?;
-            assert_eq!(page.as_bytes()[0], 128_u8);
+            assert_eq!(page.as_bytes().read_u64::<LE>().unwrap(), u64::try_from(i).unwrap());
         }
 
         Ok(())

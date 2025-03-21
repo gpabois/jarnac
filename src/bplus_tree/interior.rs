@@ -3,7 +3,7 @@ use std::{cmp::Ordering, fmt::Display, ops::{DerefMut, Div, Index, IndexMut, Ran
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}, PagerResult}, value::{Value, ValueBuf, ValueKind}};
+use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}}, result::Result, value::{Value, ValueBuf, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeInteriorHeader>());
@@ -45,7 +45,7 @@ impl<Page> IndexMut<&CellId> for BPTreeInterior<Page> where Page: AsMutPageSlice
 }
 
 impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
-    pub fn try_from(page: Page) -> PagerResult<Self> {
+    pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTreeInterior.assert(kind).map(|_| Self(CellPage::from(page)))
     }
@@ -60,7 +60,7 @@ impl<Page> BPTreeInterior<Page> where Page: AsRefPageSlice {
 
 impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
     /// Initialise un nouveau noeud intérieur.
-    pub fn new(mut page: Page, k: u8, cell_size: PageSize) -> PagerResult<Self> {
+    pub fn new(mut page: Page, k: u8, cell_size: PageSize) -> Result<Self> {
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeInterior as u8;
 
@@ -72,7 +72,7 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
     }
 
     /// Insère un nouveau triplet {gauche | clé | droit} dans le noeud intérieur.
-    pub fn insert(&mut self, left: PageId, key: &Value, right: PageId) -> PagerResult<()> {
+    pub fn insert(&mut self, left: PageId, key: &Value, right: PageId) -> Result<()> {
         let maybe_existing_cid = self.iter()
             .filter(|cell| cell.left() == Some(left))
             .map(|cell| cell.as_cell().id())
@@ -115,8 +115,8 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
         })
     }
    
-    pub fn split_into<P2>(&mut self, dest: &mut BPTreeInterior<P2>) -> PagerResult<ValueBuf> where P2: AsMutPageSlice {
-        let at = self.as_cells().len().div(2);
+    pub fn split_into<P2>(&mut self, dest: &mut BPTreeInterior<P2>) -> Result<ValueBuf> where P2: AsMutPageSlice {
+        let at = self.as_cells().len().div(2) + 1;
         
         self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;
         dest.set_tail(self.tail());

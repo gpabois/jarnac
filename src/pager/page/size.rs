@@ -1,10 +1,10 @@
-use std::{fmt::Display, ops::{Add, Mul, Sub}};
+use std::{fmt::{Debug, Display}, ops::{Add, Mul, Sub}};
 
 use zerocopy_derive::*;
 
 use crate::pager::cell::CellCapacity;
 
-#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Debug)]
+#[derive(IntoBytes, FromBytes, KnownLayout, Immutable, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default)]
 /// Taille d'une page
 /// 
 /// Les valeurs vont jusqu'à [u16::MAX]. C'est à dire jusqu'à 64 Kio.
@@ -15,9 +15,15 @@ use crate::pager::cell::CellCapacity;
 /// Pour un volume entre 2 et 16 tebibytes, le FAT32 impose des blocs d'une taille de 64 Kio.
 pub struct PageSize(u16);
 
+impl Debug for PageSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
 impl Display for PageSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        Display::fmt(&self.0, f)
     }
 }
 

@@ -2,15 +2,17 @@
 use zerocopy_derive::*;
 use zerocopy::TryFromBytes;
 
+use crate::result::Result;
+
 use super::{
-    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind}, IPagerInternals, PagerResult
+    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind}, IPagerInternals
 };
 
 pub struct FreePage<Page>(Page) where Page: AsRefPageSlice;
 
 impl<Page> FreePage<Page> where Page: AsRefPageSlice {
     /// Initialise une page libre.
-    pub fn new(mut page: Page) -> PagerResult<Self> 
+    pub fn new(mut page: Page) -> Result<Self> 
     where Page: AsMutPageSlice
     {
         page.as_mut().fill(0);
@@ -20,7 +22,7 @@ impl<Page> FreePage<Page> where Page: AsRefPageSlice {
     }
 
     /// Embarque la page en tant que page libre.
-    pub fn try_from(page: Page) -> PagerResult<Self> {
+    pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::Free.assert(kind).map(|_| Self(page))
     }
@@ -70,7 +72,7 @@ pub struct FreePageData {
 pub(super) fn push_free_page<Pager: IPagerInternals>(
     pager: &Pager,
     pid: &PageId,
-) -> PagerResult<()> {
+) -> Result<()> {
     let mut page = pager.borrow_mut_page(pid)?;
     page.fill(0);
 
@@ -82,7 +84,7 @@ pub(super) fn push_free_page<Pager: IPagerInternals>(
 }
 
 /// Dépile une page libre dans la liste chaînée
-pub(super) fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> PagerResult<Option<PageId>> {
+pub(super) fn pop_free_page<Pager: IPagerInternals>(pager: &Pager) -> Result<Option<PageId>> {
     if let Some(next) = pager.free_head() {
         let page = pager.borrow_page(&next).and_then(FreePage::try_from)?;
         let new_head = page.get_next();

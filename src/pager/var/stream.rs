@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read};
 
-use crate::pager::{page::{AsRefPageSlice, RefPage}, IPager, PagerResult};
+use crate::{pager::{page::{AsRefPageSlice, RefPage}, IPager}, result::Result};
 
 use super::{SpillPage, Var};
 
@@ -66,7 +66,7 @@ impl<'pager, Slice: AsRefPageSlice + 'pager> VarReaderState<'pager, Slice> {
         matches!(self, Self::EOS)
     }
 
-    pub fn next<Pager: IPager>(&mut self, pager: &'pager Pager) -> PagerResult<()> {
+    pub fn next<Pager: IPager>(&mut self, pager: &'pager Pager) -> Result<()> {
         match self {
             VarReaderState::InPage(cursor) => {
                 *self = cursor.get_ref().as_header().get_spill_page()

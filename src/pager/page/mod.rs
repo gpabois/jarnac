@@ -25,10 +25,8 @@ use std::{
     io::Cursor, mem::forget, ops::{Deref, DerefMut}
 };
 
-use super::{
-    error::{PagerError, PagerErrorKind},
-    PagerResult,
-};
+use crate::{error::{Error, ErrorKind}, result::Result};
+
 
 /// Référence vers une page.
 pub struct RefPage<'pager>(PageDescriptor<'pager>);
@@ -64,10 +62,10 @@ impl Drop for RefPage<'_> {
 }
 
 impl<'pager> RefPage<'pager> {
-    pub(super) fn try_new(descriptor: PageDescriptor<'pager>) -> PagerResult<Self> {
+    pub(super) fn try_new(descriptor: PageDescriptor<'pager>) -> Result<Self> {
         unsafe {
             if descriptor.get_rw_counter() < 0 {
-                Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed))
+                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
             } else {
                 descriptor.inc_rw_counter();
                 Ok(Self(descriptor))
@@ -130,10 +128,10 @@ impl DerefMut for MutPage<'_> {
 }
 
 impl<'pager> MutPage<'pager> {
-    pub(super) fn try_new(inner: PageDescriptor<'pager>) -> PagerResult<Self> {
+    pub(super) fn try_new(inner: PageDescriptor<'pager>) -> Result<Self> {
         unsafe {
             if inner.get_rw_counter() != 0 {
-                Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed))
+                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
             } else {
                 inner.dec_rw_counter();
                 Ok(Self { dry: false, inner })
@@ -144,10 +142,10 @@ impl<'pager> MutPage<'pager> {
     pub(super) fn try_new_with_options(
         inner: PageDescriptor<'pager>,
         dry: bool,
-    ) -> PagerResult<Self> {
+    ) -> Result<Self> {
         unsafe {
             if inner.get_rw_counter() != 0 {
-                Err(PagerError::new(PagerErrorKind::PageCurrentlyBorrowed))
+                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
             } else {
                 inner.dec_rw_counter();
                 Ok(Self { dry, inner })

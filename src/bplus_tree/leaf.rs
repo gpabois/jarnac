@@ -17,7 +17,7 @@ use itertools::Itertools;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::Var, IPager, PagerResult}, value::{Value, ValueKind}};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::Var, IPager}, result::Result, value::{Value, ValueKind}};
 
 pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
@@ -52,7 +52,7 @@ impl<'pager> BPTreeLeaf<MutPage<'pager>> {
 }
 
 impl<Page> BPTreeLeaf<Page> where Page: AsRefPageSlice {
-    pub fn try_from(page: Page) -> PagerResult<Self> {
+    pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTreeLeaf.assert(kind).map(|_| Self(CellPage::from(page)))
     }
@@ -72,6 +72,10 @@ impl<Page> BPTreeLeaf<Page> where Page: IntoRefPageSlice + Clone + AsRefPageSlic
         self.0
         .into_iter()
         .map(BPTreeLeafCell)
+    }
+
+    pub fn into_cell(self, cid: &CellId) -> Option<BPTreeLeafCell<<Page as IntoRefPageSlice>::RefPageSlice>> {
+        Some(BPTreeLeafCell(self.0.into_cell(cid)?))
     }
 
     pub fn into_value(self, key: &Value) -> Option<Var<<<<Page as IntoRefPageSlice>::RefPageSlice as IntoRefPageSlice>::RefPageSlice as IntoRefPageSlice>::RefPageSlice>> {
@@ -161,7 +165,7 @@ impl<Page> IndexMut<&CellId> for BPTreeLeaf<Page> where Page: AsMutPageSlice {
 
 impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     /// Crée une nouvelle feuille d'un arbre B+.
-    pub fn new(mut page: Page, k: u8, cell_size: PageSize) -> PagerResult<Self> {
+    pub fn new(mut page: Page, k: u8, cell_size: PageSize) -> Result<Self> {
         // initialisation bas-niveau de la page.
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTreeLeaf as u8;
@@ -192,7 +196,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         })
     }
 
-    pub fn insert<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
+    pub fn insert<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> Result<()> {
         let before = self
         .iter()
         .filter(|&cell| cell >= &key)
@@ -207,20 +211,20 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
         Ok(())
     }
 
-    fn insert_before<Pager: IPager + ?Sized>(&mut self, before: &CellId, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
+    fn insert_before<Pager: IPager + ?Sized>(&mut self, before: &CellId, key: &Value, value: &Value, pager: &Pager) -> Result<CellId> {
         let cid = self.as_mut_cells().insert_before(before)?;
         BPTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
         Ok(cid)    
     }
 
-    fn push<Pager: IPager + ? Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<CellId> {
+    fn push<Pager: IPager + ? Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> Result<CellId> {
         let cid = self.as_mut_cells().push()?;
         BPTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
         Ok(cid)
     }
 
-    pub fn split_into<'a, P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> PagerResult<&Value> where P2: AsMutPageSlice {
-        let at = self.len().div(2);
+    pub fn split_into<'a, P2>(&mut self, dest: &mut BPTreeLeaf<P2>) -> Result<&Value> where P2: AsMutPageSlice {
+        let at = self.len().div(2) + 1;
         self.as_mut_cells().split_at_into(dest.as_mut_cells(), at)?;       
         let key = self.iter().last().map(|cell| cell.borrow_key()).unwrap();
         Ok(key)
@@ -370,7 +374,7 @@ where Slice: AsRefPageSlice + ?Sized
 
 impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {
     /// Initialise la cellule
-    pub fn initialise<Pager: IPager + ?Sized>(cell: &mut Self, key: &Value, value: &Value, pager: &Pager) -> PagerResult<()> {
+    pub fn initialise<Pager: IPager + ?Sized>(cell: &mut Self, key: &Value, value: &Value, pager: &Pager) -> Result<()> {
         cell.as_mut_cell().as_mut_content_slice().as_mut_bytes()[0] = (*key.kind()).into();
         cell.borrow_mut_key().set(key);
         cell.borrow_mut_value().set(value, pager)?;
@@ -483,6 +487,8 @@ mod tests {
         println!("{left}");
 
         let key = left.split_into(&mut right)?.to_owned();
+        assert_eq!(left.as_cells().free_len(), 1.into());
+        assert_eq!(left.as_cells().iter_free().count(), 1);
 
         println!("{left} | {key} | {right}");
 

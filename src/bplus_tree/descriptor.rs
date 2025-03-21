@@ -1,13 +1,13 @@
 use std::ops::DerefMut;
 
-use crate::{pager::{page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSize}, PagerResult}, value::ValueKind};
+use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSize}, result::Result, value::ValueKind};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
 pub struct BPTreeDescriptor<Page>(Page) where Page: AsRefPageSlice;
 
 impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {    
-    pub fn try_from(page: Page) -> PagerResult<Self> {
+    pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTree.assert(kind).map(|_| Self(page))
     }
@@ -46,7 +46,7 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
 }
 
 impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
-    pub fn new(mut page: Page, header: BPlusTreeHeader) -> PagerResult<Self> {
+    pub fn new(mut page: Page, header: BPlusTreeHeader) -> Result<Self> {
         // initialisation bas-niveau de la page.
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTree as u8;

@@ -8,30 +8,30 @@ use std::{
 
 use itertools::Itertools;
 
+use crate::{error::{Error, ErrorKind}, result::Result};
+
 use super::{
-    error::{PagerError, PagerErrorKind},
     page::{descriptor::{PageDescriptor, PageDescriptorInner}, PageId, PageSize},
     stress::{BoxedPagerStress, IPagerStress},
-    PagerResult,
 };
 
 /// Trait représentant un tampon à pages.
 pub trait IPageBuffer {
     /// Itérateur sur les pages stockées dans le tampon.
-    type Iter<'buffer>: Iterator<Item=PagerResult<PageDescriptor<'buffer>>> where Self: 'buffer;
+    type Iter<'buffer>: Iterator<Item=Result<PageDescriptor<'buffer>>> where Self: 'buffer;
 
     /// Alloue de l'espace dans le tampon pour stocker une page.
-    fn alloc<'buffer>(&'buffer self, pid: &PageId) -> PagerResult<PageDescriptor<'buffer>>;
+    fn alloc<'buffer>(&'buffer self, pid: &PageId) -> Result<PageDescriptor<'buffer>>;
 
     /// Récupère la page stockée dans le tampon s'il existe.
-    fn try_get<'buffer>(&'buffer self, pid: &PageId) -> PagerResult<Option<PageDescriptor<'buffer>>>;
+    fn try_get<'buffer>(&'buffer self, pid: &PageId) -> Result<Option<PageDescriptor<'buffer>>>;
 
     /// Récupère une page stockée dans le tampon.
     /// 
     /// Panique si la page n'est pas stockée dans le tampon.
-    fn get<'buffer>(&'buffer self, pid: &PageId) -> PagerResult<PageDescriptor<'buffer>> {
+    fn get<'buffer>(&'buffer self, pid: &PageId) -> Result<PageDescriptor<'buffer>> {
         self.try_get(&pid)
-            .and_then(|opt| opt.ok_or_else(|| PagerError::new(PagerErrorKind::PageNotCached(*pid))))    
+            .and_then(|opt| opt.ok_or_else(|| Error::new(ErrorKind::PageNotCached(*pid))))    
     }
 
     /// Itère sur les pages stockées dans le tampon.
@@ -71,21 +71,22 @@ impl Drop for PageBuffer {
 impl IPageBuffer for PageBuffer {
     type Iter<'buffer> = PageBufferIter<'buffer> where Self: 'buffer;
 
-    fn alloc<'buffer>(&'buffer self, pid: &PageId) -> PagerResult<PageDescriptor<'buffer>> {
+    fn alloc<'buffer>(&'buffer self, pid: &PageId) -> Result<PageDescriptor<'buffer>> {
         // Déjà caché
-        if self.in_memory.borrow().contains_key(&pid) || self.stress.contains(&pid) {
-            return Err(PagerError::new(PagerErrorKind::PageAlreadyCached(*pid)));
+        if self.contains(pid) {
+            return Err(Error::new(ErrorKind::PageAlreadyCached(*pid)));
         }
 
-        self.alloc_in_memory(&pid).inspect(|_| {
+        self.alloc_in_memory(&pid)
+        .inspect(|_| {
             self.stored.borrow_mut().insert(*pid);
         })
     }
 
-    fn try_get<'buffer>(&'buffer self, pid: &PageId) -> PagerResult<Option<PageDescriptor<'buffer>>> {
+    fn try_get<'buffer>(&'buffer self, pid: &PageId) -> Result<Option<PageDescriptor<'buffer>>> {
         unsafe {
-            // La page est en cache, on la renvoie
-            if let Some(stored) = self.in_memory.borrow().get(pid).copied() {
+            // La page est en mémoire, on la renvoie
+            if let Some(stored) = self.try_get_from_memory(pid) {
                 return Ok(Some(PageDescriptor::new(stored)));
             }
 
@@ -95,6 +96,10 @@ impl IPageBuffer for PageBuffer {
                 assert_eq!(pcache.id(), pid);
                 self.stress.retrieve(&mut pcache)?;
                 return Ok(Some(pcache));
+            }
+
+            if self.contains(pid) {
+                panic!("page {pid} is stored in the buffer but nowhere to be found");
             }
 
             Ok(None)
@@ -140,6 +145,15 @@ impl PageBuffer {
             }
         }
     }
+
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize {
+        self.stored.borrow().len()
+    }
+
+    pub fn contains(&self, pid: &PageId) -> bool {
+        self.stored.borrow().contains(pid)
+    }
 }
 
 impl PageBuffer {
@@ -147,16 +161,16 @@ impl PageBuffer {
     ///
     /// Différent de [Self::alloc] dans le sens où cette fonction ne regarde pas
     /// si la page est cachée déchargée.
-    fn alloc_in_memory<'cache>(&'cache self, pid: &PageId) -> PagerResult<PageDescriptor<'cache>> {
+    fn alloc_in_memory<'cache>(&'cache self, pid: &PageId) -> Result<PageDescriptor<'cache>> {
         unsafe {
             // Déjà caché
-            if self.in_memory.borrow().contains_key(pid) {
-                return Err(PagerError::new(PagerErrorKind::PageAlreadyCached(*pid)));
+            if self.is_in_memory(pid) {
+                return Err(Error::new(ErrorKind::PageAlreadyCached(*pid)));
             }
 
             // On a un slot de libre
             if let Some(free) = self.pop_free(pid) {
-                self.in_memory.borrow_mut().insert(*pid, free.get_raw_ptr());
+                self.add_in_memory(free.get_raw_ptr());
                 return Ok(free);
             }
 
@@ -170,28 +184,34 @@ impl PageBuffer {
                 let content_ptr = ptr.add(size_of::<PageDescriptorInner>());
                 let content = std::mem::transmute(NonNull::slice_from_raw_parts(content_ptr, self.page_size.into()));
                 let cell_ptr = NonNull::new_unchecked(
-                    cell_ptr.as_mut().write(PageDescriptorInner::new(*pid, content)),
+                    cell_ptr
+                        .as_mut()
+                        .write(PageDescriptorInner::new(*pid, content)),
                 );
-                self.in_memory.borrow_mut().insert(*pid, cell_ptr);
                 *self.tail.borrow_mut() += size;
-                return Ok(PageDescriptor::new(cell_ptr));
+                let desc = PageDescriptor::new(cell_ptr);
+                self.add_in_memory(desc.get_raw_ptr());
+                return Ok(desc);
             }
 
             // Le cache est plein, on est dans un cas de stress mémoire
             // On va essayer de trouver de la place.
             let mut pcached = self.manage_stress()?;
             pcached.initialise(*pid);
-            self.in_memory.borrow_mut().insert(*pid, pcached.get_raw_ptr());
+            self.add_in_memory(pcached.get_raw_ptr());
             
             Ok(pcached)
         }
     }
 
+    fn try_get_from_memory(&self, pid: &PageId) -> Option<NonNull<PageDescriptorInner>> {
+        self.in_memory.borrow().get(pid).copied()
+    }
+
+
     /// Récupère un emplacement libre
     unsafe fn pop_free(&self, pid: &PageId) -> Option<PageDescriptor<'_>> {
-        self
-            .free_list.borrow_mut()
-            .pop()
+        self.free_list.borrow_mut().pop()
             .map(|ptr| PageDescriptor::new(ptr) )
             .map(|mut page| {
                 page.initialise(*pid);
@@ -205,20 +225,18 @@ impl PageBuffer {
     ///
     /// Si aucune page n'est libérable ou déchargeable, principalement car elles sont
     /// toutes empruntées, alors l'opération échoue et retourne l'erreur *CacheFull*.
-    fn manage_stress(&self) -> PagerResult<PageDescriptor<'_>> {
+    fn manage_stress(&self) -> Result<PageDescriptor<'_>> {
         // On trouve une page propre non empruntée
-        let maybe_clean_unborrowed_page = self
-            .in_memory
-            .borrow()
-            .values()
-            .copied()
+        let maybe_clean_unborrowed_page = self.in_memory.borrow().values().copied()
             .map(|ptr| unsafe { PageDescriptor::new(ptr) })
             .filter(|page| !page.is_dirty() && page.get_ref_counter() <= 1)
             .sorted_by_key(|page| page.get_use_counter())
             .next();
 
         if let Some(cleaned) = maybe_clean_unborrowed_page {
-            self.in_memory.borrow_mut().remove(&cleaned.id());
+            unsafe {
+                self.remove_from_memory(cleaned.get_raw_ptr());
+            }
             return Ok(cleaned);
         }
 
@@ -236,11 +254,29 @@ impl PageBuffer {
         // on va décharger une page en mémoire
         if let Some(dischargeable) = maybe_dirty_unborrowed_page {
             self.stress.discharge(&dischargeable)?;
-            self.in_memory.borrow_mut().remove(&dischargeable.id());
+            unsafe {
+                self.remove_from_memory(dischargeable.get_raw_ptr());
+            }
             return Ok(dischargeable);
         }
 
-        Err(PagerError::new(PagerErrorKind::CacheFull))
+        Err(Error::new(ErrorKind::CacheFull))
+    }
+
+    fn is_in_memory(&self, pid: &PageId) -> bool {
+        self.in_memory.borrow().contains_key(pid)
+    }
+
+    fn add_in_memory(&self, desc: NonNull<PageDescriptorInner>) {
+        unsafe {
+            self.in_memory.borrow_mut().insert(desc.as_ref().pid, desc);
+        }
+    }
+
+    unsafe fn remove_from_memory(&self, desc: NonNull<PageDescriptorInner>) {
+        unsafe {
+            self.in_memory.borrow_mut().remove(&desc.as_ref().pid);
+        }
     }
 }
 
@@ -251,7 +287,7 @@ pub struct PageBufferIter<'buffer> {
 }
 
 impl<'cache> Iterator for PageBufferIter<'cache> {
-    type Item = PagerResult<PageDescriptor<'cache>>;
+    type Item = Result<PageDescriptor<'cache>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.ids.pop().map(|pid| self.cache.get(&pid))
@@ -265,13 +301,12 @@ mod tests {
         collections::HashMap,
         error::Error,
         io::{Cursor, Write},
-        ops::Deref,
         rc::Rc,
     };
 
-    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt, LE};
 
-    use crate::pager::{buffer::{IPageBuffer, PageDescriptorInner}, page::{PageId, PageSize}, stress::IPagerStress};
+    use crate::{pager::{buffer::{IPageBuffer, PageDescriptorInner}, page::{AsMutPageSlice, AsRefPageSlice, PageId, PageSize}, stress::IPagerStress}, result::Result};
 
     use super::PageBuffer;
 
@@ -280,21 +315,24 @@ mod tests {
     pub struct StressStub(RefCell<HashMap<PageId, Vec<u8>>>);
 
     impl IPagerStress for StressStub {
-        fn discharge(&self, src: &super::PageDescriptor<'_>) -> crate::pager::PagerResult<()> {
-            println!("décharge {0}", src.id());
+        fn discharge(&self, src: &super::PageDescriptor<'_>) -> Result<()> {
             let mut buf = Vec::<u8>::new();
-            buf.write_all(src.borrow().deref())?;
+            buf.write_all(src.borrow().as_bytes())?;
+            //println!("décharge {0} {buf:?}", src.id());
             self.0.borrow_mut().insert(*src.id(), buf);
             Ok(())
         }
 
-        fn retrieve(&self, dest: &mut super::PageDescriptor<'_>) -> crate::pager::PagerResult<()> {
+        fn retrieve(&self, dest: &mut super::PageDescriptor<'_>) -> Result<()> {
             let pid = dest.id();
-            println!("récupère {pid}");
+            let mut space = self.0.borrow_mut();
+            let buf = space.get(&pid).unwrap();
+            //println!("récupère {pid} {buf:?}");
             dest.borrow_mut(false)
-                .open_mut_cursor()
-                .write_all(self.0.borrow().get(&pid).unwrap())?;
-            self.0.borrow_mut().remove(&dest.id());
+                .as_mut_bytes()
+                .write_all(buf)?;
+
+            space.remove(&dest.id());
             Ok(())
         }
 
@@ -305,7 +343,7 @@ mod tests {
 
     #[test]
     /// Ce test vise à tester les capacités du cache à gérer le stess mémoire.
-    pub fn test_cache_stress() -> Result<(), Box<dyn Error>> {
+    pub fn test_cache_stress() -> std::result::Result<(), Box<dyn Error>> {
         let stress = Rc::new(StressStub::default());
         // taille du cache suffisant pour une seule page.
         let single_page_cache_size = size_of::<PageDescriptorInner>() + 4_096;
@@ -380,5 +418,24 @@ mod tests {
 
         Ok(())
     }
-}
 
+    #[test]
+    fn test_buffer_stress() {
+        let ps = PageSize::new(8);
+        let bs =  10 * 8;
+        let buffer = PageBuffer::new(bs, ps, StressStub::default());
+
+        for i in 0..200_000 {
+            let pid = PageId::new(i + 1);
+            let desc = buffer.alloc(&pid).unwrap();
+            desc.borrow_mut(false).as_mut_bytes().write_u64::<LE>(i).unwrap();
+        }
+
+        for i in 0..200_000 {
+            let pid = PageId::new(i + 1);
+            let desc = buffer.try_get(&pid).unwrap().unwrap();
+            let v = desc.borrow().as_bytes().read_u64::<LE>().unwrap();
+            assert_eq!(v, i, "{}", pid);
+        }
+    }
+}

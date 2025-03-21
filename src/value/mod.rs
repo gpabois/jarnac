@@ -16,7 +16,7 @@ use builder::ValueBuilder;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::pager::{error::PagerError, page::PageSlice, PagerResult};
+use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result};
 
 const U8_KIND: ValueKind = ValueKind(1);
 const U16_KIND: ValueKind = ValueKind(2);
@@ -63,8 +63,8 @@ pub trait FromValue: GetValueKind {
         Self::try_mut_from_value(value).expect("wrong value type")
     }
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output>;
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output>;
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output>;
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output>;
 }
 
 pub trait IntoValueBuf {
@@ -131,9 +131,9 @@ impl ValueKind {
         todo!("implement var-sized data");
     }
     
-    pub fn assert_eq(&self, other: &ValueKind) -> PagerResult<()> {
+    pub fn assert_eq(&self, other: &ValueKind) -> Result<()> {
         if *other != *self {
-            return Err(PagerError::new(crate::pager::error::PagerErrorKind::WrongValueKind { expected: U8_KIND, got: *other }))
+            return Err(Error::new(ErrorKind::WrongValueKind { expected: U8_KIND, got: *other }))
         }
 
         Ok(())
@@ -563,9 +563,9 @@ impl DerefMut for U8 {
     }
 }
 impl TryFrom<&Value> for &U8 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         U8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -574,9 +574,9 @@ impl TryFrom<&Value> for &U8 {
     }
 }
 impl TryFrom<&mut Value> for &mut U8 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         U8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -615,9 +615,9 @@ impl DerefMut for U16 {
     }
 }
 impl TryFrom<&Value> for &U16 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         U16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -626,9 +626,9 @@ impl TryFrom<&Value> for &U16 {
     }
 }
 impl TryFrom<&mut Value> for &mut U16 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         U16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -675,9 +675,9 @@ impl DerefMut for U32 {
     }
 }
 impl TryFrom<&Value> for &U32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         U32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -686,9 +686,9 @@ impl TryFrom<&Value> for &U32 {
     }
 }
 impl TryFrom<&mut Value> for &mut U32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         U32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -745,9 +745,9 @@ impl DerefMut for U64 {
     }
 }
 impl TryFrom<&Value> for &U64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         U64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -756,9 +756,9 @@ impl TryFrom<&Value> for &U64 {
     }
 }
 impl TryFrom<&mut Value> for &mut U64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         U64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -806,9 +806,9 @@ impl DerefMut for U128 {
     }
 }
 impl TryFrom<&Value> for &U128 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         U128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -817,9 +817,9 @@ impl TryFrom<&Value> for &U128 {
     }
 }
 impl TryFrom<&mut Value> for &mut U128 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         U128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -870,9 +870,9 @@ impl DerefMut for I8 {
     }
 }
 impl TryFrom<&Value> for &I8 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         I8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -881,9 +881,9 @@ impl TryFrom<&Value> for &I8 {
     }
 }
 impl TryFrom<&mut Value> for &mut I8 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         I8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -930,9 +930,9 @@ impl DerefMut for I16 {
     }
 }
 impl TryFrom<&Value> for &I16 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         I16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -941,9 +941,9 @@ impl TryFrom<&Value> for &I16 {
     }
 }
 impl TryFrom<&mut Value> for &mut I16 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         I16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -990,9 +990,9 @@ impl DerefMut for I32 {
     }
 }
 impl TryFrom<&Value> for &I32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         I32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1001,9 +1001,9 @@ impl TryFrom<&Value> for &I32 {
     }
 }
 impl TryFrom<&mut Value> for &mut I32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         I32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1050,9 +1050,9 @@ impl DerefMut for I64 {
     }
 }
 impl TryFrom<&Value> for &I64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         I64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1061,9 +1061,9 @@ impl TryFrom<&Value> for &I64 {
     }
 }
 impl TryFrom<&mut Value> for &mut I64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         I64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1110,9 +1110,9 @@ impl DerefMut for I128 {
     }
 }
 impl TryFrom<&Value> for &I128 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         I128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1121,9 +1121,9 @@ impl TryFrom<&Value> for &I128 {
     }
 }
 impl TryFrom<&mut Value> for &mut I128 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         I128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1180,9 +1180,9 @@ impl DerefMut for F32 {
     }
 }
 impl TryFrom<&Value> for &F32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         F32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1191,9 +1191,9 @@ impl TryFrom<&Value> for &F32 {
     }
 }
 impl TryFrom<&mut Value> for &mut F32 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         F32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1250,9 +1250,9 @@ impl DerefMut for F64 {
     }
 }
 impl TryFrom<&Value> for &F64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         F64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1261,9 +1261,9 @@ impl TryFrom<&Value> for &F64 {
     }
 }
 impl TryFrom<&mut Value> for &mut F64 {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         F64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1304,9 +1304,9 @@ impl Deref for Str {
     }
 }
 impl TryFrom<&Value> for &Str {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
         STR_KIND.assert_eq(value.kind())?;
         unsafe {
             Ok(std::mem::transmute(value))
@@ -1314,9 +1314,9 @@ impl TryFrom<&Value> for &Str {
     }
 }
 impl TryFrom<&mut Value> for &mut Str {
-    type Error = PagerError;
+    type Error = Error;
 
-    fn try_from(value: &mut Value) -> Result<Self, Self::Error> {
+    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
         STR_KIND.assert_eq(value.kind())?;
         unsafe {
             Ok(std::mem::transmute(value))
@@ -1356,11 +1356,11 @@ impl GetValueKind for u8 {
 impl FromValue for u8 {
     type Output = U8;
     
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1396,11 +1396,11 @@ impl GetValueKind for u16 {
 impl FromValue for u16 {
     type Output = U16;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1435,11 +1435,11 @@ impl GetValueKind for u32 {
 impl FromValue for u32 {
     type Output = U32;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1471,11 +1471,11 @@ impl GetValueKind for u64 {
 impl FromValue for u64 {
     type Output = U64;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1509,11 +1509,11 @@ impl GetValueKind for u128 {
 impl FromValue for u128 {
     type Output = U128;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1546,11 +1546,11 @@ impl GetValueKind for i8 {
 impl FromValue for i8 {
     type Output = I8;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1582,11 +1582,11 @@ impl GetValueKind for i16 {
 impl FromValue for i16 {
     type Output = I16;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1618,11 +1618,11 @@ impl GetValueKind for i32 {
 impl FromValue for i32 {
     type Output = I32;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1655,11 +1655,11 @@ impl GetValueKind for i64 {
 impl FromValue for i64 {
     type Output = I64;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1693,11 +1693,11 @@ impl GetValueKind for i128 {
 impl FromValue for i128 {
     type Output = I128;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1732,11 +1732,11 @@ impl GetValueKind for f32 {
 impl FromValue for f32 {
     type Output = F32;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1773,11 +1773,11 @@ impl GetValueKind for f64 {
 impl FromValue for f64 {
     type Output = F64;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -1813,11 +1813,11 @@ impl GetValueKind for str {
 impl FromValue for str {
     type Output = Str;
 
-    fn try_ref_from_value(value: &Value) -> PagerResult<&Self::Output> {
+    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> PagerResult<&mut Self::Output> {
+    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
