@@ -101,9 +101,7 @@ impl FileOpenOptions {
 
 /// Interface vers un système de fichier.
 pub trait IFileSystem {
-    type File<'fs>: Seek + Write + Read
-    where
-        Self: 'fs;
+    type File<'fs>: Seek + Write + Read where Self: 'fs;
     type Path: IPath;
 
     /// Ouvre le fichier.

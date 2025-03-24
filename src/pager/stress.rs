@@ -112,13 +112,13 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         unsafe {
             file.write_all(src.get_content_ptr().as_ref())?;
         }
-        self.pages.borrow_mut().insert(*src.id(), pid);
+        self.pages.borrow_mut().insert(*src.tag(), pid);
 
         Ok(())
     }
 
     fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()> {
-        let pid = self.pages.borrow().get(&dest.id()).copied().map(PageId::from).unwrap();
+        let pid = self.pages.borrow().get(&dest.tag()).copied().map(PageId::from).unwrap();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
         let addr = pid * self.page_size;
@@ -127,7 +127,7 @@ impl<Fs: IFileSystem> IPagerStress for FsPagerStress<Fs> {
         file.read_exact(dest.borrow_mut(true).deref_mut())?;
 
         self.freelist.borrow_mut().push(pid);
-        self.pages.borrow_mut().remove(&dest.id());
+        self.pages.borrow_mut().remove(&dest.tag());
 
         Ok(())
     }
@@ -153,12 +153,12 @@ pub mod stubs {
             let mut buf = Vec::<u8>::new();
             buf.write_all(src.borrow().as_bytes())?;
             //println!("décharge {0} {buf:?}", src.id());
-            self.0.borrow_mut().insert(*src.id(), buf);
+            self.0.borrow_mut().insert(*src.tag(), buf);
             Ok(())
         }
 
         fn retrieve(&self, dest: &mut super::PageDescriptor<'_>) -> Result<()> {
-            let pid = dest.id();
+            let pid = dest.tag();
             let mut space = self.0.borrow_mut();
             let buf = space.get(&pid).unwrap();
             //println!("récupère {pid} {buf:?}");
@@ -166,7 +166,7 @@ pub mod stubs {
                 .as_mut_bytes()
                 .write_all(buf)?;
 
-            space.remove(&dest.id());
+            space.remove(&dest.tag());
             Ok(())
         }
 
@@ -183,7 +183,7 @@ mod test {
 
     use byteorder::{ReadBytesExt, LE};
 
-    use crate::pager::{fixtures::fixture_new_pager, page::{AsMutPageSlice, AsRefPageSlice, PageId}};
+    use crate::pager::{fixtures::fixture_new_pager, page::{AsMutPageSlice, AsRefPageSlice, PageId}, IPager};
 
     #[test]
     fn test_stress() -> Result<(), Box<dyn Error>> {

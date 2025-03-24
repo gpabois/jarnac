@@ -42,6 +42,13 @@ impl Mul<CellCapacity> for PageSize {
     }
 }
 
+impl Mul<usize> for PageSize {
+    type Output = usize;
+
+    fn mul(self, rhs: usize) -> Self::Output {
+        rhs * usize::from(self.0)
+    }
+}
 
 impl Mul<u16> for PageSize {
     type Output = PageSize;

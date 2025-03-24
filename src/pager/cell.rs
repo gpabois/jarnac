@@ -961,7 +961,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize}, value::{IntoValueBuf, Value, GetValueKind}};
+    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize, IPager}, value::{GetValueKind, IntoValueBuf, Value}};
     use super::CellHeader;
 
     #[test]

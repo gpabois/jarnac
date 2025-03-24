@@ -7,12 +7,12 @@ use std::{
 
 use zerocopy::TryFromBytes;
 
-use crate::value::ValueKind;
+use crate::{tag::JarTag, value::ValueKind};
 use crate::pager::page::{PageId, PageKind};
 
 pub struct Error {
     pub backtrace: Backtrace,
-    kind: ErrorKind,
+    pub kind: ErrorKind,
 }
 
 impl Display for Error {
@@ -69,13 +69,13 @@ impl From<io::Error> for Error {
 #[derive(Debug)]
 /// Représente une erreur du système de pagination.
 pub enum ErrorKind {
-    CacheFull,
-    UnexistingPage(PageId),
-    PageAlreadyCached(PageId),
-    PageNotCached(PageId),
+    BufferFull,
+    UnexistingPage(JarTag),
+    PageAlreadyCached(JarTag),
+    PageNotCached(JarTag),
     PageCurrentlyBorrowed,
     PageLoadingFailed {
-        id: PageId, 
+        tag: JarTag, 
         source: Box<Error>
     },
     InvalidPageKind(u8),
@@ -91,7 +91,7 @@ pub enum ErrorKind {
 impl Display for ErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ErrorKind::CacheFull => write!(f, "pager cache is full"),
+            ErrorKind::BufferFull => write!(f, "pager cache is full"),
             ErrorKind::UnexistingPage(id) => write!(f, "page {id} does not exist"),
             ErrorKind::PageAlreadyCached(id) => write!(f, "page {id} is already cached"),
             ErrorKind::PageCurrentlyBorrowed => write!(f, "page is already borrowed"),
@@ -106,7 +106,7 @@ impl Display for ErrorKind {
             ErrorKind::SpilledVar => write!(f, "var data has spilled"),
             ErrorKind::CellPageOverflow => write!(f, "cell space overflows allocated page space"),
             ErrorKind::WrongValueKind { expected, got } => write!(f, "expecting value type {expected}, got {got} instead"),
-            ErrorKind::PageLoadingFailed { id, source } => write!(f, "failed to load page {id}, reason: {source}"),
+            ErrorKind::PageLoadingFailed { tag: id, source } => write!(f, "failed to load page {id}, reason: {source}"),
         }
     }
 }

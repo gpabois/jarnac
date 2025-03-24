@@ -1,10 +1,10 @@
-use std::{fmt::Debug, marker::PhantomData, ptr::NonNull};
-use crate::result::Result;
+use std::{cmp::Ordering, fmt::Debug, marker::PhantomData, ptr::NonNull, sync::atomic::{AtomicIsize, AtomicUsize, Ordering as SyncOrdering}};
+use crate::{result::Result, tag::JarTag};
 
-use super::{MutPage, PageId, PageSlice, RefPage};
+use super::{MutPage, PageSlice, RefPage};
 
-pub struct PageDescriptor<'page> {
-    _pht: PhantomData<&'page ()>,
+pub struct PageDescriptor<'buf> {
+    _pht: PhantomData<&'buf ()>,
     ptr: NonNull<PageDescriptorInner>,
 }
 
@@ -26,7 +26,7 @@ impl Debug for PageDescriptor<'_> {
 
 impl Drop for PageDescriptor<'_> {
     fn drop(&mut self) {
-        self.as_mut_inner().ref_counter -= 1
+        self.as_mut_inner().ref_counter.fetch_sub(1, SyncOrdering::Relaxed);
     }
 }
 
@@ -38,18 +38,18 @@ impl PageDescriptor<'_> {
             ptr: data,
         };
         
-        page.as_mut_inner().ref_counter += 1;
+        page.as_mut_inner().ref_counter.fetch_add(1, SyncOrdering::Relaxed);
         page
     }
 
     /// Initialise le descripteur de page.
-    pub(crate) unsafe fn initialise(&mut self, pid: PageId) {
+    pub(crate) unsafe fn initialise(&mut self, tag: JarTag) {
         let inner = self.as_mut_inner();
-        inner.pid = pid;
+        inner.tag = tag;
         inner.flags = 0;
-        inner.rw_counter = 0;
-        inner.use_counter = 0;
-        inner.ref_counter = 1;
+        inner.rw_counter = AtomicIsize::new(0);
+        inner.use_counter = AtomicUsize::new(0);
+        inner.ref_counter = AtomicUsize::new(1);
         self.borrow_mut(true).fill(0);
     }
 
@@ -59,8 +59,8 @@ impl PageDescriptor<'_> {
     }
 
     /// Retourne l'identifiant de la page.
-    pub fn id(&self) -> &PageId {
-        &self.as_ref_inner().pid
+    pub fn tag(&self) -> &JarTag {
+        &self.as_ref_inner().tag
     }
 
     /// Lève le "new" flag de la page.
@@ -100,7 +100,38 @@ impl PageDescriptor<'_> {
     }
 
     pub fn get_use_counter(&self) -> usize {
-        self.as_ref_inner().use_counter
+        self.as_ref_inner().use_counter.load(SyncOrdering::Relaxed)
+    }
+
+    pub fn acquire_write_lock(&self) -> bool {
+        self.as_ref_inner()
+            .rw_counter
+            .compare_exchange(0, -1, SyncOrdering::Relaxed, SyncOrdering::Relaxed)
+            .is_ok()
+    }
+
+    pub fn release_write_lock(&self) {
+        self.as_ref_inner() 
+            .rw_counter
+            .compare_exchange(-1, 0, SyncOrdering::Relaxed, SyncOrdering::Relaxed);
+    }
+
+    pub fn acquire_read_lock(&self) -> bool {
+        unsafe {
+            let rw = self.get_rw_counter(SyncOrdering::Acquire);
+            
+            if rw < 0 {
+                return false
+            }
+
+            self.inc_rw_counter(SyncOrdering::Release) == rw
+        }
+    }
+
+    pub fn release_read_lock(&self) {
+        unsafe {
+            self.dec_rw_counter(SyncOrdering::Relaxed);
+        }
     }
 
     /// Emprunte les données de la page en lecture.
@@ -127,30 +158,31 @@ impl PageDescriptor<'_> {
         MutPage::try_new_with_options(self.clone(), dry)
     }
 
+    
     /// Incrémente le RW lock
     /// 
     /// Cela signifie qu'une nouvelle référence en lecture a été acquise. 
-    pub(crate) unsafe fn inc_rw_counter(&self) {
-        self.as_mut_inner().rw_counter += 1;
+    pub(crate) unsafe fn inc_rw_counter(&self, order: SyncOrdering) -> isize {
+        self.as_mut_inner().rw_counter.fetch_add(1, order)
     }
 
     /// Décrémente le RW lock
     /// 
     /// Cela signifie qu'une nouvelle référence en lecture a été acquise. 
-    pub(crate) unsafe fn dec_rw_counter(&self) {
-        self.as_mut_inner().rw_counter -= 1;
+    pub(crate) unsafe fn dec_rw_counter(&self, order: SyncOrdering) {
+        self.as_mut_inner().rw_counter.fetch_sub(1, order);
     }
 
-    pub(crate) unsafe fn set_rw_counter(&self, value: isize) {
-        self.as_mut_inner().rw_counter = value;
+    pub(crate) unsafe fn set_rw_counter(&self, value: isize, order: SyncOrdering) -> isize {
+        self.as_mut_inner().rw_counter.swap(value, order)
     }
 
-    pub(crate) unsafe fn reset_rw_counter(&self) {
-        self.as_mut_inner().rw_counter = 0;
+    pub(crate) unsafe fn reset_rw_counter(&self, order: SyncOrdering) -> isize {
+        self.as_mut_inner().rw_counter.swap(0, order)
     }
 
-    pub fn get_rw_counter(&self) -> isize {
-        self.as_ref_inner().rw_counter
+    pub fn get_rw_counter(&self, order: SyncOrdering) -> isize {
+        self.as_ref_inner().rw_counter.load(order)
     }
 
     pub fn get_flags(&self) -> u8 {
@@ -180,20 +212,23 @@ impl PageDescriptor<'_> {
     
 }
 
+pub type PageDescriptorPtr = NonNull<PageDescriptorInner>;
+
 /// Page cachée
 pub(crate) struct PageDescriptorInner {
-    pub pid: PageId,
+    pub buf_id: usize,
+    pub tag: JarTag,
     pub content: NonNull<PageSlice>,
     pub flags: u8,
-    pub use_counter: usize,
-    pub rw_counter: isize,
-    pub ref_counter: usize,
+    pub use_counter: AtomicUsize,
+    pub rw_counter: AtomicIsize,
+    pub ref_counter: AtomicUsize,
 }
 
 impl Debug for PageDescriptorInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CachedPageData")
-            .field("pid", &self.pid)
+            .field("pid", &self.tag)
             .field("content", &self.content)
             .field("flags", &self.flags)
             .field("use_counter", &self.use_counter)
@@ -206,14 +241,15 @@ impl PageDescriptorInner {
     const DIRTY_FLAGS: u8 = 0b1;
     const NEW_FLAGS: u8 = 0b11;
 
-    pub fn new(pid: PageId, content: NonNull<PageSlice>) -> Self {
+    pub fn new(buf_id: usize, tag: JarTag, content: NonNull<PageSlice>) -> Self {
         Self {
-            pid,
+            buf_id,
+            tag,
             content,
             flags: 0,
-            use_counter: 0,
-            rw_counter: 0,
-            ref_counter: 0,
+            use_counter: Default::default(),
+            rw_counter: Default::default(),
+            ref_counter: Default::default(),
         }
     }
 
@@ -244,11 +280,11 @@ impl PageDescriptorInner {
 
     /// La page est empruntée en écriture.
     pub fn is_mut_borrowed(&self) -> bool {
-        self.rw_counter < 0
+        self.rw_counter.load(SyncOrdering::Relaxed) < 0
     }
     
     /// Le nombre de fois où cette page est référencée.
     pub fn get_ref_counter(&self) -> usize {
-        self.ref_counter
+        self.ref_counter.load(SyncOrdering::Relaxed)
     }
 }

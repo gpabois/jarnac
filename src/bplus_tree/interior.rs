@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>>{
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        let mut tree = BPlusTree::new::<u64, u64>(&pager)?;
         
         let mut interior = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
         interior.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;   
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        let mut tree = BPlusTree::new::<u64, u64>(&pager)?;
         
         let mut left = tree.insert_interior().and_then(|pid| tree.borrow_mut_interior(&pid))?;
         left.insert(PageId::new(100), &ValueBuf::from(100_u64), PageId::new(200))?;   

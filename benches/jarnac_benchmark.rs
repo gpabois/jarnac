@@ -5,7 +5,7 @@ use jarnac::prelude::*;
 /// Benchmark la capacité de recherche d'un arbre B+
 fn benchmark_b_plus_tree_search(c: &mut Criterion) {
     let pager = jarnac::pager::fixtures::fixture_new_pager();
-    let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref()).expect("cannot create B+ tree");
+    let mut tree = BPlusTree::new::<u64, u64>(&pager).expect("cannot create B+ tree");
 
     let size: u64 = 500;
 

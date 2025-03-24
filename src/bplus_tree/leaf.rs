@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        let mut tree = BPlusTree::new::<u64, u64>(&pager)?;
         
         let mut leaf = tree
             .insert_leaf()
@@ -417,19 +417,19 @@ mod tests {
         leaf.insert(
             &90_u64.into_value_buf(), 
             &5678_u64.into_value_buf(), 
-            pager.as_ref()
+            &pager
         )?;
         
         leaf.insert(
             &100_u64.into_value_buf(), 
             &1234_u64.into_value_buf(), 
-            pager.as_ref()
+            &pager
         )?;
 
         leaf.insert(
             &ValueBuf::from(110_u64), 
             &ValueBuf::from(891011_u64), 
-            pager.as_ref()
+            &pager
         )?;
 
         let maybe_value = leaf.borrow_value(&100_u64.into_value_buf());
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(
             1234_u64, 
             value
-                .get(pager.as_ref())?
+                .get(&pager)?
                 .cast::<u64>()
                 .to_owned()  
         );
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn test_split() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        let mut tree = BPlusTree::new::<u64, u64>(&pager)?;
         
         let mut left = tree
             .insert_leaf()
@@ -463,25 +463,25 @@ mod tests {
         left.insert(
             &90_u64.into_value_buf(), 
             &5678_u64.into_value_buf(), 
-            pager.as_ref()
+            &pager
         )?;
         
         left.insert(
             &100_u64.into_value_buf(), 
             &1234_u64.into_value_buf(), 
-            pager.as_ref()
+            &pager
         )?;
 
         left.insert(
             &ValueBuf::from(110_u64), 
             &ValueBuf::from(891011_u64), 
-            pager.as_ref()
+            &pager
         )?;
 
         left.insert(
             &ValueBuf::from(120_u64), 
             &ValueBuf::from(891011_u64), 
-            pager.as_ref()
+            &pager
         )?;
 
         println!("{left}");

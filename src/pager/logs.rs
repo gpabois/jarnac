@@ -4,10 +4,11 @@ use std::{
 };
 
 use byteorder::{LittleEndian, WriteBytesExt};
+use zerocopy::FromBytes;
 
-use crate::fs::{FileOpenOptions, IFileSystem};
+use crate::{fs::{FileOpenOptions, IFileSystem}, result::Result};
 
-use super::{page::PageId, PAGER_HEADER_LOC, PAGER_HEADER_SIZE, PAGER_PAGES_BASE};
+use super::{page::PageId, storage::IPagerStorageHandle, PagerMetadata, PAGER_HEADER_SIZE};
 
 const PAGER_LOGS_HEADER_SIZE: u64 = 16;
 const PAGER_LOGS_PAGER_HEADER_LOC: u64 = PAGER_LOGS_HEADER_SIZE;
@@ -25,34 +26,31 @@ where
     Fs: IFileSystem + 'fs,
 {
     /// Ouvre le journal
-    pub fn open(path: &Fs::Path, fs: &'fs Fs) -> io::Result<Self> {
-        fs.open(
+    pub fn open(path: &Fs::Path, fs: &'fs Fs) -> Result<Self> {
+        let result = fs.open(
             path,
             FileOpenOptions::new().create(true).read(true).write(true),
         )
-        .map(Self)
+        .map(Self)?;
+
+        Ok(result)
     }
 
     /// Annule les modifications appliquées au fichier paginé.
-    pub fn rollback<Dest: Write + Seek>(&mut self, dest: &mut Dest) -> io::Result<()> {
+    pub fn rollback<Storage: IPagerStorageHandle>(&mut self, dest: &mut Storage) -> Result<()> {
         self.restore_page_header(dest)?;
         self.restore_pages(dest)
     }
 
     /// Ecrit l'entête du système de dans le journal
-    pub fn log_pager_header<Source: Read + Seek>(&mut self, src: &mut Source) -> io::Result<()> {
-        let mut buf: Box<[u8]> = Box::from(
-            iter::repeat(0u8)
-                .take(PAGER_HEADER_SIZE.try_into().unwrap())
-                .collect::<Vec<_>>(),
-        );
+    pub fn log_pager_header<Storage: IPagerStorageHandle>(&mut self, src: &mut Storage) -> Result<()> {
+        let mut buf: [u8; size_of::<PagerMetadata>()] = [0; size_of::<PagerMetadata>()] ;
+        src.read_meta(PagerMetadata::mut_from_bytes(&mut buf).unwrap());
 
-        src.seek(io::SeekFrom::Start(PAGER_HEADER_LOC))?;
-        src.read_exact(&mut buf)?;
+        self.0.seek(io::SeekFrom::Start(PAGER_LOGS_PAGER_HEADER_LOC))?;
+        self.0.write_all(&buf)?;
 
-        self.0
-            .seek(io::SeekFrom::Start(PAGER_LOGS_PAGER_HEADER_LOC))?;
-        self.0.write_all(&buf)
+        Ok(())
     }
 
     /// Ecrit une page dans le journal
@@ -61,8 +59,7 @@ where
         let ps: u64 = page.len().try_into().unwrap();
         let loc = self.inc_page_count()? * ps;
 
-        self.0
-            .seek(io::SeekFrom::Start(PAGER_LOGS_PAGES_BASE_LOC + loc))?;
+        self.0.seek(io::SeekFrom::Start(PAGER_LOGS_PAGES_BASE_LOC + loc))?;
         self.0.write_u64::<LittleEndian>((*pid).into())?;
         self.0.write_all(page)
     }
@@ -97,23 +94,17 @@ where
     }
 
     /// Restaure l'entête journalisé du pager
-    fn restore_page_header<Dest: Write + Seek>(&mut self, dest: &mut Dest) -> io::Result<()> {
-        let mut buf: Box<[u8]> = Box::from(
-            iter::repeat(0u8)
-                .take(PAGER_HEADER_SIZE.try_into().unwrap())
-                .collect::<Vec<_>>(),
-        );
+    fn restore_page_header<Storage: IPagerStorageHandle>(&mut self, dest: &mut Storage) -> Result<()> {
+        let mut buf: [u8; size_of::<PagerMetadata>()] = [0; size_of::<PagerMetadata>()] ;
 
-        self.0
-            .seek(io::SeekFrom::Start(PAGER_LOGS_PAGER_HEADER_LOC))?;
+        self.0.seek(io::SeekFrom::Start(PAGER_LOGS_PAGER_HEADER_LOC))?;
         self.0.read_exact(&mut buf)?;
 
-        dest.seek(io::SeekFrom::Start(PAGER_HEADER_LOC))?;
-        dest.write_all(&buf)
+        dest.write_meta(PagerMetadata::ref_from_bytes(&buf).unwrap())
     }
 
     /// Restaure les pages journalisées.
-    fn restore_pages<Dest: Write + Seek>(&mut self, dest: &mut Dest) -> io::Result<()> {
+    fn restore_pages<Storage: IPagerStorageHandle>(&mut self, dest: &mut Storage) -> Result<()> {
         let page_count = self.read_page_count()?;
         let page_size = self.read_page_size()?;
         let mut buf: Box<[u8]> = Box::from(
@@ -127,8 +118,7 @@ where
             self.0.seek(io::SeekFrom::Start(loc))?;
             self.0.read_exact(&mut buf)?;
 
-            dest.seek(io::SeekFrom::Start(PAGER_PAGES_BASE))?;
-            dest.write_all(&buf)?;
+            dest.write_page(&PageId::from(i), &buf)?;
         }
 
         Ok(())

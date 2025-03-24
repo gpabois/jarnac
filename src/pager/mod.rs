@@ -1,15 +1,16 @@
-use zerocopy::TryFromBytes;
-use zerocopy_derive::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
+use storage::{FsPagerStorage, FsPagerStorageHandle, IPagerStorageHandle, PagerStorage, StorageOpenOptions};
+use zerocopy::{FromBytes, TryFromBytes};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 use std::{
     cell::UnsafeCell,
-    io::{self, Read, Seek, Write}, ops::DerefMut,
+    io::{self, Read, Seek, Write}, ops::{Deref, DerefMut},
 };
 
 use buffer::{IPageBuffer, PageBuffer};
 use free::{pop_free_page, push_free_page};
 use page::{descriptor::PageDescriptor, MutPage, OptionalPageId, PageId, PageLocation, PageSize, RefPage};
 use stress::{BoxedPagerStress, FsPagerStress, IPagerStress};
-use transaction::PagerTransaction;
+use transaction::{IPagerTransaction, PagerTransaction};
 
 use crate::{error::{Error, ErrorKind}, fs::{FileOpenOptions, FilePtr, IFileSystem, IPath}, result::Result};
 
@@ -21,6 +22,7 @@ pub mod page;
 pub mod var;
 mod stress;
 mod transaction;
+pub mod storage;
 
 
 pub const MAGIC_NUMBER: u16 = 0xD334;
@@ -35,7 +37,7 @@ pub const PAGER_HEADER_LOC: u64 = 2;
 pub const PAGER_HEADER_SIZE: u64 = 100;
 
 /// Localisation de la première page
-pub const PAGER_PAGES_BASE: u64 = PAGER_HEADER_LOC + PAGER_HEADER_SIZE;
+pub const PAGER_BASE: u64 = PAGER_HEADER_LOC + PAGER_HEADER_SIZE;
 
 /// Trait pour accéder aux fonctions internes du pager
 /// Ce trait n'est pas exposé en dehors du module.
@@ -68,7 +70,7 @@ pub trait IPager {
     /// Retourne la taille d'une page
     fn page_size(&self) -> PageSize;
     /// Commit les pages modifiées.
-    fn commit(&self) -> Result<()>;
+    fn commit<Tx>(&self, tx: &mut Tx) -> Result<()> where Tx: IPagerTransaction;
     /// Aucune page n'est stockée
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -77,27 +79,30 @@ pub trait IPager {
 
 pub type BoxedPager = Box<dyn IPager>;
 
-#[derive(Default)]
 pub struct PagerOptions {
-    buffer_size: Option<usize>,
-    buffer_stress_strategy: Option<BoxedPagerStress>
+    buffer: Option<PageBuffer>,
+    pager_storage: PagerStorage
 }
 
 impl PagerOptions {
-    pub fn set_buffer_size(mut self, cache_size: usize) -> Self {
-        self.buffer_size = Some(cache_size);
-        self
+    pub fn from_file<Fs, Path>(fs: Fs, path: Path) -> Self where Fs: IFileSystem + 'static, Fs::Path: From<Path> {
+        let pager_storage = FsPagerStorage::new(fs, path).into_boxed();
+        
+        Self {
+            buffer: None,
+            pager_storage
+        }
     }
 
-    pub fn set_buffer_stress_strategy<Stress: IPagerStress + 'static>(mut self, strategy: Stress) -> Self {
-        self.buffer_stress_strategy = Some(BoxedPagerStress::new(strategy));
+    pub fn set_buffer(mut self, buffer: PageBuffer) -> Self {
+        self.buffer = Some(buffer);
         self
     }
 }
 
-#[derive(TryFromBytes, IntoBytes, KnownLayout, Immutable)]
-#[repr(packed)]
-pub struct PagerHeader {
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[repr(C, packed)]
+pub struct PagerMetadata {
     /// Nombre magique
     magic_number: u16,
     /// Taille d'une page
@@ -106,9 +111,11 @@ pub struct PagerHeader {
     pub(super) page_count: u64,
     /// Début de la liste chaînée des pages libres
     pub(super) free_head: OptionalPageId,
+    ///
+    pub(super) reserved: [u8; 100]
 }
 
-impl PagerHeader {
+impl PagerMetadata {
     fn initialise(&mut self, page_size: PageSize) {
         *self = Self {
             magic_number: MAGIC_NUMBER,
@@ -119,7 +126,7 @@ impl PagerHeader {
     }
 }
 
-impl PagerHeader {
+impl PagerMetadata {
     pub const PAGE_SIZE_LOC: u64 = 0;
     pub const PAGE_COUNT_LOC: u64 = 8;
     pub const PAGE_FREE_HEAD_LOC: u64 = 16;
@@ -135,40 +142,34 @@ impl PagerHeader {
 
     pub fn page_location(&self, pid: &PageId) -> PageLocation {
         let page_size = self.page_size;
-        pid.get_location(PAGER_PAGES_BASE, &page_size)
+        pid.get_location(PAGER_BASE, &page_size)
     }
 }
 
-pub struct Pager<Fs: IFileSystem> {
-    header: UnsafeCell<Box<[u8; size_of::<PagerHeader>()]>>,
+pub struct Pager {
+    meta: UnsafeCell<Box<[u8; size_of::<PagerMetadata>()]>>,
     buffer: PageBuffer,
-    file: FilePtr<Fs>,
+    storage: PagerStorage
 }
 
-impl<Fs> Pager<Fs> 
-where Fs: IFileSystem
-{
-    fn borrow_header(&self) -> &PagerHeader {
-        unsafe  {
-            let bytes = self.header.get().as_ref().unwrap().as_slice();
-            PagerHeader::try_ref_from_bytes(bytes).unwrap()
+impl Pager {
+    fn as_meta(&self) -> &PagerMetadata {
+        unsafe {
+            PagerMetadata::ref_from_bytes(self.meta.get().as_ref().unwrap().deref()).unwrap()
         }
     }
 
-    fn borrow_mut_header(&self) -> &mut PagerHeader {
-        unsafe  {
-            let bytes = self.header.get().as_mut().unwrap().as_mut_slice();
-            PagerHeader::try_mut_from_bytes(bytes).unwrap()
-        }    
+    fn as_mut_meta(&self) -> &mut PagerMetadata {
+        unsafe {
+            PagerMetadata::mut_from_bytes(self.meta.get().as_mut().unwrap().deref_mut()).unwrap()
+        }
     }
 }
 
-impl<Fs> IPagerInternals for Pager<Fs>
-where
-    Fs: IFileSystem + Clone + 'static,
-{
+
+impl IPagerInternals for Pager {
     fn set_free_head(&self, head: Option<PageId>) {
-        self.borrow_mut_header().set_free_head(head);
+        self.as_mut_meta().set_free_head(head);
     }
 
     fn page_location(&self, pid: &PageId) -> PageLocation {
@@ -197,43 +198,18 @@ where
     }
 }
 
-impl<Fs> Pager<Fs> 
-where
-    Fs: IFileSystem + Clone + 'static,
-{
-    pub fn into_boxed(self) -> BoxedPager {
-        Box::new(self)
-    }
-}
-
-impl<Fs> IPager for Pager<Fs>
-where
-    Fs: IFileSystem + Clone + 'static,
-{
+impl IPager for Pager{
     fn page_size(&self) -> PageSize {
-        self.borrow_header().page_size
+        self.as_meta().page_size
     }
 
-    fn commit(&self) -> Result<()> {
-        // crée une transaction
-        let tx = PagerTransaction::new(
-            self.file.path.modify_stem(|stem| format!("{stem}-tx")),
-            self.file.fs.clone(),
-            self,
-        );
-
-        let mut file = self
-            .file
-            .open(FileOpenOptions::new().write(true).read(true))?;
-        tx.commit(&mut file)
-    }
 
     fn new_page(&self) -> Result<PageId> {
         let pid = pop_free_page(self)?.unwrap_or_else(|| PageId::new(self.page_count() + 1));
         let page = self.buffer.alloc(&pid)?;
 
         page.set_new();
-        self.borrow_mut_header().inc_page_count();
+        self.as_mut_meta().inc_page_count();
 
         Ok(pid)
     }
@@ -253,6 +229,10 @@ where
     fn len(&self) -> u64 {
         self.borrow_header().page_count
     }
+    
+    fn commit<Tx>(&self, tx: &mut Tx) -> Result<()> where Tx: IPagerTransaction {
+        todo!()
+    }
 }
 
 impl<Fs> Pager<Fs>
@@ -260,14 +240,9 @@ where
     Fs: IFileSystem + Clone + 'static,
 {
     /// Crée un nouveau fichier paginé
-    pub fn new<Path: Into<Fs::Path>>(
-        fs: Fs,
-        path: Path,
-        page_size: PageSize,
-        options: PagerOptions,
-    ) -> Result<Self> {
-        let file = FilePtr::new(fs, path);
-        let buffer_size = options.buffer_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
+    pub fn new<Path: Into<Fs::Path>>(fs: Fs, path: Path, page_size: PageSize, options: PagerOptions) -> Result<Self> {
+        let file: FilePtr<Fs> = FilePtr::new(fs, path);
+        let buffer = options.buffer.expect("no buffer set");
 
         // Instantie le système de cache
         let buffer = buffer::PageBuffer::new(
@@ -293,8 +268,8 @@ where
             .into());
         }
 
-        let mut header_bytes = Box::<[u8; size_of::<PagerHeader>()]>::new([0; size_of::<PagerHeader>()]);
-        let header = PagerHeader::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
+        let mut header_bytes = Box::<[u8; size_of::<PagerMetadata>()]>::new([0; size_of::<PagerMetadata>()]);
+        let header = PagerMetadata::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
         header.initialise(page_size);
 
         Ok(Self {
@@ -313,14 +288,14 @@ where
         let file = FilePtr::new(fs, path);
         let cache_size = options.buffer_size.unwrap_or(DEFAULT_PAGER_CACHE_SIZE);
 
-        let mut header_bytes = Box::<[u8; size_of::<PagerHeader>()]>::new([0; size_of::<PagerHeader>()]);
+        let mut header_bytes = Box::<[u8; size_of::<PagerMetadata>()]>::new([0; size_of::<PagerMetadata>()]);
 
         // On récupère l'entête du fichier paginé.
         let header = {
             let mut stream = file.open(FileOpenOptions::new().read(true))?;
             stream.read_exact(header_bytes.as_mut_slice())?;
 
-            let header = PagerHeader::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
+            let header = PagerMetadata::try_mut_from_bytes(header_bytes.as_mut_slice()).unwrap();
             assert!(header.magic_number == MAGIC_NUMBER, "not a nac file");
             header
         };
@@ -365,7 +340,7 @@ where
     /// Charge le contenu de la page depuis le système de stockage persistant
     fn load_page_content(&self, page: &mut PageDescriptor<'_>) -> Result<()> {
         let result: Result<()> = {
-            let pid = page.id();
+            let pid = page.tag();
             let loc = self.page_location(&pid);
 
             let mut file = self.file.open(FileOpenOptions::new().read(true))?;
@@ -375,10 +350,12 @@ where
             Ok(())
         };
 
-        result.map_err(|err| Error::new(ErrorKind::PageLoadingFailed { id: *page.id(), source: Box::new(err) }))
+        result.map_err(|err| Error::new(ErrorKind::PageLoadingFailed { tag: *page.tag(), source: Box::new(err) }))
         
     }
 }
+
+
 
 #[cfg(test)]
 mod tests {
@@ -404,7 +381,7 @@ mod tests {
 
             let cpage = pager.get_cached_page(&pid)?;
             assert!(cpage.is_new());
-            assert_eq!(*cpage.id(), pid);
+            assert_eq!(*cpage.tag(), pid);
         }
 
         Ok(())
@@ -502,15 +479,14 @@ pub mod fixtures {
 
     use crate::fs::in_memory::InMemoryFs;
 
-    use super::{page::PageSize, stress::stubs::StressStub, BoxedPager, Pager, PagerOptions};
+    use super::{page::PageSize, stress::stubs::StressStub, Pager, PagerOptions};
 
-    pub fn fixture_new_pager() -> BoxedPager {
+    pub fn fixture_new_pager() -> Pager<Rc<InMemoryFs>> {
         let fs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(
+        Pager::new(
             fs, "memory", 
             PageSize::new(4_096), 
             PagerOptions::default().set_buffer_stress_strategy(StressStub::default())
-        ).expect("cannot create pager").into_boxed();
-        pager
+        ).expect("cannot create pager")
     }
 }

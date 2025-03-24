@@ -7,10 +7,6 @@ mod leaf;
 mod descriptor;
 mod cursor;
 
-
-use std::marker::PhantomData;
-
-use cursor::BPTreeCursor;
 use descriptor::{BPTreeDescriptor, BPlusTreeHeader};
 use interior::*;
 use leaf::*;
@@ -92,11 +88,7 @@ fn max_leaf_value_size(key: ValueKind, k: u16, page_size: PageSize) -> u16 {
 }
 
 /// Calcule les paramètres des arbres B+
-fn compute_b_plus_tree_parameters(
-    page_size: PageSize,
-    key: ValueKind,
-    value: ValueKind,
-) -> BPlusTreeHeader {
+fn compute_b_plus_tree_parameters(page_size: PageSize, key: ValueKind, value: ValueKind) -> BPlusTreeHeader {
     let (k, data_size): (u8, u16) = if let Some(data_size) = value.full_size() {
         let k = (1..u8::MAX).into_iter()
         .filter(|&k| within_available_interior_cell_space_size(key, page_size, k.into()))
@@ -195,10 +187,7 @@ pub trait IMutBPlusTree<'pager>: IRefBPlusTree<'pager> {
 }
 
 /// Arbre B+
-pub struct BPlusTree<'pager, Pager: IPager + ?Sized, Page: 'pager>
-where
-    Page: AsRefPageSlice,
-{
+pub struct BPlusTree<'pager, Pager, Page: 'pager> where Pager: IPager + ?Sized, Page: AsRefPageSlice {
     /// Le pager où sont stockées les noeuds de l'arbre
     pager: &'pager Pager,
     /// Descripteur de l'arbre, contient les métadonnées nécessaires à sa manipulation
@@ -210,6 +199,13 @@ impl<'pager, Pager, Page> AsBPlusTreeLeafRef<'pager> for BPlusTree<'pager, Pager
     Page: AsRefPageSlice,
 {
     type Tree = Self;
+}
+
+impl<'pager, Pager, Page> AsBPlusTreeLeafRef<'pager> for &BPlusTree<'pager, Pager, Page> where
+    Pager: IPager + ?Sized,
+    Page: AsRefPageSlice,
+{
+    type Tree = BPlusTree<'pager, Pager, Page>;
 }
 
 impl<'pager, Pager, Page> AsRef<Self> for BPlusTree<'pager, Pager, Page> where
@@ -289,7 +285,7 @@ where
         let cell = &leaf[gcid.cid()];
 
         match cell.as_cell().next_sibling() {
-            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
+            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().tag(), cid))),
             None => Ok(leaf.get_next().and_then(|next_pid| {
                 self.borrow_leaf(&next_pid)
                     .unwrap()
@@ -305,7 +301,7 @@ where
         let cell = &leaf[gcid.cid()];
 
         match cell.as_cell().prev_sibling() {
-            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().id(), cid))),
+            Some(cid) => Ok(Some(BPlusTreeCellId::new(*leaf.as_page().tag(), cid))),
             None => Ok(leaf.get_prev().and_then(|prev_pid| {
                 self.borrow_leaf(&prev_pid)
                     .unwrap()
@@ -362,10 +358,6 @@ where
     Pager: IPager + ?Sized,
     Page: AsRefPageSlice,
 {
-    pub fn new_cursor(&self) -> BPTreeCursor<'pager, _> {
-        BPTreeCursor {tree: self, current: None, _pht: PhantomData}
-    }
-
     pub fn desc(&self) -> &BPTreeDescriptor<Page> {
         &self.desc
     }
@@ -726,7 +718,7 @@ mod tests {
     #[test]
     fn test_insert() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let mut tree = BPlusTree::new::<u64, u64>(pager.as_ref())?;
+        let mut tree = BPlusTree::new::<u64, u64>(&pager)?;
 
         for i in 0..50_000u64 {
             tree.insert(
@@ -738,7 +730,7 @@ mod tests {
         }
 
         let var = tree.search(&10_u64.into_value_buf())?.unwrap();
-        let value = var.get(pager.as_ref())?;
+        let value = var.get(&pager)?;
 
         assert_eq!(value.cast::<u64>(), &1234u64);
 

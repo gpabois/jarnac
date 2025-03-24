@@ -93,7 +93,7 @@ impl IPageBuffer for PageBuffer {
             // La page a été déchargée, on va essayer de la récupérer.
             if self.stress.contains(pid) {
                 let mut pcache = self.alloc_in_memory(pid)?;
-                assert_eq!(pcache.id(), pid);
+                assert_eq!(pcache.tag(), pid);
                 self.stress.retrieve(&mut pcache)?;
                 return Ok(Some(pcache));
             }
@@ -260,7 +260,7 @@ impl PageBuffer {
             return Ok(dischargeable);
         }
 
-        Err(Error::new(ErrorKind::CacheFull))
+        Err(Error::new(ErrorKind::BufferFull))
     }
 
     fn is_in_memory(&self, pid: &PageId) -> bool {
@@ -269,13 +269,13 @@ impl PageBuffer {
 
     fn add_in_memory(&self, desc: NonNull<PageDescriptorInner>) {
         unsafe {
-            self.in_memory.borrow_mut().insert(desc.as_ref().pid, desc);
+            self.in_memory.borrow_mut().insert(desc.as_ref().tag, desc);
         }
     }
 
     unsafe fn remove_from_memory(&self, desc: NonNull<PageDescriptorInner>) {
         unsafe {
-            self.in_memory.borrow_mut().remove(&desc.as_ref().pid);
+            self.in_memory.borrow_mut().remove(&desc.as_ref().tag);
         }
     }
 }
@@ -319,12 +319,12 @@ mod tests {
             let mut buf = Vec::<u8>::new();
             buf.write_all(src.borrow().as_bytes())?;
             //println!("décharge {0} {buf:?}", src.id());
-            self.0.borrow_mut().insert(*src.id(), buf);
+            self.0.borrow_mut().insert(*src.tag(), buf);
             Ok(())
         }
 
         fn retrieve(&self, dest: &mut super::PageDescriptor<'_>) -> Result<()> {
-            let pid = dest.id();
+            let pid = dest.tag();
             let mut space = self.0.borrow_mut();
             let buf = space.get(&pid).unwrap();
             //println!("récupère {pid} {buf:?}");
@@ -332,7 +332,7 @@ mod tests {
                 .as_mut_bytes()
                 .write_all(buf)?;
 
-            space.remove(&dest.id());
+            space.remove(&dest.tag());
             Ok(())
         }
 

@@ -25,7 +25,7 @@ use std::{
     io::Cursor, mem::forget, ops::{Deref, DerefMut}
 };
 
-use crate::{error::{Error, ErrorKind}, result::Result};
+use crate::{error::{Error, ErrorKind}, result::Result, tag::JarTag};
 
 
 /// Référence vers une page.
@@ -56,20 +56,17 @@ impl Deref for RefPage<'_> {
 impl Drop for RefPage<'_> {
     fn drop(&mut self) {
         unsafe {
-            self.0.dec_rw_counter();
+            self.0.release_read_lock();
         }
     }
 }
 
 impl<'pager> RefPage<'pager> {
     pub(super) fn try_new(descriptor: PageDescriptor<'pager>) -> Result<Self> {
-        unsafe {
-            if descriptor.get_rw_counter() < 0 {
-                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
-            } else {
-                descriptor.inc_rw_counter();
-                Ok(Self(descriptor))
-            }
+        if descriptor.acquire_read_lock() {
+            Ok(Self(descriptor))
+        } else {
+            Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
         }
     }
 
@@ -82,8 +79,8 @@ impl<'pager> RefPage<'pager> {
         Cursor::new(self.deref())
     }
 
-    pub fn id(&self) -> &PageId {
-        &self.0.id()
+    pub fn tag(&self) -> &JarTag {
+        &self.0.tag()
     }
 }
 
@@ -169,7 +166,7 @@ impl<'pager> MutPage<'pager> {
     }
 
     pub fn id(&self) -> &PageId {
-        self.inner.id()
+        self.inner.tag()
     }
 
     /// Ouvre une curseur permettant de modifier le contenu de la page.
