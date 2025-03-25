@@ -11,7 +11,7 @@ pub struct PageSlice([u8]);
 
 impl PageSlice {
     pub fn len(&self) -> PageSize {
-        PageSize::from(self.0.len())
+        PageSize::try_from(self.0.len()).unwrap()
     }
 }
 
@@ -240,9 +240,7 @@ impl Deref for RefPageSlice<'_> {
 }
 impl Drop for RefPageSlice<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.inner.dec_rw_counter();
-        }
+        self.inner.release_read_lock();
     }
 }
 
@@ -264,11 +262,10 @@ impl AsMut<PageSlice> for MutPageSlice<'_> {
     }
 }
 
-impl<'pager> Into<RefPageSlice<'pager>> for MutPageSlice<'pager> {
-    fn into(self) -> RefPageSlice<'pager> {
+impl<'buf> Into<RefPageSlice<'buf>> for MutPageSlice<'buf> {
+    fn into(self) -> RefPageSlice<'buf> {
         unsafe {
-            self.inner.reset_rw_counter();
-
+            self.inner.release_write_lock_and_acquire_read_lock();
             let slice = std::ptr::from_mut(self.slice).as_ref().unwrap();
         
             let slice = RefPageSlice {
@@ -308,8 +305,6 @@ impl<'pager> DerefMut for MutPageSlice<'pager> {
 }
 impl Drop for MutPageSlice<'_> {
     fn drop(&mut self) {
-        unsafe  {
-            self.inner.inc_rw_counter();
-        }
+        self.inner.release_write_lock();
     }
 }

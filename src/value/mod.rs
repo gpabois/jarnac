@@ -16,7 +16,7 @@ use builder::ValueBuilder;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result};
+use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result, utils::Sized};
 
 const U8_KIND: ValueKind = ValueKind(1);
 const U16_KIND: ValueKind = ValueKind(2);
@@ -52,6 +52,10 @@ pub trait GetValueKind {
     const KIND: ValueKind;
 }
 
+pub trait GetSizedValueKind {
+    const KIND: Sized<ValueKind>;
+}
+
 pub trait FromValue: GetValueKind {
     type Output: ?Sized;
 
@@ -78,9 +82,23 @@ impl<U> IntoValueBuf for U where ValueBuf: From<U> {
 }
 
 
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct ValueKind(u8);
+
+impl TryFrom<ValueKind> for Sized<ValueKind> {
+    type Error = Error;
+
+    fn try_from(value: ValueKind) -> std::result::Result<Self, Self::Error> {
+        value.outer_size().expect("value is not fixed-size");
+        Ok(Sized(value))
+    }
+}
+
+impl Sized<ValueKind> {
+    pub fn outer_size(&self) -> usize {
+        self.0.outer_size().unwrap()
+    }
+}
 
 impl Display for ValueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -116,7 +134,7 @@ impl Into<u8> for ValueKind {
 impl ValueKind {
     /// Détermine la portion dédiée au stockage de la valeur
     pub fn get_slice<'a>(&self, src: &'a [u8]) -> &'a [u8] {
-        if let Some(size) = self.full_size() {
+        if let Some(size) = self.outer_size() {
             return &src[..size];
         }
 
@@ -124,7 +142,7 @@ impl ValueKind {
     }
 
     pub fn get_mut_slice<'a>(&self, src: &'a mut [u8]) -> &'a mut [u8] {
-        if let Some(size) = self.full_size() {
+        if let Some(size) = self.outer_size() {
             return &mut src[..size];
         }
 
@@ -162,7 +180,7 @@ impl ValueKind {
     /// Taille en mémoire de la valeur (incluant le byte de type)
     /// 
     /// Un retour à None signifie que la valeur est de taille variable.
-    pub fn full_size(&self) -> Option<usize> {
+    pub fn outer_size(&self) -> Option<usize> {
         self.size().map(|i| i + 1)
     }
     /// Taille de la valeur en retirait le byte de type.

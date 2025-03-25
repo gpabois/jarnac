@@ -3,9 +3,9 @@ use std::{cmp::Ordering, fmt::Display, ops::{DerefMut, Div, Index, IndexMut, Ran
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}}, result::Result, value::{Value, ValueBuf, ValueKind}};
+use crate::{pager::{cell::{Cell, CellId, CellPage, CellsMeta}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice}}, result::Result, value::{Value, ValueBuf, ValueKind}};
 
-pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
+pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellsMeta>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeInteriorHeader>());
 
 pub struct BPTreeInterior<Page>(CellPage<Page>) where Page: AsRefPageSlice;
@@ -153,13 +153,13 @@ impl<Page> BPTreeInterior<Page> where Page: AsMutPageSlice {
 
 impl BPTreeInterior<MutPage<'_>> {
     pub fn id(&self) -> &PageId {
-        self.as_page().id()
+        self.as_page().tag()
     }
 }
 
 impl BPTreeInterior<&mut MutPage<'_>> {
     pub fn id(&self) -> &PageId {
-        self.as_page().id()
+        self.as_page().tag()
     }
 }
 
@@ -292,7 +292,7 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?Sized {
     fn key_range(&self) -> Range<usize> {
         let base = self.left_range().end;
         let kind = ValueKind::from(self.as_cell().as_content_slice().as_bytes()[base]);
-        let full_size = kind.full_size().expect(&format!("expecting key to be a sized-type (kind: {kind})"));
+        let full_size = kind.outer_size().expect(&format!("expecting key to be a sized-type (kind: {kind})"));
         return base..(base + full_size)
     }
 
@@ -307,7 +307,7 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?Sized {
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?Sized {
     pub fn initialise(&mut self, key: &Value, left: PageId) {
-        key.kind().full_size().expect(&format!("expecting key to be a sized-type (kind: {0})", key.kind()));
+        key.kind().outer_size().expect(&format!("expecting key to be a sized-type (kind: {0})", key.kind()));
         let loc = self.left_range().end;
         
         self

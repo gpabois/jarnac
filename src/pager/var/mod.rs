@@ -50,8 +50,8 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
 }
 
 impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
-    pub const HEADER_RANGE: Range<usize> = 1..(1+size_of::<VarHeader>());
-    pub const DATA_BASE: usize = 1+size_of::<VarHeader>();
+    pub const HEADER_RANGE: Range<usize> = 1..(1+size_of::<VarMeta>());
+    pub const DATA_BASE: usize = 1+size_of::<VarMeta>();
 
     pub(crate) fn from_ref_slice(slice: &Slice) -> &Self {
         unsafe {
@@ -102,7 +102,7 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
         &self.0.as_ref()[self.data_range()]
     }
 
-    fn as_header(&self) -> &VarHeader {
+    fn as_header(&self) -> &VarMeta {
         self.as_ref()
     }
 }
@@ -132,7 +132,7 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         &mut self.0.as_mut()[Self::DATA_BASE..]
     }
 
-    fn as_mut_header(&mut self) -> &mut VarHeader {
+    fn as_mut_header(&mut self) -> &mut VarMeta {
         self.as_mut()
     }
 }
@@ -143,15 +143,15 @@ impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     }
 }
 
-impl<Slice> AsRef<VarHeader> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
-    fn as_ref(&self) -> &VarHeader {
-        VarHeader::ref_from_bytes(&self.0.as_ref()[Self::HEADER_RANGE]).unwrap()
+impl<Slice> AsRef<VarMeta> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
+    fn as_ref(&self) -> &VarMeta {
+        VarMeta::ref_from_bytes(&self.0.as_ref()[Self::HEADER_RANGE]).unwrap()
     }
 }
 
-impl<Slice> AsMut<VarHeader> for Var<Slice> where Slice: AsMutPageSlice + ?Sized {
-    fn as_mut(&mut self) -> &mut VarHeader {
-        VarHeader::mut_from_bytes(&mut self.0.as_mut()[Self::HEADER_RANGE]).unwrap()
+impl<Slice> AsMut<VarMeta> for Var<Slice> where Slice: AsMutPageSlice + ?Sized {
+    fn as_mut(&mut self) -> &mut VarMeta {
+        VarMeta::mut_from_bytes(&mut self.0.as_mut()[Self::HEADER_RANGE]).unwrap()
     }
 }
 
@@ -159,7 +159,7 @@ impl<Slice> AsMut<VarHeader> for Var<Slice> where Slice: AsMutPageSlice + ?Sized
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Clone)]
 #[repr(C, packed)]
 /// Contient les données nécessaires pour récupérer les données d'une taille dynamique.
-pub struct VarHeader {
+pub struct VarMeta {
     /// La taille totale de la donnée
     pub total_size: u64,
     /// La taille en page
@@ -168,7 +168,7 @@ pub struct VarHeader {
     pub spill_page_id: OptionalPageId,
 }
 
-impl VarHeader {
+impl VarMeta {
     pub fn has_spilled(&self) -> bool {
         self.in_page_size < self.total_size
     }
@@ -299,7 +299,7 @@ pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) 
 
 /// Lit les données d'une taille dynamique dans une région d'une page.
 pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
-    header: &VarHeader,
+    header: &VarMeta,
     dest: &mut W,
     src: &[u8],
     pager: &Pager,
@@ -327,7 +327,7 @@ pub fn write_var_data<Pager: IPager + ?Sized>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
-) -> Result<VarHeader> {
+) -> Result<VarMeta> {
     let total_size = data.len();
     let mut remaining: usize = total_size;
 
@@ -368,7 +368,7 @@ pub fn write_var_data<Pager: IPager + ?Sized>(
         })?;
     }
 
-    Ok(VarHeader {
+    Ok(VarMeta {
         total_size: total_size.try_into().unwrap(),
         in_page_size: in_page_size.try_into().unwrap(),
         spill_page_id: ov_head.into(),
@@ -397,7 +397,7 @@ mod tests {
         
         let mut dest: [u8;100] = [0;100];
 
-        let dsd_header: crate::pager::var::VarHeader = write_var_data(data.deref(), &mut dest, &pager)?;
+        let dsd_header: crate::pager::var::VarMeta = write_var_data(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == u64::try_from(dest.len()).unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == u64::try_from(data.len()).unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.get_spill_page() == Some(PageId::from(1u64)), "il doit y avoir eu du débordement");

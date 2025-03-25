@@ -22,19 +22,76 @@
 //! | CellHeader        | 2 bytes   |        |- cell size  (x capacity)
 //! |...............................|        v
 //! |-------------------|-----------|
-use std::{fmt::{Debug, Display}, mem::MaybeUninit, num::{NonZero, NonZeroU8}, ops::{AddAssign, Div, Index, IndexMut, Mul, Range, Sub, SubAssign}};
+use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit, num::NonZeroU8, ops::{Index, IndexMut, Range}};
 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, result::Result};
-use super::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageId, PageSize, PageSlice, RefPage};
+use crate::{error::{Error, ErrorKind}, result::Result, tag::DataArea};
+use super::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageSize, PageSlice, RefPage, InPage};
 use crate::prelude::*;
+
+pub type CellId = u8;
+pub type CellCapacity = u8;
+
+pub struct Cells;
+
+impl Cells {
+    /// Calcule la taille de la cellule (metadonnées inclus)
+    pub fn compute_cell_size(content_size: u16) -> u16 {
+        u16::try_from(size_of::<CellHeader>()).unwrap() + content_size
+    }
+    
+    /// Calcule la taille allouée au contenu de la cellule (métadonnées exclus)
+    pub fn compute_cell_content_size(cell_size: PageSize) -> PageSize {
+        cell_size - u16::try_from(size_of::<CellHeader>()).unwrap()
+    }
+
+    /// Calcule la taille maximale des cellules compte tenu de l'espace dédiée et du nombre de cellules souhaité.
+    pub fn compute_max_cell_content_size(size: PageSize, reserved: PageSize, k: CellCapacity) -> PageSize {
+        let cell_size = Self::compute_available_cell_space_size(size, reserved).div_ceil(u16::from(k));
+        Self::compute_cell_content_size(cell_size)
+    }
+    
+    /// Vérifie que l'espace alloué aux cellules puisse contenir l'ensemble des cellules à la taille souhaitée
+    pub fn within_available_cell_space_size(size: PageSize, reserved: PageSize, content_size: PageSize, k: CellCapacity) -> bool {
+        let available = Self::compute_available_cell_space_size(size, reserved);
+        Self::compute_available_cell_space_size(content_size, reserved) <= available
+    }
+
+    pub fn compute_cell_space_size(content_size: PageSize, k: CellCapacity) -> u16 {
+        Self::compute_cell_size(content_size) * u16::from(k)
+    }
+    /// Calcule la taille maximale de l'espace dédiée aux cellules.
+    /// 
+    /// reserved: espace réservée avant l'espace dédiée aux cellules.
+    /// size: taille de la page
+    pub fn compute_available_cell_space_size(size: PageSize, reserved: PageSize) -> PageSize {
+        size - Self::compute_base(reserved)
+    }
+    
+    /// Calcule la base de l'espace dédiée aux cellules
+    /// 
+    /// reserved: espace réservée avant l'espace dédiée aux cellules.
+    pub fn compute_base(reserved: PageSize) -> PageSize {
+        u16::try_from(CellsMeta::INTEGRATED_AREA.end).unwrap() + reserved
+    }
+}
+
+pub struct WithCells<T>(PhantomData<T>);
+
+impl<T> DataArea for WithCells<T> where T: DataArea {
+    const AREA: Range<usize> = CellsMeta::AREA.end..(CellsMeta::INTEGRATED_AREA.end + size_of::<T>());
+}
+
+impl DataArea for CellsMeta {
+    const AREA: Range<usize> = InPage::<Self>::AREA;
+}
 
 /// Sous-sytème permettant de découper une page en cellules de tailles égales
 pub struct CellPage<Page>(Page) where Page: AsRefPageSlice + ?Sized;
 
-pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellPageHeader>() + 1);
+pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellsMeta>() + 1);
 
 impl<'pager> CellPage<MutPage<'pager>> {
     pub fn into_ref(self) -> CellPage<RefPage<'pager>> {
@@ -58,19 +115,22 @@ impl<Page> AsRef<Page> for CellPage<Page> where Page: AsRefPageSlice {
         &self.0
     }
 }
+
 impl<Page> AsMut<Page> for CellPage<Page> where Page: AsMutPageSlice {
     fn as_mut(&mut self) -> &mut Page {
         &mut self.0
     }
 }
-impl<Page> AsRef<CellPageHeader> for CellPage<Page> where Page: AsRefPageSlice {
-    fn as_ref(&self) -> &CellPageHeader {
-        CellPageHeader::ref_from_bytes(&self.0.as_ref()[HEADER_SLICE_RANGE]).unwrap()
+
+impl<Page> AsRef<CellsMeta> for CellPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &CellsMeta {
+        CellsMeta::ref_from_bytes(&self.0.as_ref()[HEADER_SLICE_RANGE]).unwrap()
     }
 }
-impl<Page> AsMut<CellPageHeader> for CellPage<Page> where Page: AsMutPageSlice {
-    fn as_mut(&mut self) -> &mut CellPageHeader {
-        CellPageHeader::mut_from_bytes(&mut self.0.as_mut()[HEADER_SLICE_RANGE]).unwrap()
+
+impl<Page> AsMut<CellsMeta> for CellPage<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut CellsMeta {
+        CellsMeta::mut_from_bytes(&mut self.0.as_mut()[HEADER_SLICE_RANGE]).unwrap()
     }
 }
 
@@ -120,7 +180,7 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     /// Récupère un intervalle permettant de cibler une cellule.
     pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> {
         self
-            .as_header()
+            .as_meta()
             .get_cell_range(cid)
     }
 
@@ -135,37 +195,37 @@ impl<Page> CellPage<Page> where Page: AsRefPageSlice {
     }
 
     pub fn len(&self) -> CellCapacity {
-        self.as_header().len()
+        self.as_meta().len()
     }
 
     pub fn capacity(&self) -> CellCapacity {
-        self.as_header().capacity()
+        self.as_meta().capacity()
     }
 
     pub fn is_full(&self) -> bool {
-        self.as_header().is_full()
+        self.as_meta().is_full()
     }
 
     fn head(&self) -> Option<CellId> {
-        self.as_header().get_head()
+        self.as_meta().get_head()
     }
 
     #[allow(dead_code)]
     fn free_head(&self) -> Option<CellId> {
-        self.as_header().get_free_head()
+        self.as_meta().get_free_head()
     }
 
     #[allow(dead_code)]
     pub(crate) fn free_len(&self) -> CellCapacity {
-        self.as_header().free_len()
+        self.as_meta().free_len()
     }
 
     fn tail(&self) -> Option<CellId> {
-        self.as_header().get_tail()
+        self.as_meta().get_tail()
     }
 
-    fn as_header(&self) -> &CellPageHeader {
-        self.as_ref()
+    fn as_meta(&self) -> &CellsMeta {
+        CellsMeta::ref_from_bytes(&self.0.as_ref()[CellsMeta::AREA]).unwrap()
     }
 }
 
@@ -194,8 +254,8 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     /// - reserved: The number of reserved bytes in the header, it is used to compute the cell space base (= reserved + size_of::<CellPageHeader>())
     pub fn new(page: Page, content_size: PageSize, capacity: CellCapacity, reserved: PageSize) -> Result<Self>
     {
-        let cell_size = PageSize::from(content_size + size_of::<CellHeader>());
-        let base = PageSize::from(reserved + size_of::<CellPageHeader>() + 1);
+        let cell_size = Cells::compute_cell_size(content_size);
+        let base = Cells::compute_base(reserved);
 
         Self::assert_no_overflow(page.as_ref().len(), cell_size, base, capacity)?;
 
@@ -203,7 +263,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         
         cells
             .as_mut_uninit_header()
-            .write(CellPageHeader::new(
+            .write(CellsMeta::new(
                 cell_size, 
                 capacity,
                 base
@@ -214,7 +274,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
     /// Itère sur les références des cellules de la page
     pub fn iter_mut(&mut self) -> MutPageCellCursor<'_, Page> {
-        let current = self.as_header().get_head();
+        let current = self.as_meta().get_head();
         MutPageCellCursor { page: self, current }        
     }
 
@@ -286,11 +346,11 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
         let cid = self
             .pop_free_cell()
             .unwrap_or_else(|| {
-                let cid: CellId = self.as_mut_header()
+                let cid: CellId = self.as_mut_meta()
                     .inc_len()
                     .into();
 
-                assert!(cid < self.capacity(), "allocated cell {cid} overflows capacity {0} ({1:?})", self.capacity(), self.as_header());
+                assert!(cid < self.capacity(), "allocated cell {cid} overflows capacity {0} ({1:?})", self.capacity(), self.as_meta());
                 cid
             });
         
@@ -312,7 +372,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     fn assert_no_overflow(page_size: PageSize, cell_size: PageSize, base: PageSize, capacity: CellCapacity) -> Result<()> {
         let space_size = page_size - base;
         
-        if space_size < cell_size * capacity {
+        if space_size < cell_size * u16::from(capacity) {
             return Err(Error::new(ErrorKind::CellPageOverflow))
         }
 
@@ -360,26 +420,26 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 
     /// Insère une nouvelle cellule dans la liste des cellules libres.
     fn push_free_cell(&mut self, cid: &CellId) {
-        self.as_header().get_free_head().inspect(|head| {
+        self.as_meta().get_free_head().inspect(|head| {
             self[head].set_previous_sibling(Some(*cid));
             self[cid].set_next_sibling(Some(*head));
         });
         
-        self.as_mut_header().set_free_head(Some(*cid));
-        self.as_mut_header().inc_free_len();
+        self.as_mut_meta().set_free_head(Some(*cid));
+        self.as_mut_meta().inc_free_len();
     }
 
     /// Retire une cellule de la liste des cellules libres.
     fn pop_free_cell(&mut self) -> Option<CellId> {
-        if let Some(head) = self.as_header().get_free_head() {
+        if let Some(head) = self.as_meta().get_free_head() {
             let maybe_next = self.next_sibling(&head);
             
             maybe_next.inspect(|next| {
                 self[next].set_previous_sibling(None);
             });
             
-            self.as_mut_header().set_free_head(maybe_next);
-            self.as_mut_header().dec_free_len();
+            self.as_mut_meta().set_free_head(maybe_next);
+            self.as_mut_meta().dec_free_len();
 
             return Some(head)
         }
@@ -407,21 +467,21 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
     }  
 
     fn set_head(&mut self, head: Option<CellId>) {
-        self.as_mut_header().set_head(head);
+        self.as_mut_meta().set_head(head);
     }
 
     fn set_tail(&mut self, tail: Option<CellId>) {
-        self.as_mut_header().set_tail(tail);
+        self.as_mut_meta().set_tail(tail);
     }
 
     /// Récupère une référence mutable sur les propriétés de la page cellulaire
-    fn as_mut_header(&mut self) -> &mut CellPageHeader {
-        self.as_mut()
+    fn as_mut_meta(&mut self) -> &mut CellsMeta {
+        CellsMeta::mut_from_bytes(&mut self.0.as_mut()[CellsMeta::AREA]).unwrap()
     }
 
-    fn as_mut_uninit_header(&mut self) -> &mut MaybeUninit<CellPageHeader> {
+    fn as_mut_uninit_header(&mut self) -> &mut MaybeUninit<CellsMeta> {
         unsafe {
-            std::mem::transmute(self.as_mut_header())
+            std::mem::transmute(self.as_mut_meta())
         }
     }
 }
@@ -429,7 +489,7 @@ impl<Page> CellPage<Page> where Page: AsMutPageSlice {
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C, packed)]
 /// En-tête de la page contenant les informations relatives aux cellules qui y sont stockées.
-pub struct CellPageHeader {
+pub struct CellsMeta {
     /// Nombre maximal de cellules stockables.
     capacity: CellCapacity,
     /// Taille d'une cellule
@@ -448,7 +508,7 @@ pub struct CellPageHeader {
     cell_base: PageSize
 }
 
-impl Debug for CellPageHeader {
+impl Debug for CellsMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cell_size = self.cell_size;
         let cell_base = self.cell_base;
@@ -465,7 +525,7 @@ impl Debug for CellPageHeader {
     }
 }
 
-impl CellPageHeader {
+impl CellsMeta {
     pub fn new(cell_size: PageSize, capacity: CellCapacity, base: PageSize) -> Self {
         return Self {
             cell_size,
@@ -480,12 +540,11 @@ impl CellPageHeader {
     }
 
     pub fn get_cell_location(&self, cid: &CellId) -> PageSize {
-        let rank: u16 = ((*cid) - 1).into();
-        self.cell_size * rank + self.cell_base
+        self.cell_size * u16::from(*cid - 1) + self.cell_base
     }
 
     pub fn get_cell_range(&self, cid: &CellId) -> Option<Range<usize>> {
-        if cid.0 <= self.capacity.0 {
+        if *cid <= self.capacity {
             let loc: usize = self.get_cell_location(cid).into();
             let size: usize = self.cell_size.into();
     
@@ -786,127 +845,7 @@ impl CellHeader {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct GlobalCellId(PageId, CellId);
 
-impl GlobalCellId {
-    pub(crate) fn new(pid: PageId, cid: CellId) -> Self {
-        Self(pid, cid)
-    }
-
-    pub fn pid(&self) -> &PageId {
-        &self.0
-    }
-
-    pub fn cid(&self) -> &CellId {
-        &self.1
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct CellId(u8);
-
-impl CellId {
-    pub const ZERO: Self = CellId(0);
-
-    pub fn new(id: NonZero<u8>) -> Self {
-        Self(id.get())
-    }
-}
-
-impl Display for CellId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.0, f)
-    }
-}
-
-impl PartialEq<CellCapacity> for CellId {
-    fn eq(&self, other: &CellCapacity) -> bool {
-        (self.0 - 1).eq(&other.0)
-    }
-}
-
-impl PartialOrd<CellCapacity> for CellId {
-    fn partial_cmp(&self, other: &CellCapacity) -> Option<std::cmp::Ordering> {
-        (self.0 - 1).partial_cmp(&other.0)
-    }
-}
-
-impl Sub<u8> for CellId {
-    type Output = u8;
-
-    fn sub(self, rhs: u8) -> Self::Output {
-        self.0 - rhs
-    }
-}
-
-impl From<CellCapacity> for CellId {
-    fn from(value: CellCapacity) -> Self {
-        Self::new(value.0.try_into().unwrap())
-    }
-}
-
-impl Into<u16> for CellId {
-    fn into(self) -> u16 {
-        u16::from(self.0)
-    }
-}
-
-
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Clone, Copy, PartialEq, PartialOrd, Ord, Eq)]
-pub struct CellCapacity(u8);
-
-impl Debug for CellCapacity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Debug::fmt(&self.0, f)
-    }
-}
-
-impl Display for CellCapacity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{0}", self.0)
-    }
-}
-
-impl Div<u8> for CellCapacity {
-    type Output = u8;
-
-    fn div(self, rhs: u8) -> Self::Output {
-        self.0.div(rhs)
-    }
-}
-
-impl AddAssign<u8> for CellCapacity {
-    fn add_assign(&mut self, rhs: u8) {
-        self.0 += rhs
-    }
-}
-
-impl Sub<CellCapacity> for CellCapacity {
-    type Output = CellCapacity;
-
-    fn sub(self, rhs: CellCapacity) -> Self {
-        Self(self.0 - rhs.0)
-    }
-}
-
-impl SubAssign<u8> for CellCapacity {
-    fn sub_assign(&mut self, rhs: u8) {
-        self.0 -= rhs
-    }
-}
-
-impl Into<u16> for CellCapacity {
-    fn into(self) -> u16 {
-        u16::from(self.0)
-    }
-}
-
-impl From<u8> for CellCapacity {
-    fn from(value: u8) -> Self {
-        Self(value)
-    }
-}
 
 
 #[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Clone, Copy, Default, PartialEq, Eq)]
@@ -920,7 +859,7 @@ impl Debug for OptionalCellId {
 
 impl Into<Option<CellId>> for OptionalCellId {
     fn into(self) -> Option<CellId> {
-        self.0.map(|v| CellId(v.get()))
+        self.0.map(|v| v.get())
     }
 }
 
@@ -928,10 +867,10 @@ impl From<Option<CellId>> for OptionalCellId {
     fn from(value: Option<CellId>) -> Self {
         match value {
             Some(cid) => {
-                if cid == CellId::ZERO {
+                if cid == 0 {
                     Self(None)
                 } else {
-                    Self(Some(cid.0.try_into().unwrap()))
+                    Self(Some(cid.try_into().unwrap()))
                 }
             },
             None => Self(None),
@@ -947,13 +886,6 @@ impl AsRef<Option<CellId>> for OptionalCellId {
     }
 }
 
-impl Mul<u32> for CellId {
-    type Output = u32;
-
-    fn mul(self, rhs: u32) -> Self::Output {
-        u32::from(self.0) * rhs
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -971,8 +903,8 @@ mod tests {
         let mut cells = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
             PageSize::from(10u16), 
-            4_u8.into(), 
-            0_usize.into()
+            4, 
+            0
         )?;
 
         let c1 = cells.alloc_cell()?;
@@ -994,8 +926,8 @@ mod tests {
         let mut cells = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
             PageSize::from(10u16), 
-            4_u8.into(), 
-            0_usize.into()
+            4,
+            0
         )?;
 
         let c1 = cells.push()?;
@@ -1021,7 +953,7 @@ mod tests {
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
             PageSize::from(10u16), 
             4_u8.into(), 
-            0_usize.into()
+            0
         )?;
 
 
@@ -1050,13 +982,13 @@ mod tests {
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(u64::KIND.full_size().unwrap());
+        let content_size = PageSize::try_from(u64::KIND.outer_size().unwrap()).unwrap();
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
             content_size, 
-            5_u8.into(), 
-            0_usize.into()
+            5, 
+            0
         )?;
         
         let cid = src.push()?;
@@ -1073,7 +1005,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = fixture_new_pager();
-        let content_size = PageSize::from(u64::KIND.full_size().unwrap());
+        let content_size = PageSize::from(u64::KIND.outer_size().unwrap());
 
         let mut src = CellPage::new(
             pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 

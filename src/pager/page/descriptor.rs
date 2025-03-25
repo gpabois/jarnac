@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, fmt::Debug, marker::PhantomData, ptr::NonNull, sync::atomic::{AtomicIsize, AtomicUsize, Ordering as SyncOrdering}};
+use std::{fmt::Debug, marker::PhantomData, ptr::NonNull, sync::atomic::{AtomicIsize, AtomicUsize, Ordering as SyncOrdering}};
 use crate::{result::Result, tag::JarTag};
 
 use super::{MutPage, PageSlice, RefPage};
@@ -103,6 +103,19 @@ impl PageDescriptor<'_> {
         self.as_ref_inner().use_counter.load(SyncOrdering::Relaxed)
     }
 
+    /// Libère le verrou en écriture et récupère un verrou en lecture.
+    /// 
+    /// La fonction panique si aucun verrou en écriture n'a été préalablement acquis.
+    pub fn release_write_lock_and_acquire_read_lock(&self) {
+        self.as_ref_inner()
+            .rw_counter
+            .compare_exchange(-1, 1, SyncOrdering::Relaxed, SyncOrdering::Relaxed)
+            .unwrap();
+    }
+
+    /// Récupère un verrou en écriture.
+    /// 
+    /// La fonction retourne *false* si le verrou n'a pas pu être récupéré.
     pub fn acquire_write_lock(&self) -> bool {
         self.as_ref_inner()
             .rw_counter
@@ -110,22 +123,24 @@ impl PageDescriptor<'_> {
             .is_ok()
     }
 
+    /// Libère le verrou en écriture.
+    /// 
+    /// La fonction panique si aucun verrou en écriture n'a été préalablement acquis.
     pub fn release_write_lock(&self) {
         self.as_ref_inner() 
             .rw_counter
-            .compare_exchange(-1, 0, SyncOrdering::Relaxed, SyncOrdering::Relaxed);
+            .compare_exchange(-1, 0, SyncOrdering::Relaxed, SyncOrdering::Relaxed)
+            .unwrap();
     }
 
     pub fn acquire_read_lock(&self) -> bool {
-        unsafe {
-            let rw = self.get_rw_counter(SyncOrdering::Acquire);
+        let rw = self.get_rw_counter(SyncOrdering::Acquire);
             
-            if rw < 0 {
-                return false
-            }
-
-            self.inc_rw_counter(SyncOrdering::Release) == rw
+        if rw < 0 {
+            return false
         }
+
+        self.as_ref_inner().rw_counter.fetch_add(1, SyncOrdering::Release) > 0
     }
 
     pub fn release_read_lock(&self) {

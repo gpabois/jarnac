@@ -45,19 +45,6 @@ impl PartialOrd<u64> for PageId {
         (self.0.get() - 1).partial_cmp(other)
     }
 }
-
-impl From<NonZero<u64>> for PageId {
-    fn from(value: NonZero<u64>) -> Self {
-        Self(value)
-    }
-}
-
-impl Into<NonZero<u64>> for PageId {
-    fn into(self) -> NonZero<u64> {
-        self.0
-    }
-}
-
 impl From<usize> for PageId {
     fn from(value: usize) -> Self {
         Self(NonZero::try_from(u64::try_from(value).unwrap()).expect("must be a non-zeroed value"))

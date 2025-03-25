@@ -17,9 +17,9 @@ use itertools::Itertools;
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellPageHeader}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::Var, IPager}, result::Result, value::{Value, ValueKind}};
+use crate::{pager::{cell::{Cell, CellCapacity, CellId, CellPage, CellsMeta}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, var::Var, IPager}, result::Result, value::{Value, ValueKind}};
 
-pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellPageHeader>() + 1;
+pub const LEAF_HEADER_RANGE_BASE: usize = size_of::<CellsMeta>() + 1;
 pub const LEAF_HEADER_RANGE: Range<usize> = LEAF_HEADER_RANGE_BASE..(LEAF_HEADER_RANGE_BASE + size_of::<BPTreeLeafHeader>());
 
 /// Représente une feuille d'un arbre B+.
@@ -102,13 +102,13 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
 
 impl BPTreeLeaf<MutPage<'_>> {
     pub fn id(&self) -> &PageId {
-        self.as_page().id()
+        self.as_page().tag()
     }
 }
 
 impl BPTreeLeaf<&mut MutPage<'_>> {
     pub fn id(&self) -> &PageId {
-        self.as_page().id()
+        self.as_page().tag()
     }
 }
 
@@ -359,13 +359,13 @@ where Slice: AsRefPageSlice + ?Sized
 
     fn value_range(&self) -> RangeFrom<usize> {
         let kind = self.kind();
-        let full_size = kind.full_size().unwrap();
+        let full_size = kind.outer_size().unwrap();
         return full_size..    
     }
 
     fn key_range(&self) -> Range<usize> {
         let kind = self.kind();
-        let full_size = kind.full_size().unwrap();
+        let full_size = kind.outer_size().unwrap();
         return 0..full_size
     }
 

@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     io::{Read, Seek, Write},
     ops::DerefMut, sync::Mutex,
 };
@@ -64,7 +63,7 @@ impl<Fs: IFileSystem> IBufferStressStrategy for FsPagerStress<Fs> {
             .file
             .open(FileOpenOptions::new().create(true).write(true))?;
 
-        let loc = self.page_size * id;
+        let loc = u64::from(self.page_size) * u64::try_from(id).unwrap();
         file.seek(std::io::SeekFrom::Start(u64::try_from(loc).unwrap()))?;
         file.write_u8(src.get_flags())?;
         unsafe {
@@ -79,7 +78,7 @@ impl<Fs: IFileSystem> IBufferStressStrategy for FsPagerStress<Fs> {
         let id = self.pages.get(&dest.tag()).unwrap().to_owned();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
-        let addr = self.page_size * id;
+        let addr = u64::from(self.page_size) * u64::try_from(id).unwrap();
         file.seek(std::io::SeekFrom::Start(u64::try_from(addr).unwrap()))?;
         dest.set_flags(file.read_u8()?);
         file.read_exact(dest.borrow_mut(true).deref_mut())?;
@@ -96,7 +95,7 @@ impl<Fs: IFileSystem> IBufferStressStrategy for FsPagerStress<Fs> {
 }
 
 pub mod stubs {
-    use std::{collections::HashMap, io::Write};
+    use std::io::Write;
 
     use dashmap::DashMap;
 

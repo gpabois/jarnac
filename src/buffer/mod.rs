@@ -3,7 +3,7 @@ pub mod stress;
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     mem::MaybeUninit,
-    ptr::NonNull, sync::{atomic::{AtomicUsize, Ordering}, Mutex},
+    ptr::NonNull, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex},
 };
 
 use dashmap::{DashMap, DashSet};
@@ -12,12 +12,49 @@ use stress::BufferStressStrategy;
 
 use crate::{
     error::{Error, ErrorKind}, 
-    pager::page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, PageSize}, 
+    pager::page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, 
     result::Result, 
-    tag::JarTag
+    tag::JarTag, utils::Flip
 };
 
-pub struct JarBuffer {
+pub trait IBufferPool {
+    /// Alloue de l'espace pour tamponner une page.
+    fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>>;
+
+    /// Récupère une référence vers la page si elle est stockée dans le tampon.
+    fn try_get_ref<'buf>(&'buf self, tag: &JarTag) -> Result<Option<RefPage<'buf>>> {
+        unsafe {
+            let desc = self.try_get_descriptor(tag)?;
+            desc.map(|desc| RefPage::try_new(desc)).flip()
+        }
+    }
+
+    /// Récupère une référence mutable vers la page si elle est stockée dans le tampon.
+    fn try_get_mut<'buf>(&'buf self, tag: &JarTag) -> Result<Option<MutPage<'buf>>> {
+        unsafe {
+            let desc = self.try_get_descriptor(tag)?;
+            desc.map(|desc| MutPage::try_new(desc)).flip()
+        }
+    }
+
+    /// Essaye de récupérer une page stocker dans le tampon.
+    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>>;
+}
+
+#[derive(Clone)]
+pub struct SharedBufferPool(Arc<BufferPool>);
+
+impl IBufferPool for SharedBufferPool {
+    fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>> {
+        self.0.alloc(tag)
+    }
+
+    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>> {
+        self.0.try_get_descriptor(tag)
+    }
+}
+
+pub struct BufferPool {
     /// Le layout de l'espace allouée
     layout: Layout,
     /// L'espace allouée
@@ -41,12 +78,12 @@ pub struct JarBuffer {
     stress_strategy: BufferStressStrategy,
 }
 
-
-impl JarBuffer {
+impl BufferPool {
+    /// Crée un nouveau buffer pool.
     pub fn new(buffer_size: usize, page_size: PageSize, stress_strategy: BufferStressStrategy) -> Self {
         unsafe {
 
-            let align: usize = (page_size + size_of::<PageDescriptorInner>()).next_power_of_two();
+            let align: usize = (usize::from(page_size) + size_of::<PageDescriptorInner>()).next_power_of_two();
             
             let layout = Layout::from_size_align(
                 buffer_size,
@@ -80,7 +117,7 @@ impl JarBuffer {
     }
 }
 
-impl Drop for JarBuffer {
+impl Drop for BufferPool {
     fn drop(&mut self) {
         unsafe {
             dealloc(self.ptr.as_mut(), self.layout);
@@ -88,54 +125,48 @@ impl Drop for JarBuffer {
     }
 }
 
-impl JarBuffer 
-{
-   
-    fn alloc<'buffer>(&'buffer self, tag: &JarTag) -> Result<PageDescriptor<'buffer>> {
+impl IBufferPool for BufferPool {
+
+    fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>> {
         // Déjà caché
         if self.contains(tag) {
             return Err(Error::new(ErrorKind::PageAlreadyCached(*tag)));
         }
+    
+        self
+            .alloc_from_memory(tag)
+            .inspect(|_| {self.stored.insert(*tag);})
+            .and_then(MutPage::try_new)
 
-        let page = self.alloc_from_memory(tag)?;
-        self.stored.insert(*tag);
-
-        Ok(page)
     }
 
-    fn try_get<'buffer>(&'buffer self, tag: &JarTag) -> Result<Option<PageDescriptor<'buffer>>> {
-        unsafe {
-            // La page est en mémoire, on la renvoie
-            if let Some(stored) = self.try_get_from_memory(tag) {
-                return Ok(Some(PageDescriptor::new(stored)));
-            }
-
-            {
-                let stress = &self.stress_strategy;
-                // La page a été déchargée, on va essayer de la récupérer.
-                if stress.contains(tag) {
-                    let mut page = self.alloc_from_memory(tag)?;
-                    assert_eq!(page.tag(), tag);
-                    
-                    stress
-                        .retrieve(&mut page)?;
-    
-                    return Ok(Some(page));
-                }
-            }
-
-
-            if self.contains(tag) {
-                panic!("page #{tag} is stored in the buffer but nowhere to be found");
-            }
-
-            Ok(None)
+    /// Essaye de récupérer une page stocker dans le tampon.
+    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>> {
+        // La page est en mémoire, on la renvoie
+        if let Some(stored) = self.try_get_from_memory(tag) {
+            return Ok(Some(PageDescriptor::new(stored)));
         }
+
+
+        // La page a été déchargée, on va essayer de la récupérer.
+        if self.stress_strategy.contains(tag) {
+            let mut page = self.alloc_from_memory(tag)?;
+            assert_eq!(page.tag(), tag);
+            self.stress_strategy.retrieve(&mut page)?;
+            return Ok(Some(page));
+        }
+
+
+        if self.contains(tag) {
+            panic!("page #{tag} is stored in the buffer but nowhere to be found");
+        }
+
+        Ok(None)
     }
 }
 
 
-impl JarBuffer {
+impl BufferPool {
     /// Alloue de l'espace dans la mémoire du cache pour stocker une page.
     ///
     /// Différent de [Self::alloc] dans le sens où cette fonction ne regarde pas
@@ -174,7 +205,7 @@ impl JarBuffer {
     /// Cette fonction doit supposément être thread-safe via l'utilisation
     /// de compteurs atomiques.
     fn alloc_in_heap<'buf>(&'buf self, tag: &JarTag) -> Result<PageDescriptor<'buf>> {
-        let size =  self.page_size + size_of::<PageDescriptorInner>();
+        let size =  usize::from(self.page_size) + size_of::<PageDescriptorInner>();
         
         loop {
             let tail = self.tail.load(std::sync::atomic::Ordering::Acquire);
@@ -209,7 +240,8 @@ impl JarBuffer {
 
     }
 
-    fn try_get_from_memory(&self, tag: &JarTag) -> Option<NonNull<PageDescriptorInner>> {
+    /// Récupère un pointeur vers un tampon d'une page donnée, s'il existe.
+    fn try_get_from_memory(&self, tag: &JarTag) -> Option<PageDescriptorPtr> {
         self.in_memory.get(tag).map(|kv| kv.value().to_owned())
     }
 

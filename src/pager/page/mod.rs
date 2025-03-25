@@ -22,11 +22,17 @@ pub use slice::*;
 pub use location::*;
 
 use std::{
-    io::Cursor, mem::forget, ops::{Deref, DerefMut}
+    io::Cursor, marker::PhantomData, mem::forget, ops::{Deref, DerefMut, Range}
 };
 
-use crate::{error::{Error, ErrorKind}, result::Result, tag::JarTag};
+use crate::{error::{Error, ErrorKind}, result::Result, tag::{DataArea, JarTag}};
 
+pub struct InPage<T>(PhantomData<T>);
+
+impl<T> DataArea for InPage<T> {
+    const AREA: Range<usize> = 1..(size_of::<T>() + 1);
+    const INTEGRATED_AREA: Range<usize> = 0..Self::AREA.end + 1;
+}
 
 /// Référence vers une page.
 pub struct RefPage<'pager>(PageDescriptor<'pager>);
@@ -55,14 +61,12 @@ impl Deref for RefPage<'_> {
 
 impl Drop for RefPage<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.0.release_read_lock();
-        }
+        self.0.release_read_lock();
     }
 }
 
 impl<'pager> RefPage<'pager> {
-    pub(super) fn try_new(descriptor: PageDescriptor<'pager>) -> Result<Self> {
+    pub(crate) fn try_new(descriptor: PageDescriptor<'pager>) -> Result<Self> {
         if descriptor.acquire_read_lock() {
             Ok(Self(descriptor))
         } else {
@@ -125,28 +129,22 @@ impl DerefMut for MutPage<'_> {
 }
 
 impl<'pager> MutPage<'pager> {
-    pub(super) fn try_new(inner: PageDescriptor<'pager>) -> Result<Self> {
-        unsafe {
-            if inner.get_rw_counter() != 0 {
-                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
-            } else {
-                inner.dec_rw_counter();
-                Ok(Self { dry: false, inner })
-            }
+    pub(crate) fn try_new(inner: PageDescriptor<'pager>) -> Result<Self> {
+        if inner.acquire_write_lock() {
+            Ok(Self { dry: false, inner })
+        } else {
+            Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
         }
     }
 
-    pub(super) fn try_new_with_options(
+    pub(crate) fn try_new_with_options(
         inner: PageDescriptor<'pager>,
         dry: bool,
     ) -> Result<Self> {
-        unsafe {
-            if inner.get_rw_counter() != 0 {
-                Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
-            } else {
-                inner.dec_rw_counter();
-                Ok(Self { dry, inner })
-            }
+        if inner.acquire_write_lock() {
+            Ok(Self { dry: dry, inner })
+        } else {
+            Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
         }
     }
 
@@ -157,15 +155,13 @@ impl<'pager> MutPage<'pager> {
 
     /// Transforme la référence mutable en référence simple.
     pub fn into_ref(self) -> RefPage<'pager> {
-        unsafe {
-            self.inner.set_rw_counter(1);
-            let rf = RefPage(self.inner.clone());
-            forget(self);
-            rf
-        }
+        self.inner.release_write_lock_and_acquire_read_lock();
+        let rf = RefPage(self.inner.clone());
+        forget(self);
+        rf  
     }
 
-    pub fn id(&self) -> &PageId {
+    pub fn tag(&self) -> &JarTag {
         self.inner.tag()
     }
 
@@ -183,9 +179,7 @@ impl<'pager> MutPage<'pager> {
 
 impl Drop for MutPage<'_> {
     fn drop(&mut self) {
-        unsafe {
-            self.inner.inc_rw_counter();
-        }
+        self.inner.release_write_lock();
     }
 }
 

@@ -7,6 +7,7 @@ mod leaf;
 mod descriptor;
 mod cursor;
 
+use dashmap::mapref::one::RefMut;
 use descriptor::{BPTreeDescriptor, BPlusTreeHeader};
 use interior::*;
 use leaf::*;
@@ -15,19 +16,19 @@ use zerocopy::TryFromBytes;
 use zerocopy_derive::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::{
-    error::Error, pager::{
-        cell::{CellHeader, CellPageHeader, GlobalCellId}, 
+    arena::{IArena, IPageArena}, error::Error, pager::{
+        cell::{CellHeader, CellsMeta, GlobalCellId}, 
         page::{
-            AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPage, RefPageSlice
-        }, var::{Var, VarHeader}, IPager
-    }, result::Result, value::{GetValueKind, Value, ValueKind}
+            AsMutPageSlice, AsRefPageSlice, MutPage, PageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice
+        }, var::{Var, VarMeta}, IPager
+    }, result::Result, tag::JarTag, value::{GetValueKind, Value, ValueKind}
 };
 
 pub type BPTreeKey = Value;
 
 pub const MIN_K: u16 = 2;
-pub const LEAF_HEADER_SIZE: usize = size_of::<BPTreeLeafHeader>() + 1 + size_of::<CellPageHeader>();
-pub const INTERIOR_HEADER_SIZE: usize = size_of::<BPTreeInteriorHeader>() + 1 + size_of::<CellPageHeader>();
+pub const LEAF_HEADER_SIZE: usize = size_of::<BPTreeLeafHeader>() + 1 + size_of::<CellsMeta>();
+pub const INTERIOR_HEADER_SIZE: usize = size_of::<BPTreeInteriorHeader>() + 1 + size_of::<CellsMeta>();
 
 fn within_available_interior_cell_space_size(key: ValueKind, page_size: PageSize, k: u16) -> bool {
     max_interior_cell_space_size(page_size) >= compute_interior_cell_space_size(key, k)
@@ -44,7 +45,7 @@ fn max_interior_cell_space_size(page_size: PageSize) -> u16 {
 }
 
 fn compute_interior_cell_size(key: ValueKind) -> u16 {
-    let key_size: u16 = key.full_size().unwrap().try_into().unwrap();
+    let key_size: u16 = key.outer_size().unwrap().try_into().unwrap();
     let page_id_size: u16 = size_of::<PageId>().try_into().unwrap();
     let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
     cell_header + key_size + page_id_size
@@ -58,8 +59,8 @@ fn compute_interior_cell_space_size(key: ValueKind, k: u16) -> u16 {
 #[inline(always)]
 fn compute_leaf_cell_size(key: ValueKind, data_size: u16) -> u16 {
     let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
-    let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
-    let value_var_header: u16 = size_of::<VarHeader>().try_into().unwrap();
+    let key_size = u16::try_from(key.outer_size().unwrap()).unwrap();
+    let value_var_header: u16 = size_of::<VarMeta>().try_into().unwrap();
     cell_header + key_size + data_size + value_var_header
 }
 
@@ -80,7 +81,7 @@ fn max_leaf_value_size(key: ValueKind, k: u16, page_size: PageSize) -> u16 {
     let leaf_cell_space_size = max_leaf_cell_space_size(page_size);
 
     let cell_header: u16 = size_of::<CellHeader>().try_into().unwrap();
-    let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
+    let key_size = u16::try_from(key.outer_size().unwrap()).unwrap();
 
     let leaf_cell_header_size = cell_header + key_size;
 
@@ -89,7 +90,7 @@ fn max_leaf_value_size(key: ValueKind, k: u16, page_size: PageSize) -> u16 {
 
 /// Calcule les paramètres des arbres B+
 fn compute_b_plus_tree_parameters(page_size: PageSize, key: ValueKind, value: ValueKind) -> BPlusTreeHeader {
-    let (k, data_size): (u8, u16) = if let Some(data_size) = value.full_size() {
+    let (k, data_size): (u8, u16) = if let Some(data_size) = value.outer_size() {
         let k = (1..u8::MAX).into_iter()
         .filter(|&k| within_available_interior_cell_space_size(key, page_size, k.into()))
         .filter(|&k| within_available_leaf_cell_space_size(key, page_size, k.into(), data_size.try_into().unwrap()))
@@ -106,8 +107,8 @@ fn compute_b_plus_tree_parameters(page_size: PageSize, key: ValueKind, value: Va
             .filter(|&k | within_available_interior_cell_space_size(key, page_size, k.into()))
             .map(|k| (k, max_leaf_value_size(key, k.into(), page_size)))
             .map(|(k, mut data_size)| {
-                let key_size = u16::try_from(key.full_size().unwrap()).unwrap();
-                let var_size = u16::try_from(size_of::<VarHeader>()).unwrap();
+                let key_size = u16::try_from(key.outer_size().unwrap()).unwrap();
+                let var_size = u16::try_from(size_of::<VarMeta>()).unwrap();
                 let cell_header = u16::try_from(size_of::<CellHeader>()).unwrap();
                 let header = key_size + cell_header + var_size;
                 data_size = (header + data_size) - header;
@@ -143,6 +144,41 @@ pub type BPlusTreeCellId = GlobalCellId;
 
 pub trait AsBPlusTreeLeafRef<'a>: AsRef<Self::Tree> {
     type Tree: IRefBPlusTree<'a>;
+}
+
+pub trait IBPlusTree {
+    type Value;
+    type Key;
+    /// Le nombre d'éléments stockés dans l'arbre
+    fn len(&self) -> u64;
+
+    /// Cherche une cellule clé/valeur à partir de la clé passée en argument.
+    fn search(&self, key: &Self::Key) -> Result<Option<Self::Value>>;
+
+    /// Cherche la cellule la plus proche dont la valeur est supérieure ou égale.
+    fn search_nearest_ceil(&self, key: &Value) -> Result<Option<JarTag>> {
+        Ok(self
+            .search_nearest_floor(key)?
+            .and_then(|gcid| self.next_sibling(&tag).unwrap()))
+    }
+
+    /// Cherche la cellule la plus proche dont la valeur est inférieure ou égale.
+    fn search_nearest_floor(&self, key: &Value) -> Result<Option<JarTag>>;
+
+    /// Retourne la cellule clé/valeur la plus à gauche de l'arbre.
+    fn head(&self) -> Result<Option<JarTag>>;
+
+    /// Retourne la cellule clé/valeur la plus à droite de l'arbre.
+    fn tail(&self) -> Result<Option<JarTag>>;
+
+    /// Retourne la cellule clé/valeur suivante.
+    fn next_sibling(&self, gcid: &JarTag) -> Result<Option<JarTag>>;
+
+    /// Retourne la cellule clé/valeur précédente.
+    fn prev_sibling(&self, gcid: &JarTag) -> Result<Option<JarTag>>;
+
+    /// Emprunte la cellule clé/valeur.
+    fn get_cell_ref(&self, gcid: &JarTag) -> Result<Option<BPTreeLeafCell<RefPageSlice<'pager>>>>;
 }
 
 /// Trait permettant de manipuler un arbre B+ en lecture.
@@ -184,6 +220,31 @@ pub trait IRefBPlusTree<'pager> {
 pub trait IMutBPlusTree<'pager>: IRefBPlusTree<'pager> {
     /// Insère une nouvelle valeur
     fn insert(&mut self, key: &Value, value: &Value) -> Result<()>;
+}
+
+pub struct BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
+    arena: &'nodes Arena,
+    tag: JarTag
+}
+
+impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
+    
+}
+
+
+impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes>
+{
+    fn as_meta(&self) -> BPTreeDescriptor<Arena::Ref> {
+        self.arena
+            .borrow_node(&self.tag)
+            .and_then(|page| BPTreeDescriptor::try_from(page)).unwrap()
+    }
+
+    fn as_mut_meta(&self) -> BPTreeDescriptor<Arena::RefMut> {
+        self.arena
+            .borrow_mut_node(&self.tag)
+            .and_then(|page| BPTreeDescriptor::try_from(page)).unwrap()
+    }
 }
 
 /// Arbre B+
@@ -339,7 +400,7 @@ where
         let key_kind = K::KIND;
         let value_kind = V::KIND;
 
-        assert!(key_kind.full_size().is_some(), "the key must be of a sized-type");
+        assert!(key_kind.outer_size().is_some(), "the key must be of a sized-type");
 
         // on génère les données qui vont bien pour gérer notre arbre B+
         let header = compute_b_plus_tree_parameters(pager.page_size(), key_kind, value_kind);
@@ -554,9 +615,9 @@ where
                 let mut parent = self.borrow_mut_interior(&parent_id)?;
                 self.insert_in_interior(
                     &mut parent,
-                    *left.as_page().id(),
+                    *left.as_page().tag(),
                     &key,
-                    *right.as_page().id(),
+                    *right.as_page().tag(),
                 )?;
 
                 Ok(())
