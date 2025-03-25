@@ -14,6 +14,9 @@ pub enum MaybeSized<T> {
     Var(VarSized<T>)
 }
 
+/// Définit l'exigence de taille minimale d'un type de donnée.
+pub struct MinSized<T>(T, usize);
+
 impl MaybeSized<ValueKind> {
     pub fn max(&self, size: usize) -> usize {
         match self {
