@@ -48,7 +48,7 @@ impl Cells {
     }
 
     /// Calcule la taille maximale des cellules compte tenu de l'espace dédiée et du nombre de cellules souhaité.
-    pub fn compute_max_cell_content_size(size: PageSize, reserved: PageSize, k: CellCapacity) -> PageSize {
+    pub fn compute_available_cell_content_size(size: PageSize, reserved: PageSize, k: CellCapacity) -> PageSize {
         let cell_size = Self::compute_available_cell_space_size(size, reserved).div_ceil(u16::from(k));
         Self::compute_cell_content_size(cell_size)
     }
@@ -89,7 +89,7 @@ impl DataArea for CellsMeta {
 }
 
 /// Sous-sytème permettant de découper une page en cellules de tailles égales
-pub struct CellPage<Page>(Page) where Page: AsRefPageSlice + ?Sized;
+pub struct CellPage<Page>(Page);
 
 pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellsMeta>() + 1);
 

@@ -1,8 +1,10 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind, PageSize}, result::Result, tag::DataArea, value::ValueKind};
+use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, value::ValueKind};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
+
+use super::{interior::BPlusTreeInterior, leaf::BPlusTreeLeaf, BPlusTreeDefinition};
 
 pub struct BPTreeDescriptor<Page>(Page) where Page: AsRefPageSlice;
 
@@ -12,106 +14,133 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
         PageKind::BPlusTree.assert(kind).map(|_| Self(page))
     }
 
+    /// Le nombre d'éléments stockés dans l'arbre
     pub fn len(&self) -> u64 {
-        self.as_data().len
+        self.as_description().len
     }
 
+    /// Le nombre de cellules que peut contenir un noeud intérieur ou une feuille.
     pub fn k(&self) -> u8 {
-        self.as_data().k
+        self.as_description().k
     }
 
     pub fn root(&self) -> Option<PageId> {
-        self.as_data().root.into()
+        self.as_description().root.into()
     }
 
-    pub fn value_kind(&self) -> ValueKind {
-        self.as_data().value
+    pub fn value_kind(&self) -> MaybeSized<ValueKind> {
+        self.as_description().value_kind()
     }
 
-    pub fn key_kind(&self) -> ValueKind {
-        self.as_data().key
+    pub fn key_kind(&self) -> Sized<ValueKind> {
+        self.as_description().key_kind()
     }
 
-    pub fn interior_cell_size(&self) -> PageSize {
-        self.as_data().interior_cell_size.into()
-    }
-
-    pub fn leaf_cell_size(&self) -> PageSize {
-        self.as_data().leaf_cell_size.into()
-    }
-
-    fn as_data(&self) -> &BPlusTreeDescriptorData {
-        BPlusTreeDescriptorData::ref_from_bytes(&self.0.as_ref()[BPlusTreeDescriptorData::AREA]).unwrap()
+    pub(super) fn as_description(&self) -> &BPlusTreeDescription {
+        BPlusTreeDescription::ref_from_bytes(&self.0.as_ref()[BPlusTreeDescription::AREA]).unwrap()
     }
 }
 
 impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
-    pub fn new(mut page: Page, header: BPlusTreeDescriptorData) -> Result<Self> {
+    pub fn new(mut page: Page, definition: Valid<BPlusTreeDefinition>) -> Result<Self> {
         // initialisation bas-niveau de la page.
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTree as u8;
 
         let mut desc = Self::try_from(page)?;
-        desc.as_uninit_data().write(BPlusTreeDescriptorData {
-            
-        })
-        *desc.as_mut_data() = header;
+        
+        desc
+            .as_uninit_description()
+            .write(BPlusTreeDescription::new(definition));
 
         Ok(desc)   
     }
 
     pub fn inc_len(&mut self) {
-        self.as_mut_data().len += 1;
+        self.as_mut_description().len += 1;
     }
 
     pub fn dec_len(&mut self) {
-        self.as_mut_data().len -= 1;
+        self.as_mut_description().len -= 1;
     }
 
     pub fn set_root(&mut self, root: Option<PageId>) {
-        self.as_mut_data().root = root.into();
+        self.as_mut_description().set_root(root);
     }
 
-    fn as_mut_data(&mut self) -> &mut BPlusTreeDescriptorData {
-        BPlusTreeDescriptorData::mut_from_bytes(
-            &mut self.0.as_mut()[BPlusTreeDescriptorData::AREA]
+    fn as_mut_description(&mut self) -> &mut BPlusTreeDescription {
+        BPlusTreeDescription::mut_from_bytes(
+            &mut self.0.as_mut()[BPlusTreeDescription::AREA]
         ).unwrap()
     }
 
-    fn as_uninit_data(&mut self) -> &mut MaybeUninit<BPlusTreeDescriptorData> {
+    fn as_uninit_description(&mut self) -> &mut MaybeUninit<BPlusTreeDescription> {
         unsafe {
-            std::mem::transmute(self.as_mut_data())
+            std::mem::transmute(self.as_mut_description())
         }
     }
 }
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C, packed)]
-pub struct BPlusTreeDescriptorData {
-    /// Type de la clé
-    pub(super) key: ValueKind,
-    /// Type de la valeur
-    pub(super) value: ValueKind,
-    /// Taille d'une cellule d'une feuille
-    pub(super) leaf_cell_size: u16,
-    /// Taille d'une cellule d'un noeud intérieur
-    pub(super) interior_cell_size: u16,
-    /// La taille de la donnée stockable dans une cellule d'une feuille
-    pub(super) value_size: u16,
+pub struct BPlusTreeDescription {
     /// Nombre maximum de clés dans l'arbre B+
     pub(super) k: u8,
+    /// Quelques caractéristiques de l'Arbre B+ (VAL_WILL_SPILL, VAL_IS_VAR_SIZED)
+    pub(super) flags: u8,
+    /// Type de la clé
+    pub(super) key_kind: ValueKind,
+    /// La taille de la clé
+    pub(super) key_size: u16,
+    /// Type de la valeur
+    pub(super) value_kind: ValueKind,
+    /// La taille de la donnée stockable dans une cellule d'une feuille
+    pub(super) value_size: u16,
     /// Pointeur vers la racine
     pub(super) root: OptionalPageId,
     /// Nombre d'éléments stockés
     pub(super) len: u64
 }
 
-impl BPlusTreeDescriptorData {
-    pub fn new(key: ValueKind, value: ValueKind, k: u8, value_size: u16) -> Self {
+impl BPlusTreeDescription {
+    pub fn new(def: Valid<BPlusTreeDefinition>) -> Self {
+        Self {
+            k: def.0.k,
+            flags: def.0.flags,
+            key_kind: def.0.key,
+            key_size: def.0.key_size,
+            value_kind: def.0.value,
+            value_size: def.0.value_size,
+            root: None.into(),
+            len: 0
+        }
+    }
 
+    pub fn key_kind(&self) -> Sized<ValueKind> {
+        Sized::new(self.key_kind, usize::from(self.key_size))
+    }
+
+    pub fn value_kind(&self) -> MaybeSized<ValueKind> {
+        if self.flags | BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0 {
+            return MaybeSized::Var(VarSized::new(self.value_kind))
+        } else {
+            return MaybeSized::Sized(Sized::new(self.value_kind, self.value_size.into()))
+        }
+    }
+
+    pub fn leaf_content_size(&self) -> u16 {
+        BPlusTreeLeaf::<()>::compute_cell_content_size(self.key_kind(), self.value_size)
+    }
+
+    pub fn interior_content_size(&self) -> u16 {
+        BPlusTreeInterior::<()>::compute_cell_content_size(self.key_kind())
+    }
+
+    pub fn set_root(&mut self, root: Option<PageId>) {
+        self.root = root.into()
     }
 }
 
-impl DataArea for BPlusTreeDescriptorData {
+impl DataArea for BPlusTreeDescription {
     const AREA: std::ops::Range<usize> = InPage::<Self>::AREA;
 }

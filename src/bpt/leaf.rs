@@ -1,27 +1,84 @@
-use std::cell::Cell;
+
+use std::ops::Range;
 
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{pager::{cell::{CellCapacity, Cells, WithCells}, page::{AsRefPageSlice, OptionalPageId, PageId, PageSize}}, tag::DataArea, utils::Sized, value::ValueKind};
+use crate::{
+    error::Error, 
+    pager::{
+        cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
+        page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage}
+    }, 
+    result::Result, 
+    tag::DataArea, utils::Sized, 
+    value::{Value, ValueKind}
+};
 
-use super::MaybeSized;
+use super::descriptor::BPlusTreeDescription;
 
-pub struct BPlusTreeLeaf<Page>(Page);
+pub struct BPlusTreeLeaf<Page>(CellPage<Page>);
+
+pub type BPlusTreeLeafMut<'page> = BPlusTreeLeaf<MutPage<'page>>;
+pub type BPlusTreeLeafRef<'page> = BPlusTreeLeaf<RefPage<'page>>;
+
+impl<'buf> TryFrom<RefPage<'buf>> for BPlusTreeLeaf<RefPage<'buf>> {
+    type Error = Error;
+
+    fn try_from(page: RefPage<'buf>) -> Result<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeLeaf.assert(kind).map(move |_| Self(CellPage::from(page)))
+    }
+}
+
+impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeLeaf<MutPage<'buf>> {
+    type Error = Error;
+
+    fn try_from(page: MutPage<'buf>) -> Result<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeLeaf.assert(kind).map(move |_| Self(CellPage::from(page)))
+    }
+}
+
+impl<Page> BPlusTreeLeaf<Page> where Page: AsMutPageSlice {
+    pub fn new(mut page: Page, desc: &BPlusTreeDescription) -> Result<Self> {
+        page.as_mut_bytes()[0] = PageKind::BPlusTreeLeaf as u8;
+        
+        CellPage::new(
+            page, 
+            BPlusTreeLeaf::<()>::compute_cell_content_size(desc.key_kind(), desc.value_size),
+            desc.k,
+            BPlusTreeLeaf::<()>::reserved_space()
+        ).map(Self)
+    }
+}
+
+impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPageSlice {
+
+    pub fn iter(&self) -> impl Iterator<Item=&BPTreeLeafCell<PageSlice>> {
+        self.0.iter().map(|cell| {
+            <&BPTreeLeafCell<PageSlice>>::from(cell)
+        })
+    }
+}
 
 impl BPlusTreeLeaf<()> {
-    pub fn compute_leaf_cell_size(key: Sized<ValueKind>) -> PageSize {
-        let content_size = u16::try_from(size_of::<PageId>() + key.outer_size()).unwrap(); 
-        Cells::compute_cell_size(content_size)
+    pub fn compute_cell_content_size(key: Sized<ValueKind>, value_size: u16) -> u16 {
+        u16::try_from(key.outer_size()).unwrap() + value_size
+    }
+    /// Calcule la taille disponible dans une cellule pour stocker une valeur.
+    pub fn compute_available_value_space_size(page_size: PageSize, key: Sized<ValueKind>, k: CellCapacity) -> u16 {
+        let key_size = u16::try_from(key.outer_size()).unwrap();
+        let max_cell_size = Cells::compute_available_cell_content_size(page_size, Self::reserved_space(), k);
+        max_cell_size - key_size
     }
 
-    pub fn compute_max_value_size(cell_size: PageSize, key: Sized<ValueKind>) -> u16 {
-        cell_size - u16::try_from(key.outer_size()).unwrap()
+    pub fn reserved_space() -> u16 {
+        u16::try_from(size_of::<BPTreeLeafMeta>()).unwrap()
     }
 
-    pub fn within_available_cell_space_size(page_size: PageSize, key: Sized<ValueKind>, value: MaybeSized<ValueKind>, k: CellCapacity) -> bool {
-        let content_size = Self::compute_leaf_cell_size(key);
-        let reserved = u16::try_from(size_of::<BPTreeLeafMeta>()).unwrap();
-        Cells::within_available_cell_space_size(page_size, reserved, content_size, k)
+    pub fn within_available_cell_space_size(page_size: PageSize, key: Sized<ValueKind>, value_size: u16, k: CellCapacity) -> bool {
+        let content_size = Self::compute_cell_content_size(key, value_size);
+        Cells::within_available_cell_space_size(page_size, Self::reserved_space(), content_size, k)
     }
 }
 
@@ -38,5 +95,56 @@ impl DataArea for BPTreeLeafMeta {
     const AREA: std::ops::Range<usize> = WithCells::<Self>::AREA;
 }
 
-pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?Sized;
+/// Cellule d'une feuille contenant une paire clé/valeur.
+pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?std::marker::Sized;
+
+impl<Slice> From<&Cell<Slice>> for &BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
+    fn from(value: &Cell<Slice>) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
+
+impl<Slice> From<&mut Cell<Slice>> for &BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?std::marker::Sized {
+    fn from(value: &mut Cell<Slice>) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
+
+impl<Slice> PartialOrd<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
+    fn partial_cmp(&self, other: &Value) -> Option<std::cmp::Ordering> {
+        self.borrow_key().partial_cmp(other)
+    }
+}
+
+impl<Slice> PartialEq<Value> for BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
+    fn eq(&self, other: &Value) -> bool {
+        self.borrow_key().eq(other)
+    }
+}
+
+impl<Slice> BPTreeLeafCell<Slice> 
+where Slice: AsRefPageSlice + ?std::marker::Sized
+{
+    pub fn cid(&self) -> CellId {
+        self.as_cell().id()
+    }
+
+    pub fn as_cell(&self) -> &Cell<Slice> {
+        &self.0
+    }
+
+    pub fn borrow_key(&self, kind: Sized<ValueKind>) -> &Value {
+        let slice = &self.as_cell().as_content_slice()[Self::key_area(kind)];
+        Value::from_ref(slice)
+    }
+
+    pub fn key_area(kind: Sized<ValueKind>) -> Range<usize> {
+        0..kind.outer_size()
+    }
+}
+
 

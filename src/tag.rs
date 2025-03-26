@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, ops::Range};
+use std::ops::Range;
 
 use crate::pager::{cell::CellId, page::PageId};
 
@@ -15,7 +15,7 @@ impl std::fmt::Display for JarId {
 pub struct JarTag {
     pub jar_id: JarId,
     pub page_id: PageId,
-    pub cell_id: Option<CellId>
+    pub cell_id: CellId
 }
 
 impl std::fmt::Display for JarTag {

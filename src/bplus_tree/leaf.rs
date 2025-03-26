@@ -197,11 +197,7 @@ impl<Page> BPTreeLeaf<Page> where Page: AsMutPageSlice {
     }
 
     pub fn insert<Pager: IPager + ?Sized>(&mut self, key: &Value, value: &Value, pager: &Pager) -> Result<()> {
-        let before = self
-        .iter()
-        .filter(|&cell| cell >= &key)
-        .map(|cell| cell.cid())
-        .last();
+        let before = self.iter().filter(|&cell| cell >= &key).map(|cell| cell.cid()).last();
 
         match before {
             Some(before) => self.insert_before(&before, &key, &value, pager)?,
@@ -368,8 +364,6 @@ where Slice: AsRefPageSlice + ?Sized
         let full_size = kind.outer_size().unwrap();
         return 0..full_size
     }
-
-
 }
 
 impl<Slice> BPTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?Sized {

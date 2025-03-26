@@ -16,7 +16,7 @@ use builder::ValueBuilder;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result, utils::Sized};
+use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result, utils::{MaybeSized, Sized, VarSized}};
 
 const U8_KIND: ValueKind = ValueKind(1);
 const U16_KIND: ValueKind = ValueKind(2);
@@ -37,19 +37,53 @@ const KV_PAIR_KIND: ValueKind = ValueKind(15);
 
 const ARRAY_KIND_FLAG: u8 = 128;
 
+pub type SizedValueKind = Sized<ValueKind>;
+impl SizedValueKind {
+    pub fn into_inner(self) -> ValueKind {
+        self.0
+    }
+    pub fn outer_size(&self) -> usize {
+        return self.1 + 1_usize;
+    }
+}
+pub type VarSizedValueKind = VarSized<ValueKind>;
+impl VarSizedValueKind {
+    pub fn into_inner(self) -> ValueKind {
+        self.0
+    }
+}
+pub type MaybeSizedValueKind = MaybeSized<ValueKind>;
+
+impl MaybeSizedValueKind {
+    pub fn into_inner(self) -> ValueKind {
+        match self {
+            MaybeSized::Sized(sized) => todo!(),
+            MaybeSized::Var(var_sized) => todo!(),
+        }
+    }
+    pub fn outer_size(&self) -> Option<usize> {
+        match self {
+            MaybeSized::Sized(sized) => Some(sized.outer_size()),
+            MaybeSized::Var(_) => None,
+        }
+    }
+}
+
 pub trait IntoValueBuilder {
     fn into_value_builder(self) -> ValueBuilder;
 }
 
 pub trait FromValueBuilder {
-    type Output: ?Sized;
+    type Output: ?std::marker::Sized;
 
     fn borrow_value(value: &ValueBuilder) -> &Self::Output;
     fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output;
 }
 
 pub trait GetValueKind {
-    const KIND: ValueKind;
+    type Kind: Deref<Target = ValueKind>;
+
+    const KIND: Self::Kind;
 }
 
 pub trait GetSizedValueKind {
@@ -57,7 +91,7 @@ pub trait GetSizedValueKind {
 }
 
 pub trait FromValue: GetValueKind {
-    type Output: ?Sized;
+    type Output: ?std::marker::Sized;
 
     fn ref_from_value(value: &Value) -> &Self::Output {
         Self::try_ref_from_value(value).expect("wrong value type")
@@ -85,21 +119,6 @@ impl<U> IntoValueBuf for U where ValueBuf: From<U> {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
 pub struct ValueKind(u8);
 
-impl TryFrom<ValueKind> for Sized<ValueKind> {
-    type Error = Error;
-
-    fn try_from(value: ValueKind) -> std::result::Result<Self, Self::Error> {
-        value.outer_size().expect("value is not fixed-size");
-        Ok(Sized(value))
-    }
-}
-
-impl Sized<ValueKind> {
-    pub fn outer_size(&self) -> usize {
-        self.0.outer_size().unwrap()
-    }
-}
-
 impl Display for ValueKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
@@ -126,11 +145,13 @@ impl From<u8> for ValueKind {
         Self(value)
     }
 }
+
 impl Into<u8> for ValueKind {
     fn into(self) -> u8 {
         self.0
     }
 }
+
 impl ValueKind {
     /// Détermine la portion dédiée au stockage de la valeur
     pub fn get_slice<'a>(&self, src: &'a [u8]) -> &'a [u8] {
@@ -289,15 +310,15 @@ impl Value {
         }
     }
 
-    pub fn is<T: GetValueKind + ?Sized>(&self) -> bool {
+    pub fn is<T: GetValueKind + ?std::marker::Sized>(&self) -> bool {
         T::KIND.assert_eq(self.kind()).is_ok()
     }
 
-    pub fn cast<T: FromValue + ?Sized>(&self) -> &T::Output {
+    pub fn cast<T: FromValue + ?std::marker::Sized>(&self) -> &T::Output {
         T::ref_from_value(self)
     }
 
-    pub fn cast_mut<T: FromValue + ?Sized>(&mut self) -> &mut T::Output {
+    pub fn cast_mut<T: FromValue + ?std::marker::Sized>(&mut self) -> &mut T::Output {
         T::mut_from_value(self)
     }
 
@@ -1368,7 +1389,8 @@ impl IntoValueBuilder for u8 {
 }
 
 impl GetValueKind for u8 {
-    const KIND: ValueKind = U8_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(U8_KIND, 1);
 }
 
 impl FromValue for u8 {
@@ -1408,7 +1430,8 @@ impl IntoValueBuilder for u16 {
 }
 
 impl GetValueKind for u16 {
-    const KIND: ValueKind = U16_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(U16_KIND, 2);
 }
 
 impl FromValue for u16 {
@@ -1448,7 +1471,8 @@ impl IntoValueBuilder for u32 {
 }
 
 impl GetValueKind for u32 {
-    const KIND: ValueKind = U32_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(U32_KIND, 4);
 }
 impl FromValue for u32 {
     type Output = U32;
@@ -1484,7 +1508,8 @@ impl IntoValueBuilder for u64 {
     }
 }
 impl GetValueKind for u64 {
-    const KIND: ValueKind = U64_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(U64_KIND, 8);
 }
 impl FromValue for u64 {
     type Output = U64;
@@ -1522,7 +1547,8 @@ impl IntoValueBuilder for u128 {
     }
 }
 impl GetValueKind for u128 {
-    const KIND: ValueKind = U128_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(U128_KIND, 16);
 }
 impl FromValue for u128 {
     type Output = U128;
@@ -1559,7 +1585,8 @@ impl IntoValueBuilder for i8 {
     }
 }
 impl GetValueKind for i8 {
-    const KIND: ValueKind = I8_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(I8_KIND, 1);
 }
 impl FromValue for i8 {
     type Output = I8;
@@ -1595,7 +1622,8 @@ impl IntoValueBuilder for i16 {
     }
 }
 impl GetValueKind for i16 {
-    const KIND: ValueKind = I16_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(I16_KIND, 2);
 }
 impl FromValue for i16 {
     type Output = I16;
@@ -1631,7 +1659,8 @@ impl IntoValueBuilder for i32 {
     }
 }
 impl GetValueKind for i32 {
-    const KIND: ValueKind = I32_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(I32_KIND, 4);
 }
 impl FromValue for i32 {
     type Output = I32;
@@ -1668,7 +1697,8 @@ impl IntoValueBuilder for i64 {
 }
 
 impl GetValueKind for i64 {
-    const KIND: ValueKind = I64_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(I64_KIND, 8);
 }
 impl FromValue for i64 {
     type Output = I64;
@@ -1705,7 +1735,8 @@ impl FromValueBuilder for i128 {
     }
 }
 impl GetValueKind for i128 {
-    const KIND: ValueKind = I128_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(I128_KIND, 16);
 }
 
 impl FromValue for i128 {
@@ -1744,7 +1775,8 @@ impl IntoValueBuilder for f32 {
 }
 
 impl GetValueKind for f32 {
-    const KIND: ValueKind = F32_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(F32_KIND, 4);
 }
 
 impl FromValue for f32 {
@@ -1784,7 +1816,8 @@ impl IntoValueBuilder for f64 {
 }
 
 impl GetValueKind for f64 {
-    const KIND: ValueKind = F64_KIND;
+    type Kind = Sized<ValueKind>;
+    const KIND: Self::Kind = Sized::new(F64_KIND, 8);
 }
 
 
@@ -1825,7 +1858,8 @@ impl IntoValueBuilder for &str {
 }
 
 impl GetValueKind for str {
-    const KIND: ValueKind = STR_KIND;
+    type Kind = VarSized<ValueKind>;
+    const KIND: Self::Kind = VarSized::new(STR_KIND);
 }
 
 impl FromValue for str {
