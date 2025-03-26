@@ -18,6 +18,16 @@ pub struct JarTag {
     pub cell_id: CellId
 }
 
+impl JarTag {
+    pub fn from_same_jar(self, page_id: PageId) -> Self {
+        Self {
+            jar_id: self.jar_id,
+            page_id, 
+            cell_id: 0
+        }
+    }
+}
+
 impl std::fmt::Display for JarTag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}::{}", self.jar_id, self.page_id)

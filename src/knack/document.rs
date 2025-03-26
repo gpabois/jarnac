@@ -4,12 +4,12 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::{error::Error, result::Result};
 
-use super::{FromValue, GetValueKind, IntoValueBuf, IntoValueBuilder, path::IntoValuePath, Value, ValueBuf, ValueBuilder, ValueKind, DOCUMENT_KIND, KV_PAIR_KIND};
+use super::{FromKnack, GetKnackKind, IntoKnackBuf, IntoKnackBuilder, path::IntoKnackPath, Knack, KnackBuf, KnackBuilder, KnackKind, DOCUMENT_KIND, KV_PAIR_KIND};
 
 pub struct KeyValue([u8]);
 
-impl GetValueKind for KeyValue {
-    const KIND: ValueKind = KV_PAIR_KIND;
+impl GetKnackKind for KeyValue {
+    const KIND: KnackKind = KV_PAIR_KIND;
 }
 impl Deref for KeyValue {
     type Target = [u8];
@@ -21,7 +21,7 @@ impl Deref for KeyValue {
 impl KeyValue {
     /// Lit une paire clé/valeur depuis la base de la tranche.
     pub fn read_from_slice(slice: &[u8]) -> &Self {
-        let kind = ValueKind::from(slice[0]);
+        let kind = KnackKind::from(slice[0]);
         KeyValue::KIND.assert_eq(&kind).expect("not a kv pair");
 
         let key_len = usize::try_from(Self::read_key_len(slice)).unwrap();
@@ -41,12 +41,12 @@ impl KeyValue {
         (&slice[5..9]).read_u32::<LittleEndian>().unwrap()
     }
 
-    pub fn key(&self) -> &Value {
-        Value::from_ref(self.key_slice())
+    pub fn key(&self) -> &Knack {
+        Knack::from_ref(self.key_slice())
     }
 
-    pub fn value(&self) -> &Value {
-        Value::from_ref(self.value_slice())
+    pub fn value(&self) -> &Knack {
+        Knack::from_ref(self.value_slice())
     }
 
     fn key_len(&self) -> u32 {
@@ -81,7 +81,7 @@ impl DocumentRef {
         DocAttributesIter { doc: self, base: Self::KV_BASE }
     }
 
-    pub fn get<K: IntoValueBuf>(&self, key: K) -> &Value {
+    pub fn get<K: IntoKnackBuf>(&self, key: K) -> &Knack {
         let key = key.into_value_buf();
         self.iter().find(|kv| kv.key() == key.deref()).map(|kv| kv.value()).unwrap()
     }
@@ -89,7 +89,7 @@ impl DocumentRef {
     pub fn to_owned(&self) -> Document {
         self
             .iter()
-            .map(|kv| (kv.key().cast::<str>().to_owned(), ValueBuilder::from(kv.value())))
+            .map(|kv| (kv.key().cast::<str>().to_owned(), KnackBuilder::from(kv.value())))
             .collect()
     }
 }
@@ -100,10 +100,10 @@ impl Deref for DocumentRef {
         &self.0
     }
 }
-impl TryFrom<&Value> for &DocumentRef {
+impl TryFrom<&Knack> for &DocumentRef {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         DOCUMENT_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -111,10 +111,10 @@ impl TryFrom<&Value> for &DocumentRef {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut DocumentRef {
+impl TryFrom<&mut Knack> for &mut DocumentRef {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         DOCUMENT_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -143,52 +143,52 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 }
 
 #[derive(Default)]
-pub struct Document(HashMap<String, ValueBuilder>);
+pub struct Document(HashMap<String, KnackBuilder>);
 
-impl GetValueKind for Document {
-    const KIND: ValueKind = DOCUMENT_KIND;
+impl GetKnackKind for Document {
+    const KIND: KnackKind = DOCUMENT_KIND;
 }
 
-impl FromValue for Document {
+impl FromKnack for Document {
     type Output = DocumentRef;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromIterator<(String, ValueBuilder)> for Document {
-    fn from_iter<T: IntoIterator<Item = (String, ValueBuilder)>>(iter: T) -> Self {
+impl FromIterator<(String, KnackBuilder)> for Document {
+    fn from_iter<T: IntoIterator<Item = (String, KnackBuilder)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl<Q> Index<Q> for Document where Q: IntoValuePath {
-    type Output = ValueBuilder;
+impl<Q> Index<Q> for Document where Q: IntoKnackPath {
+    type Output = KnackBuilder;
 
     fn index(&self, index: Q) -> &Self::Output {
         self.try_get(index).unwrap()
     }
 }
 
-impl IntoValueBuilder for Document {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Document(self)
+impl IntoKnackBuilder for Document {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Document(self)
     }
 }
 
 impl Document {
-    pub fn insert<V: IntoValueBuilder>(&mut self, key: &str, value: V) {
+    pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
         let key = key.into_value_buf();
         let value = value.into_value_builder();
         self.0.insert(key.to_string(), value);
     }
 
-    pub fn try_get<P: IntoValuePath>(&self, k: P) -> Option<&ValueBuilder> {
+    pub fn try_get<P: IntoKnackPath>(&self, k: P) -> Option<&KnackBuilder> {
         let mut pth = k.into_value_path();
 
         match pth.pop() {
@@ -197,20 +197,20 @@ impl Document {
         }
     }
 
-    pub fn get_field(&self, k: &str) -> Option<&ValueBuilder> {
+    pub fn get_field(&self, k: &str) -> Option<&KnackBuilder> {
         self.0.get(k)
     }
 }
 
-impl IntoValueBuf for Document {
-    fn into_value_buf(self) -> ValueBuf {
+impl IntoKnackBuf for Document {
+    fn into_value_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![Document::KIND.into()];
 
-        for kv in self.0.into_iter().map(IntoValueBuf::into_value_buf) {
+        for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
             buf.write_all(&kv).unwrap();
         }
 
-        ValueBuf(buf)
+        KnackBuf(buf)
     }
 }
 

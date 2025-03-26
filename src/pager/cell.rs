@@ -91,6 +91,18 @@ impl DataArea for CellsMeta {
 /// Sous-sytème permettant de découper une page en cellules de tailles égales
 pub struct CellPage<Page>(Page);
 
+impl<Page> AsRef<PageSlice> for CellPage<Page> where Page: AsRefPageSlice {
+    fn as_ref(&self) -> &PageSlice {
+        self.0.as_ref()
+    }
+}
+
+impl<Page> AsMut<PageSlice> for CellPage<Page> where Page: AsMutPageSlice {
+    fn as_mut(&mut self) -> &mut PageSlice {
+        self.0.as_mut()
+    }
+}
+
 pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellsMeta>() + 1);
 
 impl<'pager> CellPage<MutPage<'pager>> {
@@ -893,7 +905,7 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize, IPager}, value::{GetValueKind, IntoValueBuf, Value}};
+    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize, IPager}, knack::{GetKnackKind, IntoKnackBuf, Knack}};
     use super::CellHeader;
 
     #[test]
@@ -1029,12 +1041,12 @@ mod tests {
         src.split_at_into(&mut dest, 3)?;
         
         let src_values = src.iter()
-            .map::<&Value, _>(|cell| cell.as_content_slice().into())
+            .map::<&Knack, _>(|cell| cell.as_content_slice().into())
             .map(|value| value.cast::<u64>().to_owned())
             .collect_vec();
         
         let dest_values = dest.iter()
-            .map::<&Value, _>(|cell| cell.as_content_slice().into())
+            .map::<&Knack, _>(|cell| cell.as_content_slice().into())
             .map(|value| value.cast::<u64>().to_owned())
             .collect_vec();
         

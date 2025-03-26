@@ -6,36 +6,36 @@ use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::{error::{Error, ErrorKind}, result::Result, value::{Value, ValueBuf}};
+use crate::{error::{Error, ErrorKind}, result::Result, knack::{Knack, KnackBuf}};
 
 use super::{
     page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager
 };
 
-pub enum VarValue<'data> {
-    Unspilled(&'data Value),
-    Spilled(ValueBuf)
+pub enum MaybeSpilledKnack<'data> {
+    Unspilled(&'data Knack),
+    Spilled(KnackBuf)
 }
 
-impl VarValue<'_> {
-    pub fn to_owned(self) -> ValueBuf {
-        Borrow::<Value>::borrow(&self).to_owned()
+impl MaybeSpilledKnack<'_> {
+    pub fn to_owned(self) -> KnackBuf {
+        Borrow::<Knack>::borrow(&self).to_owned()
     }
 }
 
-impl Deref for VarValue<'_> {
-    type Target = Value;
+impl Deref for MaybeSpilledKnack<'_> {
+    type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
         self.borrow()
     }
 }
 
-impl Borrow<Value> for VarValue<'_> {
-    fn borrow(&self) -> &Value {
+impl Borrow<Knack> for MaybeSpilledKnack<'_> {
+    fn borrow(&self) -> &Knack {
         match self {
-            VarValue::Unspilled(value) => value,
-            VarValue::Spilled(value_buf) => &value_buf,
+            MaybeSpilledKnack::Unspilled(value) => value,
+            MaybeSpilledKnack::Spilled(value_buf) => &value_buf,
         }
     }
 }
@@ -64,22 +64,22 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     }
 
     /// Essaye de récupérer la valeur si cette dernière n'a pas débordée ailleurs.
-    pub fn try_borrow(&self) -> Result<&Value> {
+    pub fn try_borrow(&self) -> Result<&Knack> {
         if !self.has_spilled() {
-            Ok(Value::from_ref(self.borrow_content()))
+            Ok(Knack::from_ref(self.borrow_content()))
         } else {
             Err(Error::new(ErrorKind::SpilledVar))
         }
     }
 
     /// Récupère la valeur qui peut avoir débordée ailleurs.
-    pub fn get<Pager>(&self, pager: &Pager) -> Result<VarValue<'_>> where Pager: IPager + ?Sized {
+    pub fn get<Pager>(&self, pager: &Pager) -> Result<MaybeSpilledKnack<'_>> where Pager: IPager + ?Sized {
         if self.has_spilled() {
             let mut buf = Vec::<u8>::default();
             read_dynamic_sized_data(self.as_header(), &mut buf, self.borrow_content(), pager)?;
-            Ok(VarValue::Spilled(ValueBuf::from_bytes(buf)))
+            Ok(MaybeSpilledKnack::Spilled(KnackBuf::from_bytes(buf)))
         } else {
-            Ok(VarValue::Unspilled(Value::from_ref(self.borrow_content())))
+            Ok(MaybeSpilledKnack::Unspilled(Knack::from_ref(self.borrow_content())))
         }
     }
     
@@ -114,7 +114,7 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         }
     }
 
-    pub fn set<Pager>(&mut self, data: &Value, pager: &Pager) -> Result<()> where Pager: IPager + ?Sized {
+    pub fn set<Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: IPager + ?Sized {
         *self.as_mut_header() = write_var_data(
             data, 
             self.borrow_mut_data_in_page_space(), 

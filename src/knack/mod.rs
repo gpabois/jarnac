@@ -10,52 +10,59 @@ pub mod array;
 pub mod builder;
 pub mod path;
 
-use std::{borrow::{Borrow, BorrowMut}, fmt::Display, io::Write, ops::{Deref, DerefMut}};
+use std::{borrow::{Borrow, BorrowMut}, fmt::Display, io::Write, ops::{Deref, DerefMut, Range}};
 
-use builder::ValueBuilder;
+use builder::KnackBuilder;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result, utils::{MaybeSized, Sized, VarSized}};
 
-const U8_KIND: ValueKind = ValueKind(1);
-const U16_KIND: ValueKind = ValueKind(2);
-const U32_KIND: ValueKind = ValueKind(3);
-const U64_KIND: ValueKind = ValueKind(4);
-const U128_KIND: ValueKind = ValueKind(5);
-const I8_KIND: ValueKind = ValueKind(6);
-const I16_KIND: ValueKind = ValueKind(7);
-const I32_KIND: ValueKind = ValueKind(8);
-const I64_KIND: ValueKind = ValueKind(9);
-const I128_KIND: ValueKind = ValueKind(10);
-const F32_KIND: ValueKind = ValueKind(11);
-const F64_KIND: ValueKind = ValueKind(12);
+const U8_KIND: KnackKind = KnackKind(1);
+const U16_KIND: KnackKind = KnackKind(2);
+const U32_KIND: KnackKind = KnackKind(3);
+const U64_KIND: KnackKind = KnackKind(4);
+const U128_KIND: KnackKind = KnackKind(5);
+const I8_KIND: KnackKind = KnackKind(6);
+const I16_KIND: KnackKind = KnackKind(7);
+const I32_KIND: KnackKind = KnackKind(8);
+const I64_KIND: KnackKind = KnackKind(9);
+const I128_KIND: KnackKind = KnackKind(10);
+const F32_KIND: KnackKind = KnackKind(11);
+const F64_KIND: KnackKind = KnackKind(12);
 
-const STR_KIND: ValueKind    = ValueKind(13);
-const DOCUMENT_KIND: ValueKind = ValueKind(14);
-const KV_PAIR_KIND: ValueKind = ValueKind(15);
+const STR_KIND: KnackKind    = KnackKind(13);
+const DOCUMENT_KIND: KnackKind = KnackKind(14);
+const KV_PAIR_KIND: KnackKind = KnackKind(15);
 
 const ARRAY_KIND_FLAG: u8 = 128;
 
-pub type SizedValueKind = Sized<ValueKind>;
-impl SizedValueKind {
-    pub fn into_inner(self) -> ValueKind {
+pub type SizedKnackKind = Sized<KnackKind>;
+
+impl SizedKnackKind {
+
+    pub fn into_inner(self) -> KnackKind {
         self.0
     }
+
     pub fn outer_size(&self) -> usize {
         return self.1 + 1_usize;
     }
+
+    pub fn as_area(self) -> Range<usize> {
+        0..self.outer_size()
+    }
 }
-pub type VarSizedValueKind = VarSized<ValueKind>;
+pub type VarSizedValueKind = VarSized<KnackKind>;
 impl VarSizedValueKind {
-    pub fn into_inner(self) -> ValueKind {
+    pub fn into_inner(self) -> KnackKind {
         self.0
     }
 }
-pub type MaybeSizedValueKind = MaybeSized<ValueKind>;
+pub type MaybeSizedValueKind = MaybeSized<KnackKind>;
 
 impl MaybeSizedValueKind {
-    pub fn into_inner(self) -> ValueKind {
+    pub fn into_inner(self) -> KnackKind {
         match self {
             MaybeSized::Sized(sized) => todo!(),
             MaybeSized::Var(var_sized) => todo!(),
@@ -69,57 +76,53 @@ impl MaybeSizedValueKind {
     }
 }
 
-pub trait IntoValueBuilder {
-    fn into_value_builder(self) -> ValueBuilder;
+pub trait IntoKnackBuilder {
+    fn into_value_builder(self) -> KnackBuilder;
 }
 
-pub trait FromValueBuilder {
+pub trait FromKnackBuilder {
     type Output: ?std::marker::Sized;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output;
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output;
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output;
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output;
 }
 
-pub trait GetValueKind {
-    type Kind: Deref<Target = ValueKind>;
+pub trait GetKnackKind {
+    type Kind: Deref<Target = KnackKind>;
 
     const KIND: Self::Kind;
 }
 
-pub trait GetSizedValueKind {
-    const KIND: Sized<ValueKind>;
-}
-
-pub trait FromValue: GetValueKind {
+pub trait FromKnack: GetKnackKind {
     type Output: ?std::marker::Sized;
 
-    fn ref_from_value(value: &Value) -> &Self::Output {
-        Self::try_ref_from_value(value).expect("wrong value type")
+    fn ref_from_knack(value: &Knack) -> &Self::Output {
+        Self::try_ref_from_knack(value).expect("wrong value type")
     }
 
-    fn mut_from_value(value: &mut Value) -> &mut Self::Output {
-        Self::try_mut_from_value(value).expect("wrong value type")
+    fn mut_from_knack(value: &mut Knack) -> &mut Self::Output {
+        Self::try_mut_from_knack(value).expect("wrong value type")
     }
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output>;
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output>;
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output>;
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output>;
 }
 
-pub trait IntoValueBuf {
-    fn into_value_buf(self) -> ValueBuf;
+pub trait IntoKnackBuf {
+    fn into_value_buf(self) -> KnackBuf;
 }
 
-impl<U> IntoValueBuf for U where ValueBuf: From<U> {
-    fn into_value_buf(self) -> ValueBuf {
-        ValueBuf::from(self)
+impl<U> IntoKnackBuf for U where KnackBuf: From<U> {
+    fn into_value_buf(self) -> KnackBuf {
+        KnackBuf::from(self)
     }
 }
 
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct ValueKind(u8);
+pub struct KnackKind(u8);
 
-impl Display for ValueKind {
+impl Display for KnackKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self {
             U8_KIND => f.write_str("u8"),
@@ -140,19 +143,19 @@ impl Display for ValueKind {
     }
 }
 
-impl From<u8> for ValueKind {
+impl From<u8> for KnackKind {
     fn from(value: u8) -> Self {
         Self(value)
     }
 }
 
-impl Into<u8> for ValueKind {
+impl Into<u8> for KnackKind {
     fn into(self) -> u8 {
         self.0
     }
 }
 
-impl ValueKind {
+impl KnackKind {
     /// Détermine la portion dédiée au stockage de la valeur
     pub fn get_slice<'a>(&self, src: &'a [u8]) -> &'a [u8] {
         if let Some(size) = self.outer_size() {
@@ -170,14 +173,14 @@ impl ValueKind {
         todo!("implement var-sized data");
     }
     
-    pub fn assert_eq(&self, other: &ValueKind) -> Result<()> {
+    pub fn assert_eq(&self, other: &KnackKind) -> Result<()> {
         if *other != *self {
             return Err(Error::new(ErrorKind::WrongValueKind { expected: U8_KIND, got: *other }))
         }
 
         Ok(())
     }
-    pub fn as_array(&self) -> ValueKind {
+    pub fn as_array(&self) -> KnackKind {
         Self(self.0 | ARRAY_KIND_FLAG)
     }
 
@@ -185,7 +188,7 @@ impl ValueKind {
         self.0 & ARRAY_KIND_FLAG == ARRAY_KIND_FLAG
     }
 
-    pub fn element_kind(&self) -> ValueKind {
+    pub fn element_kind(&self) -> KnackKind {
         assert!(self.is_array(), "not an array");
         Self(self.0 & !ARRAY_KIND_FLAG)
     }
@@ -219,8 +222,8 @@ impl ValueKind {
     }
 }
 
-pub struct Value([u8]);
-impl std::fmt::Display for Value {
+pub struct Knack([u8]);
+impl std::fmt::Display for Knack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self.kind() {
             U8_KIND => self.cast::<u8>().fmt(f),
@@ -240,14 +243,14 @@ impl std::fmt::Display for Value {
         }
     }
 }
-impl From<&PageSlice> for &Value {
+impl From<&PageSlice> for &Knack {
     fn from(value: &PageSlice) -> Self {
         unsafe {
             std::mem::transmute(value)
         }
     }
 }
-impl PartialEq<Self> for Value {
+impl PartialEq<Self> for Knack {
     fn eq(&self, other: &Self) -> bool {
         if self.kind() != other.kind() { return false }
 
@@ -269,7 +272,7 @@ impl PartialEq<Self> for Value {
         }
     }
 }
-impl PartialOrd<Self> for Value {
+impl PartialOrd<Self> for Knack {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         if self.kind() != other.kind() { return None }
 
@@ -290,14 +293,14 @@ impl PartialOrd<Self> for Value {
         }
     }
 }
-impl Deref for Value {
+impl Deref for Knack {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl Value {
+impl Knack {
     pub(crate) fn from_ref(bytes: &[u8]) -> &Self {
         unsafe {
             std::mem::transmute(bytes)
@@ -310,19 +313,19 @@ impl Value {
         }
     }
 
-    pub fn is<T: GetValueKind + ?std::marker::Sized>(&self) -> bool {
+    pub fn is<T: GetKnackKind + ?std::marker::Sized>(&self) -> bool {
         T::KIND.assert_eq(self.kind()).is_ok()
     }
 
-    pub fn cast<T: FromValue + ?std::marker::Sized>(&self) -> &T::Output {
-        T::ref_from_value(self)
+    pub fn cast<T: FromKnack + ?std::marker::Sized>(&self) -> &T::Output {
+        T::ref_from_knack(self)
     }
 
-    pub fn cast_mut<T: FromValue + ?std::marker::Sized>(&mut self) -> &mut T::Output {
-        T::mut_from_value(self)
+    pub fn cast_mut<T: FromKnack + ?std::marker::Sized>(&mut self) -> &mut T::Output {
+        T::mut_from_knack(self)
     }
 
-    pub fn kind(&self) -> &ValueKind {
+    pub fn kind(&self) -> &KnackKind {
         unsafe {
             std::mem::transmute(&self.0[0])
         }
@@ -336,13 +339,13 @@ impl Value {
 
 #[derive(Hash, Eq)]
 /// Valeur entièrement détenue par l'objet (Owned value)
-pub struct ValueBuf(Vec<u8>);
-impl std::fmt::Display for ValueBuf {
+pub struct KnackBuf(Vec<u8>);
+impl std::fmt::Display for KnackBuf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.deref().fmt(f)
     }
 }
-impl ValueBuf {
+impl KnackBuf {
     pub(crate) fn from_bytes(bytes: Vec<u8>) -> Self {
         Self(bytes)
     }
@@ -351,51 +354,51 @@ impl ValueBuf {
         self.0.as_bytes()
     }
 }
-impl PartialEq<Self> for ValueBuf {
+impl PartialEq<Self> for KnackBuf {
     fn eq(&self, other: &Self) -> bool {
         self.deref().eq(other.borrow())
     }
 }
-impl PartialOrd<Self> for ValueBuf {
+impl PartialOrd<Self> for KnackBuf {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.deref().partial_cmp(other.borrow())
     }
 }
-impl Deref for ValueBuf {
-    type Target = Value;
+impl Deref for KnackBuf {
+    type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
         self.borrow()
     }
 }
-impl DerefMut for ValueBuf {
+impl DerefMut for KnackBuf {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.borrow_mut()
     }
 }
-impl ToOwned for Value {
-    type Owned = ValueBuf;
+impl ToOwned for Knack {
+    type Owned = KnackBuf;
 
     fn to_owned(&self) -> Self::Owned {
-        ValueBuf(self.0.to_owned())
+        KnackBuf(self.0.to_owned())
     }
 }
-impl BorrowMut<Value> for ValueBuf {
-    fn borrow_mut(&mut self) -> &mut Value {
+impl BorrowMut<Knack> for KnackBuf {
+    fn borrow_mut(&mut self) -> &mut Knack {
         unsafe {
             std::mem::transmute(self.0.as_mut_slice())
         }
     }
 }
-impl Borrow<Value> for ValueBuf {
-    fn borrow(&self) -> &Value {
+impl Borrow<Knack> for KnackBuf {
+    fn borrow(&self) -> &Knack {
         unsafe {
             std::mem::transmute(self.0.as_slice())
         }
     }
 }
-impl From<(String, ValueBuilder)> for ValueBuf {
-    fn from(kv: (String, ValueBuilder)) -> Self {
+impl From<(String, KnackBuilder)> for KnackBuf {
+    fn from(kv: (String, KnackBuilder)) -> Self {
         let mut buf: Vec<u8> = vec![KV_PAIR_KIND.into()];
         let v = kv.1.into_value_buf();
         let k = kv.0;
@@ -406,12 +409,12 @@ impl From<(String, ValueBuilder)> for ValueBuf {
         Self(buf)
     }
 }
-impl From<u8> for ValueBuf {
+impl From<u8> for KnackBuf {
     fn from(value: u8) -> Self {       
         Self(vec![U8_KIND.into(), value])
     }
 }
-impl From<&[u8]> for ValueBuf {
+impl From<&[u8]> for KnackBuf {
     fn from(value: &[u8]) -> Self {
         let kind = U8_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
@@ -422,14 +425,14 @@ impl From<&[u8]> for ValueBuf {
         Self(buf)
     }
 }
-impl From<u16> for ValueBuf {
+impl From<u16> for KnackBuf {
     fn from(value: u16) -> Self {
         let mut buf = vec![U16_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<&[u16]> for ValueBuf {
+impl From<&[u16]> for KnackBuf {
     fn from(value: &[u16]) -> Self {
         let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
@@ -442,14 +445,14 @@ impl From<&[u16]> for ValueBuf {
         Self(buf)
     }
 }
-impl From<u32> for ValueBuf {
+impl From<u32> for KnackBuf {
     fn from(value: u32) -> Self {
         let mut buf = vec![U32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<&[u32]> for ValueBuf {
+impl From<&[u32]> for KnackBuf {
     fn from(value: &[u32]) -> Self {
         let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
@@ -462,14 +465,14 @@ impl From<&[u32]> for ValueBuf {
         Self(buf)
     }
 }
-impl From<u64> for ValueBuf {
+impl From<u64> for KnackBuf {
     fn from(value: u64) -> Self {
         let mut buf = vec![U64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<&[u64]> for ValueBuf {
+impl From<&[u64]> for KnackBuf {
     fn from(value: &[u64]) -> Self {
         let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
@@ -482,14 +485,14 @@ impl From<&[u64]> for ValueBuf {
         Self(buf)
     }
 }
-impl From<u128> for ValueBuf {
+impl From<u128> for KnackBuf {
     fn from(value: u128) -> Self {
         let mut buf = vec![U128_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<&[u128]> for ValueBuf {
+impl From<&[u128]> for KnackBuf {
     fn from(value: &[u128]) -> Self {
         let kind = U16_KIND.as_array();
         let len = u32::try_from(value.len()).expect("Array length is limited to 2^32-1");
@@ -502,59 +505,59 @@ impl From<&[u128]> for ValueBuf {
         Self(buf)
     }
 }
-impl From<i8> for ValueBuf {
+impl From<i8> for KnackBuf {
     fn from(value: i8) -> Self {       
         Self(vec![I8_KIND.into(), unsafe {std::mem::transmute(value)}])
     }
 }
-impl From<i16> for ValueBuf {
+impl From<i16> for KnackBuf {
     fn from(value: i16) -> Self {
         let mut buf = vec![I16_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<i32> for ValueBuf {
+impl From<i32> for KnackBuf {
     fn from(value: i32) -> Self {
         let mut buf = vec![I32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<i64> for ValueBuf {
+impl From<i64> for KnackBuf {
     fn from(value: i64) -> Self {
         let mut buf = vec![I64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<i128> for ValueBuf {
+impl From<i128> for KnackBuf {
     fn from(value: i128) -> Self {
         let mut buf = vec![I128_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<f32> for ValueBuf {
+impl From<f32> for KnackBuf {
     fn from(value: f32) -> Self {
         let mut buf = vec![F32_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<f64> for ValueBuf {
+impl From<f64> for KnackBuf {
     fn from(value: f64) -> Self {
         let mut buf = vec![F64_KIND.into()];
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
 }
-impl From<String> for ValueBuf {
+impl From<String> for KnackBuf {
     fn from(value: String) -> Self {
         Self::from(value.as_str())
     }
 }
-impl From<&str> for ValueBuf {
+impl From<&str> for KnackBuf {
     fn from(value: &str) -> Self {
         let mut buf = vec![STR_KIND.into()];
         buf.write_all(value.as_bytes()).unwrap();
@@ -601,10 +604,10 @@ impl DerefMut for U8 {
         &mut self.0[1]
     }
 }
-impl TryFrom<&Value> for &U8 {
+impl TryFrom<&Knack> for &U8 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         U8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -612,10 +615,10 @@ impl TryFrom<&Value> for &U8 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut U8 {
+impl TryFrom<&mut Knack> for &mut U8 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         U8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -653,10 +656,10 @@ impl DerefMut for U16 {
         zerocopy::U16::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &U16 {
+impl TryFrom<&Knack> for &U16 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         U16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -664,10 +667,10 @@ impl TryFrom<&Value> for &U16 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut U16 {
+impl TryFrom<&mut Knack> for &mut U16 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         U16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -713,10 +716,10 @@ impl DerefMut for U32 {
         zerocopy::U32::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &U32 {
+impl TryFrom<&Knack> for &U32 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         U32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -724,10 +727,10 @@ impl TryFrom<&Value> for &U32 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut U32 {
+impl TryFrom<&mut Knack> for &mut U32 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         U32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -783,10 +786,10 @@ impl DerefMut for U64 {
         zerocopy::U64::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &U64 {
+impl TryFrom<&Knack> for &U64 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         U64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -794,10 +797,10 @@ impl TryFrom<&Value> for &U64 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut U64 {
+impl TryFrom<&mut Knack> for &mut U64 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         U64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -844,10 +847,10 @@ impl DerefMut for U128 {
         zerocopy::U128::<LittleEndian>::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &U128 {
+impl TryFrom<&Knack> for &U128 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         U128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -855,10 +858,10 @@ impl TryFrom<&Value> for &U128 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut U128 {
+impl TryFrom<&mut Knack> for &mut U128 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         U128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -908,10 +911,10 @@ impl DerefMut for I8 {
         }
     }
 }
-impl TryFrom<&Value> for &I8 {
+impl TryFrom<&Knack> for &I8 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         I8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -919,10 +922,10 @@ impl TryFrom<&Value> for &I8 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut I8 {
+impl TryFrom<&mut Knack> for &mut I8 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         I8_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -968,10 +971,10 @@ impl DerefMut for I16 {
         zerocopy::I16::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &I16 {
+impl TryFrom<&Knack> for &I16 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         I16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -979,10 +982,10 @@ impl TryFrom<&Value> for &I16 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut I16 {
+impl TryFrom<&mut Knack> for &mut I16 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         I16_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1028,10 +1031,10 @@ impl DerefMut for I32 {
         zerocopy::I32::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &I32 {
+impl TryFrom<&Knack> for &I32 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         I32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1039,10 +1042,10 @@ impl TryFrom<&Value> for &I32 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut I32 {
+impl TryFrom<&mut Knack> for &mut I32 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         I32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1088,10 +1091,10 @@ impl DerefMut for I64 {
         zerocopy::I64::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &I64 {
+impl TryFrom<&Knack> for &I64 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         I64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1099,10 +1102,10 @@ impl TryFrom<&Value> for &I64 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut I64 {
+impl TryFrom<&mut Knack> for &mut I64 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         I64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1148,10 +1151,10 @@ impl DerefMut for I128 {
         zerocopy::I128::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &I128 {
+impl TryFrom<&Knack> for &I128 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         I128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1159,10 +1162,10 @@ impl TryFrom<&Value> for &I128 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut I128 {
+impl TryFrom<&mut Knack> for &mut I128 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         I128_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1218,10 +1221,10 @@ impl DerefMut for F32 {
         zerocopy::F32::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &F32 {
+impl TryFrom<&Knack> for &F32 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         F32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1229,10 +1232,10 @@ impl TryFrom<&Value> for &F32 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut F32 {
+impl TryFrom<&mut Knack> for &mut F32 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         F32_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1288,10 +1291,10 @@ impl DerefMut for F64 {
         zerocopy::F64::mut_from_bytes(&mut self.0[1..]).unwrap()
     }
 }
-impl TryFrom<&Value> for &F64 {
+impl TryFrom<&Knack> for &F64 {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         F64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1299,10 +1302,10 @@ impl TryFrom<&Value> for &F64 {
         }
     }
 }
-impl TryFrom<&mut Value> for &mut F64 {
+impl TryFrom<&mut Knack> for &mut F64 {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         F64_KIND.assert_eq(value.kind())?;
 
         unsafe {
@@ -1342,20 +1345,20 @@ impl Deref for Str {
         }
     }
 }
-impl TryFrom<&Value> for &Str {
+impl TryFrom<&Knack> for &Str {
     type Error = Error;
 
-    fn try_from(value: &Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         STR_KIND.assert_eq(value.kind())?;
         unsafe {
             Ok(std::mem::transmute(value))
         }
     }
 }
-impl TryFrom<&mut Value> for &mut Str {
+impl TryFrom<&mut Knack> for &mut Str {
     type Error = Error;
 
-    fn try_from(value: &mut Value) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         STR_KIND.assert_eq(value.kind())?;
         unsafe {
             Ok(std::mem::transmute(value))
@@ -1364,519 +1367,519 @@ impl TryFrom<&mut Value> for &mut Str {
 }
 
 
-impl FromValueBuilder for u8 {
+impl FromKnackBuilder for u8 {
     type Output = Self;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for u8 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for u8 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for u8 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for u8 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(U8_KIND, 1);
 }
 
-impl FromValue for u8 {
+impl FromKnack for u8 {
     type Output = U8;
     
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for u16 {
+impl FromKnackBuilder for u16 {
     type Output = U16;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for u16 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for u16 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for u16 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for u16 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(U16_KIND, 2);
 }
 
-impl FromValue for u16 {
+impl FromKnack for u16 {
     type Output = U16;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for u32 {
+impl FromKnackBuilder for u32 {
     type Output = U32;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for u32 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for u32 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for u32 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for u32 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(U32_KIND, 4);
 }
-impl FromValue for u32 {
+impl FromKnack for u32 {
     type Output = U32;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
-impl FromValueBuilder for u64 {
+impl FromKnackBuilder for u64 {
     type Output = U64;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for u64 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for u64 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl GetValueKind for u64 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for u64 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(U64_KIND, 8);
 }
-impl FromValue for u64 {
+impl FromKnack for u64 {
     type Output = U64;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for u128 {
+impl FromKnackBuilder for u128 {
     type Output = U128;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for u128 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for u128 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl GetValueKind for u128 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for u128 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(U128_KIND, 16);
 }
-impl FromValue for u128 {
+impl FromKnack for u128 {
     type Output = U128;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for i8 {
+impl FromKnackBuilder for i8 {
     type Output = I8;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for i8 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for i8 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl GetValueKind for i8 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for i8 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(I8_KIND, 1);
 }
-impl FromValue for i8 {
+impl FromKnack for i8 {
     type Output = I8;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
-impl FromValueBuilder for i16 {
+impl FromKnackBuilder for i16 {
     type Output = I16;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for i16 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for i16 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl GetValueKind for i16 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for i16 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(I16_KIND, 2);
 }
-impl FromValue for i16 {
+impl FromKnack for i16 {
     type Output = I16;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
-impl FromValueBuilder for i32 {
+impl FromKnackBuilder for i32 {
     type Output = I32;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for i32 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for i32 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl GetValueKind for i32 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for i32 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(I32_KIND, 4);
 }
-impl FromValue for i32 {
+impl FromKnack for i32 {
     type Output = I32;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
-impl FromValueBuilder for i64 {
+impl FromKnackBuilder for i64 {
     type Output = I64;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for i64 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for i64 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for i64 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for i64 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(I64_KIND, 8);
 }
-impl FromValue for i64 {
+impl FromKnack for i64 {
     type Output = I64;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl IntoValueBuilder for i128 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for i128 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
-impl FromValueBuilder for i128 {
+impl FromKnackBuilder for i128 {
     type Output = I128;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl GetValueKind for i128 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for i128 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(I128_KIND, 16);
 }
 
-impl FromValue for i128 {
+impl FromKnack for i128 {
     type Output = I128;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for f32 {
+impl FromKnackBuilder for f32 {
     type Output = F32;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
-impl IntoValueBuilder for f32 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for f32 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for f32 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for f32 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(F32_KIND, 4);
 }
 
-impl FromValue for f32 {
+impl FromKnack for f32 {
     type Output = F32;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for f64 {
+impl FromKnackBuilder for f64 {
     type Output = F64;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for f64 {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for f64 {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for f64 {
-    type Kind = Sized<ValueKind>;
+impl GetKnackKind for f64 {
+    type Kind = Sized<KnackKind>;
     const KIND: Self::Kind = Sized::new(F64_KIND, 8);
 }
 
 
-impl FromValue for f64 {
+impl FromKnack for f64 {
     type Output = F64;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
-impl FromValueBuilder for str {
+impl FromKnackBuilder for str {
     type Output = Str;
 
-    fn borrow_value(value: &ValueBuilder) -> &Self::Output {
-        if let ValueBuilder::Other(val) = value {
+    fn borrow_value(value: &KnackBuilder) -> &Self::Output {
+        if let KnackBuilder::Other(val) = value {
            return val.cast::<Self>()
         }
         panic!("not an unsigned byte")
     }
 
-    fn borrow_mut_value(value: &mut ValueBuilder) -> &mut Self::Output {
-        if let ValueBuilder::Other(buf) = value {
+    fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
+        if let KnackBuilder::Other(buf) = value {
             return buf.cast_mut::<Self>()
          }
          panic!("not an unsigned byte")
     }
 }
 
-impl IntoValueBuilder for &str {
-    fn into_value_builder(self) -> ValueBuilder {
-        ValueBuilder::Other(self.into_value_buf())
+impl IntoKnackBuilder for &str {
+    fn into_value_builder(self) -> KnackBuilder {
+        KnackBuilder::Other(self.into_value_buf())
     }
 }
 
-impl GetValueKind for str {
-    type Kind = VarSized<ValueKind>;
+impl GetKnackKind for str {
+    type Kind = VarSized<KnackKind>;
     const KIND: Self::Kind = VarSized::new(STR_KIND);
 }
 
-impl FromValue for str {
+impl FromKnack for str {
     type Output = Str;
 
-    fn try_ref_from_value(value: &Value) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_value(value: &mut Value) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
         value.try_into()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::IntoValueBuf;
+    use super::IntoKnackBuf;
 
     #[test]
     fn test_is() {

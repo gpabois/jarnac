@@ -4,11 +4,13 @@ use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
 use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
 
-use crate::{arena::IPageArena, error::{Error, ErrorKind}, pager::{cell::CellCapacity, page::PageSize, var::VarMeta}, result::Result, tag::JarTag, utils::{MaybeSized, Sized, Valid}, value::{GetValueKind, MaybeSizedValueKind, SizedValueKind, ValueKind}};
+use crate::{arena::IPageArena, error::{Error, ErrorKind}, knack::{GetKnackKind, Knack, KnackKind, MaybeSizedValueKind, SizedKnackKind}, pager::{cell::CellCapacity, page::{AsRefPageSlice, PageId, PageKind, PageSize}, var::{MaybeSpilledKnack, VarMeta}}, result::Result, tag::JarTag, utils::{MaybeSized, Sized, Valid}};
 
 pub mod descriptor;
 pub mod leaf;
 pub mod interior;
+
+pub struct BPlusTreeValue<'nodes>(MaybeSpilledKnack<'nodes>);
 
 pub struct BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
     arena: &'nodes Arena,
@@ -26,33 +28,76 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
         Ok(Self{arena, tag})
     }
 
-    pub fn new_leaf(&self) -> Result<BPlusTreeLeafMut<'nodes>> {
+    pub fn search(&self, key: &Knack) -> Result<()> {
+        let maybe_tag = self.search_leaf(key)?;
+
+        if let Some(tag) = maybe_tag {
+            self.borrow_leaf(&tag)?
+            .into_value(
+                key, 
+                &self.as_descriptor().key_kind(), 
+                self.as_descriptor().is_var_sized()
+            )
+        }
+        
+        Ok()
+    }
+
+    
+    fn new_leaf(&self) -> Result<BPlusTreeLeafMut<'nodes>> {
         self.arena
             .new()
             .and_then(|page| BPlusTreeLeaf::new(page, self.as_descriptor().as_description()))
     }
 
-    pub fn new_interior(&self) -> Result<BPlusTreeInteriorMut<'nodes>> {
+    fn new_interior(&self) -> Result<BPlusTreeInteriorMut<'nodes>> {
         self.arena
             .new()
             .and_then(|page| BPlusTreeInterior::new(page, self.as_descriptor().as_description()))
     }
 
-    pub fn borrow_leaf(&self, tag: &JarTag) -> Result<BPlusTreeLeafRef<'nodes>> {
+    fn borrow_leaf(&self, tag: &JarTag) -> Result<BPlusTreeLeafRef<'nodes>> {
         self.arena.borrow_node(tag).and_then(TryFrom::try_from)
     }
 
-    pub fn borrow_mut_leaf(&mut self, tag: &JarTag) -> Result<BPlusTreeLeafMut<'nodes>> {
+    fn borrow_mut_leaf(&mut self, tag: &JarTag) -> Result<BPlusTreeLeafMut<'nodes>> {
         self.arena.borrow_mut_node(tag).and_then(TryFrom::try_from)
     }
 
-    pub fn borrow_interior(&self, tag: &JarTag) -> Result<BPlusTreeInteriorRef<'nodes>> {
+    fn borrow_interior(&self, tag: &JarTag) -> Result<BPlusTreeInteriorRef<'nodes>> {
         self.arena.borrow_node(tag).and_then(TryFrom::try_from)
     }
 
-    pub fn borrow_mut_interior(&mut self, tag: &JarTag) -> Result<BPlusTreeInteriorMut<'nodes>> {
+    fn borrow_mut_interior(&mut self, tag: &JarTag) -> Result<BPlusTreeInteriorMut<'nodes>> {
         self.arena.borrow_mut_node(tag).and_then(TryFrom::try_from)
     }
+
+    /// Recherche une feuille contenant potentiellement la clé
+    fn search_leaf(&self, key: &Knack) -> Result<Option<JarTag>> {
+        let mut current = self.as_descriptor().root();
+
+        // Le type de la clé passée en argument doit être celle supportée par l'arbre.
+        assert_eq!(key.kind(), self.as_descriptor().key_kind().deref(), "wrong key type");
+
+        while let Some(tag) = current.as_ref().map(|&pid| self.tag.from_same_jar(pid)) {
+            if self.node_kind(&tag)? == BPTreeNodeKind::Leaf {
+                return Ok(Some(tag));
+            } else {
+                let interior = self.borrow_interior(&tag)?;
+                current = Some(interior.search_child(key, &self.as_descriptor().key_kind()))
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn node_kind(&self, tag: &JarTag) -> Result<BPTreeNodeKind> {
+        self.arena
+            .borrow_node(tag)
+            .map(|page| page.as_bytes()[0])
+            .and_then(TryFrom::try_from)
+    }
+
 }
 
 
@@ -71,17 +116,44 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
 }
 
 
+#[derive(PartialEq, Eq)]
+#[repr(u8)]
+pub(super) enum BPTreeNodeKind {
+    #[allow(dead_code)]
+    Interior = PageKind::BPlusTreeInterior as u8,
+    #[allow(dead_code)]
+    Leaf = PageKind::BPlusTreeLeaf as u8,
+}
+
+impl TryFrom<u8> for BPTreeNodeKind {
+    type Error = Error;
+
+    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
+        let interior = PageKind::BPlusTreeInterior as u8;
+        let leaf = PageKind::BPlusTreeLeaf as u8;
+
+        if value == interior {
+            Ok(BPTreeNodeKind::Interior)
+        } else if value == leaf {
+            Ok(BPTreeNodeKind::Leaf)
+        } else {
+            let kind = PageKind::try_from(value).expect("not a valid page kind");
+            panic!("not a b+ tree node (kind={kind})")
+        }
+    }
+}
+
 /// Les arguments à passer pour instancier un nouvel arbre B
 pub struct BPlusTreeArgs {
     k: Option<CellCapacity>,
-    key: Sized<ValueKind>,
-    value: MaybeSized<ValueKind>,
+    key: Sized<KnackKind>,
+    value: MaybeSized<KnackKind>,
 }
 
 impl BPlusTreeArgs {
     pub fn new<K, V>(k: Option<CellCapacity>) -> Self where 
-        K: GetValueKind<Kind=SizedValueKind>,
-        V: GetValueKind, 
+        K: GetKnackKind<Kind=SizedKnackKind>,
+        V: GetKnackKind, 
         V::Kind: Into<MaybeSizedValueKind> {
         Self {
             k,
@@ -102,10 +174,10 @@ impl BPlusTreeArgs {
                 let value_size = u16::try_from(sized.outer_size()).unwrap();
                 let will_spill = value_size > available_value_size;
 
-                (will_spill.then_some(BPlusTreeDefinition::VAL_WILL_SPILL).unwrap_or_default(), value_size)
+                (will_spill.then_some(BPlusTreeDefinition::VAL_IS_VAR_SIZED).unwrap_or_default(), value_size)
             },
             MaybeSized::Var(_) => {                
-                (BPlusTreeDefinition::VAL_WILL_SPILL | BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0)
+                (BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0)
             },
         };
 
@@ -145,9 +217,9 @@ impl BPlusTreeArgs {
 pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
-    key: ValueKind,
+    key: KnackKind,
     key_size: u16,
-    value: ValueKind,
+    value: KnackKind,
     value_size: u16,
     page_size: PageSize
 }

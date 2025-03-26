@@ -1,4 +1,14 @@
-use std::ops::Deref;
+use std::ops::{Deref, Range};
+
+pub trait Shift<T> {
+    fn shift(self, value: T) -> Self;
+}
+
+impl Shift<usize> for Range<usize> {
+    fn shift(self, value: usize) -> Self {
+        (value + self.start)..(value + self.end)
+    }
+}
 
 /// Permet d'exécuter un flip Result<Option> vers Option<Result>
 pub trait Flip {

@@ -7,7 +7,7 @@ use std::{
 
 use zerocopy::TryFromBytes;
 
-use crate::{tag::JarTag, value::ValueKind};
+use crate::{tag::JarTag, knack::KnackKind};
 use crate::pager::page::{PageId, PageKind};
 
 pub struct Error {
@@ -84,7 +84,7 @@ pub enum ErrorKind {
     SpilledVar,
     CellPageOverflow,
     CellPageFull,
-    WrongValueKind {expected: ValueKind, got: ValueKind},
+    WrongValueKind {expected: KnackKind, got: KnackKind},
     InvalidBPlusTreeDefinition,
     IoError(io::Error),
 }

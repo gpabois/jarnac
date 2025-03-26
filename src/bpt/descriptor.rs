@@ -1,6 +1,6 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, value::ValueKind};
+use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, knack::KnackKind};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
@@ -28,12 +28,16 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
         self.as_description().root.into()
     }
 
-    pub fn value_kind(&self) -> MaybeSized<ValueKind> {
+    pub fn value_kind(&self) -> MaybeSized<KnackKind> {
         self.as_description().value_kind()
     }
 
-    pub fn key_kind(&self) -> Sized<ValueKind> {
+    pub fn key_kind(&self) -> Sized<KnackKind> {
         self.as_description().key_kind()
+    }
+
+    pub fn is_var_sized(&self) -> bool {
+        return self.as_description().flags & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
     }
 
     pub(super) fn as_description(&self) -> &BPlusTreeDescription {
@@ -89,11 +93,11 @@ pub struct BPlusTreeDescription {
     /// Quelques caractéristiques de l'Arbre B+ (VAL_WILL_SPILL, VAL_IS_VAR_SIZED)
     pub(super) flags: u8,
     /// Type de la clé
-    pub(super) key_kind: ValueKind,
+    pub(super) key_kind: KnackKind,
     /// La taille de la clé
     pub(super) key_size: u16,
     /// Type de la valeur
-    pub(super) value_kind: ValueKind,
+    pub(super) value_kind: KnackKind,
     /// La taille de la donnée stockable dans une cellule d'une feuille
     pub(super) value_size: u16,
     /// Pointeur vers la racine
@@ -116,11 +120,11 @@ impl BPlusTreeDescription {
         }
     }
 
-    pub fn key_kind(&self) -> Sized<ValueKind> {
+    pub fn key_kind(&self) -> Sized<KnackKind> {
         Sized::new(self.key_kind, usize::from(self.key_size))
     }
 
-    pub fn value_kind(&self) -> MaybeSized<ValueKind> {
+    pub fn value_kind(&self) -> MaybeSized<KnackKind> {
         if self.flags | BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0 {
             return MaybeSized::Var(VarSized::new(self.value_kind))
         } else {

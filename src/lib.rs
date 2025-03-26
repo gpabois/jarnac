@@ -8,7 +8,7 @@
 //!     + Par valeur numérique d'une taille d'au plus 64 bits.
 pub mod fs;
 pub mod pager;
-pub mod value;
+pub mod knack;
 pub mod prelude;
 pub mod error;
 pub mod result;
