@@ -33,11 +33,11 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
 
         if let Some(tag) = maybe_tag {
             self.borrow_leaf(&tag)?
-            .into_value(
-                key, 
-                &self.as_descriptor().key_kind(), 
-                self.as_descriptor().is_var_sized()
-            )
+                .into_value(
+                    key, 
+                    &self.as_descriptor().key_kind(), 
+                    &self.as_descriptor().value_kind()
+                )
         }
         
         Ok()

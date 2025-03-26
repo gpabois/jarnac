@@ -6,8 +6,8 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use crate::{
     error::Error, knack::{Knack, KnackKind}, pager::{
         cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
-        page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}
-    }, result::Result, tag::DataArea, utils::Sized
+        page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, var::Var
+    }, result::Result, tag::DataArea, utils::{MaybeSized, Shift, Sized}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -59,11 +59,11 @@ impl<'buf> BPlusTreeLeaf<RefPage<'buf>> {
         Some(BPTreeLeafCell(self.0.into_cell(cid)?))
     }
 
-    pub fn into_value(self, key: &Knack, key_kind: &Sized<KnackKind>, is_var_sized: bool) -> Option<> {
+    pub fn into_value(self, key: &Knack, key_kind: &Sized<KnackKind>, value_kind: &MaybeSized<KnackKind>) -> Option<> {
         self
         .into_iter()
         .filter(|cell| cell.borrow_key(key_kind) == key)
-        .map(|cell| cell.into_value())
+        .map(|cell| cell.into_value(key_kind, value_kind))
         .last()
     }
 }
@@ -112,6 +112,22 @@ impl DataArea for BPTreeLeafMeta {
 
 /// Cellule d'une feuille contenant une paire clé/valeur.
 pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?std::marker::Sized;
+
+impl<'buf> BPTreeLeafCell<RefPageSlice<'buf>> {
+    pub fn into_value(self, key_kind: &Sized<KnackKind>, value_kind: MaybeSized<KnackKind>) {
+        match value_kind {
+            MaybeSized::Sized(sized) => {
+                let value_range = sized.as_area().shift(key_kind.outer_size());
+                let value_bytes = self.0.into_content_slice().into_page_slice(value_range);
+            },
+            MaybeSized::Var(var_sized) => {
+                let value_range = key_kind.1..;
+                let value_bytes = self.0.into_content_slice().into_page_slice(value_range);
+                let var = Var::from_owned_slice(value_bytes);
+            },
+        }
+    }
+}
 
 impl<Slice> From<&Cell<Slice>> for &BPTreeLeafCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
     fn from(value: &Cell<Slice>) -> Self {

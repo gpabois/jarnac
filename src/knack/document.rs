@@ -2,7 +2,7 @@ use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{error::Error, result::Result};
+use crate::{error::Error, pager::var::Var, result::Result, utils::VarSized};
 
 use super::{FromKnack, GetKnackKind, IntoKnackBuf, IntoKnackBuilder, path::IntoKnackPath, Knack, KnackBuf, KnackBuilder, KnackKind, DOCUMENT_KIND, KV_PAIR_KIND};
 
@@ -146,7 +146,8 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 pub struct Document(HashMap<String, KnackBuilder>);
 
 impl GetKnackKind for Document {
-    const KIND: KnackKind = DOCUMENT_KIND;
+    type Kind = VarSized<KnackKind>;
+    const KIND: Self::Kind = VarSized::new(DOCUMENT_KIND);
 }
 
 impl FromKnack for Document {
@@ -204,7 +205,7 @@ impl Document {
 
 impl IntoKnackBuf for Document {
     fn into_value_buf(self) -> KnackBuf {
-        let mut buf: Vec<u8> = vec![Document::KIND.into()];
+        let mut buf: Vec<u8> = vec![Document::KIND.0.into()];
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
             buf.write_all(&kv).unwrap();
