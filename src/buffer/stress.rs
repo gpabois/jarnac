@@ -6,7 +6,7 @@ use std::{
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use dashmap::DashMap;
 
-use crate::{fs::{FileOpenOptions, FilePtr, IFileSystem}, pager::page::{descriptor::PageDescriptor, PageSize}, result::Result, tag::JarTag};
+use crate::{fs::{FileOpenOptions, FilePtr, IFileSystem}, page::{descriptor::PageDescriptor, PageSize}, result::Result, tag::JarTag};
 
 /// Gestion du *stress mémoire* sur le système de pagination.
 ///
@@ -99,7 +99,7 @@ pub mod stubs {
 
     use dashmap::DashMap;
 
-    use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice}, result::Result, tag::JarTag};
+    use crate::{page::{AsMutPageSlice, AsRefPageSlice}, result::Result, tag::JarTag};
 
     use super::IBufferStressStrategy;
 

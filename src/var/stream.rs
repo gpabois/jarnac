@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read};
 
-use crate::{pager::{page::{AsRefPageSlice, RefPage}, IPager}, result::Result};
+use crate::{page::{AsRefPageSlice, RefPage}, result::Result};
 
 use super::{SpillPage, Var};
 

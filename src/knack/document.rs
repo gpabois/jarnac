@@ -2,14 +2,15 @@ use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{error::Error, pager::var::Var, result::Result, utils::VarSized};
+use crate::{error::Error, result::Result, utils::VarSized};
 
 use super::{FromKnack, GetKnackKind, IntoKnackBuf, IntoKnackBuilder, path::IntoKnackPath, Knack, KnackBuf, KnackBuilder, KnackKind, DOCUMENT_KIND, KV_PAIR_KIND};
 
 pub struct KeyValue([u8]);
 
 impl GetKnackKind for KeyValue {
-    const KIND: KnackKind = KV_PAIR_KIND;
+    type Kind = VarSized<KnackKind>;
+    const KIND: VarSized<KnackKind> = VarSized::new(KV_PAIR_KIND);
 }
 impl Deref for KeyValue {
     type Target = [u8];
@@ -18,6 +19,7 @@ impl Deref for KeyValue {
         &self.0
     }
 }
+
 impl KeyValue {
     /// Lit une paire clé/valeur depuis la base de la tranche.
     pub fn read_from_slice(slice: &[u8]) -> &Self {
@@ -217,7 +219,7 @@ impl IntoKnackBuf for Document {
 
 #[cfg(test)]
 mod tests {
-    use crate::value::document::Document;
+    use crate::knack::document::Document;
 
     #[test]
     pub fn test_insert() {

@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use super::{array::Array, document::Document, path::IntoKnackPath, FromKnackBuilder, GetKnackKind, IntoKnackBuf, Knack, KnackBuf, KnackKind};
 
 /// Type utilisé pour construire des valeurs stockables en base.
@@ -41,7 +43,7 @@ impl KnackBuilder {
     }
 
     pub fn is<T: GetKnackKind + ?Sized>(&self) -> bool {
-        self.kind() == &T::KIND
+        self.kind().deref() == T::KIND.deref()
     }
 
     pub fn kind(&self) -> &KnackKind {

@@ -4,72 +4,87 @@ use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
 use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
 
-use crate::{arena::IPageArena, error::{Error, ErrorKind}, knack::{GetKnackKind, Knack, KnackKind, MaybeSizedValueKind, SizedKnackKind}, pager::{cell::CellCapacity, page::{AsRefPageSlice, PageId, PageKind, PageSize}, var::{MaybeSpilledKnack, VarMeta}}, result::Result, tag::JarTag, utils::{MaybeSized, Sized, Valid}};
+use crate::{
+    pager::IPager, 
+    error::{Error, ErrorKind}, 
+    knack::{GetKnackKind, Knack, KnackKind, MaybeSizedValueKind, SizedKnackKind}, 
+    cell::CellCapacity, 
+    page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, 
+    var::{MaybeSpilled, VarMeta}, 
+    result::Result, 
+    tag::JarTag, 
+    utils::{MaybeSized, Sized, Valid}};
 
 pub mod descriptor;
 pub mod leaf;
 pub mod interior;
 
-pub struct BPlusTreeValue<'nodes>(MaybeSpilledKnack<'nodes>);
-
-pub struct BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
+pub struct BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
     arena: &'nodes Arena,
     tag: JarTag
 }
 
-impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
+impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
     pub fn new(arena: &'nodes Arena, args: BPlusTreeArgs) -> Result<Self> {
         let node_size: PageSize = arena.size_of().try_into().unwrap();
         let valid_definition = args.define(node_size).validate()?;
 
-        let page = arena.new()?;
+        let page = arena.new_element()?;
         let tag =  *page.tag();
         BPTreeDescriptor::new(page, valid_definition)?;
         Ok(Self{arena, tag})
     }
 
-    pub fn search(&self, key: &Knack) -> Result<()> {
+    pub fn search(&self, key: &Knack) -> Result<Option<MaybeSpilled<RefPageSlice<'nodes>>>> {
         let maybe_tag = self.search_leaf(key)?;
 
         if let Some(tag) = maybe_tag {
-            self.borrow_leaf(&tag)?
-                .into_value(
-                    key, 
-                    &self.as_descriptor().key_kind(), 
-                    &self.as_descriptor().value_kind()
-                )
+            return self
+                    .borrow_leaf(&tag)
+                    .map(|leaf|
+                        leaf.into_value(
+                            key, 
+                            &self.as_descriptor().key_kind(), 
+                            &self.as_descriptor().value_kind()
+                        )
+                    )
+                
         }
         
-        Ok()
+        Ok(None)
     }
 
     
     fn new_leaf(&self) -> Result<BPlusTreeLeafMut<'nodes>> {
         self.arena
-            .new()
+            .new_element()
             .and_then(|page| BPlusTreeLeaf::new(page, self.as_descriptor().as_description()))
     }
 
     fn new_interior(&self) -> Result<BPlusTreeInteriorMut<'nodes>> {
         self.arena
-            .new()
+            .new_element()
             .and_then(|page| BPlusTreeInterior::new(page, self.as_descriptor().as_description()))
     }
 
     fn borrow_leaf(&self, tag: &JarTag) -> Result<BPlusTreeLeafRef<'nodes>> {
-        self.arena.borrow_node(tag).and_then(TryFrom::try_from)
+        self.arena
+            .borrow_element(tag)
+            .and_then(TryFrom::try_from)
     }
 
     fn borrow_mut_leaf(&mut self, tag: &JarTag) -> Result<BPlusTreeLeafMut<'nodes>> {
-        self.arena.borrow_mut_node(tag).and_then(TryFrom::try_from)
+        self.arena
+            .borrow_mut_element(tag)
+            .and_then(TryFrom::try_from)
     }
 
     fn borrow_interior(&self, tag: &JarTag) -> Result<BPlusTreeInteriorRef<'nodes>> {
-        self.arena.borrow_node(tag).and_then(TryFrom::try_from)
+        self.arena.borrow_element(tag).and_then(TryFrom::try_from)
     }
 
     fn borrow_mut_interior(&mut self, tag: &JarTag) -> Result<BPlusTreeInteriorMut<'nodes>> {
-        self.arena.borrow_mut_node(tag).and_then(TryFrom::try_from)
+        self.arena.borrow_mut_element(tag).and_then(TryFrom::try_from)
     }
 
     /// Recherche une feuille contenant potentiellement la clé
@@ -79,7 +94,7 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
         // Le type de la clé passée en argument doit être celle supportée par l'arbre.
         assert_eq!(key.kind(), self.as_descriptor().key_kind().deref(), "wrong key type");
 
-        while let Some(tag) = current.as_ref().map(|&pid| self.tag.from_same_jar(pid)) {
+        while let Some(tag) = current.as_ref().map(|&pid| self.tag.in_page(pid)) {
             if self.node_kind(&tag)? == BPTreeNodeKind::Leaf {
                 return Ok(Some(tag));
             } else {
@@ -93,24 +108,23 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
 
     fn node_kind(&self, tag: &JarTag) -> Result<BPTreeNodeKind> {
         self.arena
-            .borrow_node(tag)
-            .map(|page| page.as_bytes()[0])
-            .and_then(TryFrom::try_from)
+            .borrow_element(tag)
+            .and_then(|page| TryFrom::try_from(page.as_bytes()[0]))
     }
 
 }
 
 
-impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPageArena<'nodes> {
+impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
     fn as_descriptor(&self) -> BPTreeDescriptor<Arena::Ref> {
         self.arena
-            .borrow_node(&self.tag)
+            .borrow_element(&self.tag)
             .and_then(|page| BPTreeDescriptor::try_from(page)).unwrap()
     }
 
     fn as_mut_descriptor(&self) -> BPTreeDescriptor<Arena::RefMut> {
         self.arena
-            .borrow_mut_node(&self.tag)
+            .borrow_mut_element(&self.tag)
             .and_then(|page| BPTreeDescriptor::try_from(page)).unwrap()
     }
 }

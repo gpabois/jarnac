@@ -2,7 +2,7 @@ use std::{mem::forget, ops::{Deref, DerefMut, Index, IndexMut}, slice::SliceInde
 
 use zerocopy::{Immutable, KnownLayout, TryFromBytes};
 
-use crate::pager::page::descriptor::PageDescriptor;
+use crate::page::descriptor::PageDescriptor;
 
 use super::{AsMutPageSlice, AsRefPageSlice, MutPage, PageSize, RefPage};
 

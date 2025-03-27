@@ -56,7 +56,7 @@ impl Cells {
     /// Vérifie que l'espace alloué aux cellules puisse contenir l'ensemble des cellules à la taille souhaitée
     pub fn within_available_cell_space_size(size: PageSize, reserved: PageSize, content_size: PageSize, k: CellCapacity) -> bool {
         let available = Self::compute_available_cell_space_size(size, reserved);
-        Self::compute_available_cell_space_size(content_size, reserved) <= available
+        Self::compute_available_cell_space_size(content_size, reserved) * u16::from(k) <= available
     }
 
     pub fn compute_cell_space_size(content_size: PageSize, k: CellCapacity) -> u16 {
@@ -901,20 +901,20 @@ impl AsRef<Option<CellId>> for OptionalCellId {
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, num::NonZero};
+    use std::error::Error;
 
     use itertools::Itertools;
 
-    use crate::{pager::{cell::{CellCapacity, CellId, CellPage}, fixtures::fixture_new_pager, page::PageSize, IPager}, knack::{GetKnackKind, IntoKnackBuf, Knack}};
+    use crate::{arena::IArena, cell::CellPage, knack::{GetKnackKind, IntoKnackBuf, Knack}, page::PageSize, pager::stub::new_stub_pager};
     use super::CellHeader;
 
     #[test]
     fn test_set_next_sibling() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
+        let pager = new_stub_pager::<4_096>();
 
         let mut cells = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
-            PageSize::from(10u16), 
+            pager.new_element()?, 
+            10, 
             4, 
             0
         )?;
@@ -933,11 +933,11 @@ mod tests {
 
     #[test]
     fn test_push() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
+        let pager = new_stub_pager::<4096>();
 
         let mut cells = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
-            PageSize::from(10u16), 
+            pager.new_element()?, 
+            10, 
             4,
             0
         )?;
@@ -959,11 +959,11 @@ mod tests {
 
     #[test]
     fn test_free_cell() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
+        let pager = new_stub_pager::<4096>();
 
         let mut cells = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
-            PageSize::from(10u16), 
+            pager.new_element()?, 
+            10, 
             4_u8.into(), 
             0
         )?;
@@ -978,7 +978,7 @@ mod tests {
 
         assert_eq!(cells[&c1].next_sibling(), Some(c3));
         assert_eq!(cells.iter().map(|cell| cell.id()).collect::<Vec<_>>(), vec![c1, c3]);
-        assert_eq!(cells.len(), CellCapacity(2));
+        assert_eq!(cells.len(), 2);
 
         cells.free_cell(&c3);
 
@@ -993,11 +993,11 @@ mod tests {
 
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
-        let content_size = PageSize::try_from(u64::KIND.outer_size().unwrap()).unwrap();
+        let pager = new_stub_pager::<4096>();
+        let content_size = PageSize::try_from(u64::KIND.outer_size()).unwrap();
 
         let mut src = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
+            pager.new_element()?, 
             content_size, 
             5, 
             0
@@ -1016,21 +1016,21 @@ mod tests {
 
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
-        let content_size = PageSize::from(u64::KIND.outer_size().unwrap());
+        let pager = new_stub_pager::<4096>();
+        let content_size = PageSize::try_from(u64::KIND.outer_size()).unwrap();
 
         let mut src = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
+            pager.new_element()?, 
             content_size, 
-            5_u8.into(), 
-            0_usize.into()
+            5,
+            0
         )?;
 
         let mut dest = CellPage::new(
-            pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?, 
+            pager.new_element()?, 
             content_size, 
-            5_u8.into(), 
-            0_usize.into()
+            5,
+            0
         )?;
         
         for i in 0..5u64 {
@@ -1051,13 +1051,13 @@ mod tests {
             .collect_vec();
         
         assert_eq!(dest_values, vec![3u64, 4u64]);
-        assert_eq!(dest.len(), CellCapacity(2));
+        assert_eq!(dest.len(), 2);
         assert_eq!(src_values, vec![0u64, 1u64, 2u64]);
-        assert_eq!(src.len(), CellCapacity(3));
+        assert_eq!(src.len(), 3);
 
         let got_free_len: u8 = src.iter_free().count().try_into().unwrap();
         assert_eq!(got_free_len, 2);
-        assert_eq!(got_free_len, src.free_len().0);
+        assert_eq!(got_free_len, src.free_len());
         
         Ok(())
     }
@@ -1065,41 +1065,40 @@ mod tests {
     
     #[test]
     fn test_none_on_index_overflow() -> Result<(), Box<dyn Error>>  {
-        let pager = fixture_new_pager();
-        let page = pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?;
+        let pager = new_stub_pager::<4096>();
 
-        let mut cells = CellPage::new(page,             
+        let mut cells = CellPage::new(pager.new_element()?,             
             10_u16.into(), 
-            4_u8.into(), 
-            0_usize.into()
+            4, 
+            0
         )?;
 
         cells.alloc_cell()?;
-        assert!(cells.borrow_cell(&CellId::new(NonZero::new(1).unwrap())).is_some());
+        assert!(cells.borrow_cell(&1).is_some());
         cells.alloc_cell()?;
-        assert!(cells.borrow_cell(&CellId::new(NonZero::new(2).unwrap())).is_some());
+        assert!(cells.borrow_cell(&2).is_some());
         cells.alloc_cell()?;
-        assert!(cells.borrow_cell(&CellId::new(NonZero::new(3).unwrap())).is_some());
+        assert!(cells.borrow_cell(&3).is_some());
         cells.alloc_cell()?;
-        assert!(cells.borrow_cell(&CellId::new(NonZero::new(4).unwrap())).is_some());
-        assert!(cells.borrow_cell(&CellId::new(NonZero::new(10).unwrap())).is_none());
+        assert!(cells.borrow_cell(&4).is_some());
+        assert!(cells.borrow_cell(&10).is_none());
 
         Ok(())
     }
     
     #[test]
     fn test_fails_when_overflow() -> Result<(), Box<dyn Error>> {
-        let pager = fixture_new_pager();
-        let page = pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?;
+        let pager = new_stub_pager::<4096>();
+        let page = pager.new_element()?;
 
-        let page_size = pager.page_size();
-        let base: PageSize = size_of::<CellHeader>().into();
+        let page_size = PageSize::try_from(pager.size_of()).unwrap();
+        let base = PageSize::try_from(size_of::<CellHeader>()).unwrap();
         let available_cells_space_size = page_size - base;
 
         let result = CellPage::new(page,             
             available_cells_space_size, 
-            4_u8.into(), 
-            0_usize.into()
+            4, 
+            0
         );
 
         assert!(result.is_err(), "on ne devrait pas pouvoir créer une page cellulaire dont l'espace requis excède l'espace disponible");
@@ -1109,14 +1108,13 @@ mod tests {
 
     #[test]
     fn test_fails_when_full() -> Result<(), Box<dyn Error>>  {
-        let pager = fixture_new_pager();
-        let page = pager.new_page().and_then(|pid| pager.borrow_mut_page(&pid))?;
+        let pager = new_stub_pager::<4096>();
 
         let mut cells = CellPage::new(
-            page, 
+            pager.new_element()?, 
             PageSize::from(10u16), 
-            4_u8.into(), 
-            0_usize.into()
+            4, 
+            0
         )?;
 
         for _ in 0..4 {

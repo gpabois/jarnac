@@ -16,7 +16,7 @@ use builder::KnackBuilder;
 use zerocopy::{FromBytes, IntoBytes, LittleEndian};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, pager::page::PageSlice, result::Result, utils::{MaybeSized, Sized, VarSized}};
+use crate::{error::{Error, ErrorKind}, page::{AsRefPageSlice, PageSlice}, result::Result, utils::{MaybeSized, Sized, VarSized}};
 
 const U8_KIND: KnackKind = KnackKind(1);
 const U16_KIND: KnackKind = KnackKind(2);
@@ -54,18 +54,20 @@ impl SizedKnackKind {
     }
 }
 pub type VarSizedValueKind = VarSized<KnackKind>;
+
 impl VarSizedValueKind {
     pub fn into_inner(self) -> KnackKind {
         self.0
     }
 }
+
 pub type MaybeSizedValueKind = MaybeSized<KnackKind>;
 
 impl MaybeSizedValueKind {
     pub fn into_inner(self) -> KnackKind {
         match self {
-            MaybeSized::Sized(sized) => todo!(),
-            MaybeSized::Var(var_sized) => todo!(),
+            MaybeSized::Sized(sized) => sized.0,
+            MaybeSized::Var(var_sized) => var_sized.0,
         }
     }
     pub fn outer_size(&self) -> Option<usize> {
@@ -222,7 +224,40 @@ impl KnackKind {
     }
 }
 
+pub struct KnackCell<Slice>(Slice) where Slice: AsRefPageSlice;
+
+impl<Slice> From<Slice> for KnackCell<Slice> where Slice: AsRefPageSlice {
+    fn from(value: Slice) -> Self {
+        Self(value)
+    }
+}
+
+impl<Slice> Deref for KnackCell<Slice> where Slice: AsRefPageSlice {
+    type Target = Knack;
+
+    fn deref(&self) -> &Self::Target {
+        <&Knack>::from(self.0.as_ref())
+    }
+}
+
+pub enum CowKnack<Slice> where Slice: AsRefPageSlice {
+    Borrow(KnackCell<Slice>),
+    Owned(KnackBuf)
+}
+
+impl<Slice> Deref for CowKnack<Slice> where Slice: AsRefPageSlice {
+    type Target = Knack;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            CowKnack::Borrow(knack_cell) => knack_cell.deref(),
+            CowKnack::Owned(knack_buf) => knack_buf.deref(),
+        }
+    }
+}
+
 pub struct Knack([u8]);
+
 impl std::fmt::Display for Knack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match *self.kind() {

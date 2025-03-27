@@ -58,6 +58,10 @@ impl PageDescriptor<'_> {
         self.ptr
     }
 
+    pub fn buf_id(&self) -> usize {
+        self.as_ref_inner().buf_id
+    }
+
     /// Retourne l'identifiant de la page.
     pub fn tag(&self) -> &JarTag {
         &self.as_ref_inner().tag
@@ -173,27 +177,12 @@ impl PageDescriptor<'_> {
         MutPage::try_new_with_options(self.clone(), dry)
     }
 
-    
-    /// Incrémente le RW lock
-    /// 
-    /// Cela signifie qu'une nouvelle référence en lecture a été acquise. 
-    pub(crate) unsafe fn inc_rw_counter(&self, order: SyncOrdering) -> isize {
-        self.as_mut_inner().rw_counter.fetch_add(1, order)
-    }
 
     /// Décrémente le RW lock
     /// 
     /// Cela signifie qu'une nouvelle référence en lecture a été acquise. 
     pub(crate) unsafe fn dec_rw_counter(&self, order: SyncOrdering) {
         self.as_mut_inner().rw_counter.fetch_sub(1, order);
-    }
-
-    pub(crate) unsafe fn set_rw_counter(&self, value: isize, order: SyncOrdering) -> isize {
-        self.as_mut_inner().rw_counter.swap(value, order)
-    }
-
-    pub(crate) unsafe fn reset_rw_counter(&self, order: SyncOrdering) -> isize {
-        self.as_mut_inner().rw_counter.swap(0, order)
     }
 
     pub fn get_rw_counter(&self, order: SyncOrdering) -> isize {
@@ -227,7 +216,7 @@ impl PageDescriptor<'_> {
     
 }
 
-pub type PageDescriptorPtr = NonNull<PageDescriptorInner>;
+pub(crate) type PageDescriptorPtr = NonNull<PageDescriptorInner>;
 
 /// Page cachée
 pub(crate) struct PageDescriptorInner {

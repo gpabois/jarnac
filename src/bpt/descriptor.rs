@@ -1,6 +1,6 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{pager::page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, knack::KnackKind};
+use crate::{page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, knack::KnackKind};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 

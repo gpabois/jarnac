@@ -8,7 +8,7 @@ use std::{
 use zerocopy::TryFromBytes;
 
 use crate::{tag::JarTag, knack::KnackKind};
-use crate::pager::page::{PageId, PageKind};
+use crate::page::PageKind;
 
 pub struct Error {
     pub backtrace: Backtrace,

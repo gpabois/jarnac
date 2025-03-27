@@ -1,47 +1,64 @@
-pub mod stream;
+//pub mod stream;
 
-use std::{borrow::Borrow, io::{Cursor, Read, Write}, ops::{Deref, Range}};
+use std::{io::{Cursor, Read, Write}, ops::Range};
 
 use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::{error::{Error, ErrorKind}, result::Result, knack::{Knack, KnackBuf}};
+use crate::{pager::IPager, knack::{CowKnack, Knack, KnackBuf, KnackCell}, result::Result, tag::JarTag};
+use crate::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice, RefPageSlice};
 
-use super::{
-    page::{AsMutPageSlice, AsRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice}, IPager
-};
-
-pub enum MaybeSpilledKnack<'data> {
-    Unspilled(&'data Knack),
-    Spilled(KnackBuf)
+/// Représente un truc dont le contenu peut avoir débordé ailleurs.
+pub enum MaybeSpilled<Slice> where Slice: AsRefPageSlice {
+    Unspilled(KnackCell<Slice>),
+    Spilled(Var<Slice>)
 }
 
-impl MaybeSpilledKnack<'_> {
-    pub fn to_owned(self) -> KnackBuf {
-        Borrow::<Knack>::borrow(&self).to_owned()
-    }
-}
-
-impl Deref for MaybeSpilledKnack<'_> {
-    type Target = Knack;
-
-    fn deref(&self) -> &Self::Target {
-        self.borrow()
-    }
-}
-
-impl Borrow<Knack> for MaybeSpilledKnack<'_> {
-    fn borrow(&self) -> &Knack {
+impl<Slice> MaybeSpilled<Slice> where Slice: AsRefPageSlice {
+    /// Transforme le truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé en mémoire
+    /// soit par un truc tamponné [KnackBuf], soit par un truc adossé à une tranche [KnackCell].
+    pub fn into_cow_knack<'a, Pager>(self, pager: &Pager) -> Result<CowKnack<Slice>> where Pager: IPager<'a> {
         match self {
-            MaybeSpilledKnack::Unspilled(value) => value,
-            MaybeSpilledKnack::Spilled(value_buf) => &value_buf,
+            MaybeSpilled::Unspilled(knack_cell) => Ok(CowKnack::Borrow(knack_cell)),
+            MaybeSpilled::Spilled(var) => {
+                let mut buf: Vec<u8> = Vec::with_capacity(usize::try_from(var.len()).unwrap());
+                var.read(&mut buf, pager)?;
+                Ok(CowKnack::Owned(KnackBuf::from_bytes(buf)))
+            },
         }
     }
 }
 
-/// Représente une valeur de taille variable.
+impl<Slice> From<KnackCell<Slice>> for MaybeSpilled<Slice> where Slice: AsRefPageSlice {
+    fn from(value: KnackCell<Slice>) -> Self {
+        Self::Unspilled(value)
+    }
+}
+
+impl<'buf> From<Var<RefPageSlice<'buf>>> for MaybeSpilled<RefPageSlice<'buf>> {
+    fn from(value: Var<RefPageSlice<'buf>>) -> Self {
+        value.into_maybe_spilled()
+    }
+}
+
+/// Représente un truc de taille variable.
 pub struct Var<Slice>(Slice) where Slice: AsRefPageSlice + ?Sized;
+
+impl<'buf> Var<RefPageSlice<'buf>> {
+    pub fn into_maybe_spilled(self) -> MaybeSpilled<RefPageSlice<'buf>> {
+        if self.has_spilled() {
+            MaybeSpilled::Spilled(self)
+        } else {
+            MaybeSpilled::Unspilled(KnackCell::from(self.into_content_slice()))
+        }
+    }
+    
+    fn into_content_slice(self) -> RefPageSlice<'buf> {
+        let range = self.data_range();
+        self.0.into_page_slice(range)
+    }
+}
 
 impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
     pub fn from_owned_slice(slice: Slice) -> Self {
@@ -51,7 +68,7 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice {
 
 impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     pub const HEADER_RANGE: Range<usize> = 1..(1+size_of::<VarMeta>());
-    pub const DATA_BASE: usize = 1+size_of::<VarMeta>();
+    pub const DATA_BASE: usize = 1 + size_of::<VarMeta>();
 
     pub(crate) fn from_ref_slice(slice: &Slice) -> &Self {
         unsafe {
@@ -61,26 +78,6 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
 
     pub fn len(&self) -> u64 {
         self.as_header().total_size
-    }
-
-    /// Essaye de récupérer la valeur si cette dernière n'a pas débordée ailleurs.
-    pub fn try_borrow(&self) -> Result<&Knack> {
-        if !self.has_spilled() {
-            Ok(Knack::from_ref(self.borrow_content()))
-        } else {
-            Err(Error::new(ErrorKind::SpilledVar))
-        }
-    }
-
-    /// Récupère la valeur qui peut avoir débordée ailleurs.
-    pub fn get<Pager>(&self, pager: &Pager) -> Result<MaybeSpilledKnack<'_>> where Pager: IPager + ?Sized {
-        if self.has_spilled() {
-            let mut buf = Vec::<u8>::default();
-            read_dynamic_sized_data(self.as_header(), &mut buf, self.borrow_content(), pager)?;
-            Ok(MaybeSpilledKnack::Spilled(KnackBuf::from_bytes(buf)))
-        } else {
-            Ok(MaybeSpilledKnack::Unspilled(Knack::from_ref(self.borrow_content())))
-        }
     }
     
     pub fn has_spilled(&self) -> bool {
@@ -92,6 +89,11 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
         dest.borrow_mut_content().copy_from_slice(self.borrow_content());
         Ok(())
     }   
+
+    /// Récupère l'ensemble du truc de taille variable.
+    pub fn read<'a, Pager, Dest>(&self, dest: &mut Dest, pager: &Pager) -> Result<()> where Pager: IPager<'a>, Dest: Write{
+        read_var(self.as_header(), dest, self.borrow_content(), pager)
+    }
 
     fn data_range(&self) -> Range<usize> {
         let in_page_size = usize::try_from(self.as_header().get_in_page_size()).unwrap();
@@ -114,8 +116,8 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         }
     }
 
-    pub fn set<Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: IPager + ?Sized {
-        *self.as_mut_header() = write_var_data(
+    pub fn set<Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: for<'a> IPager<'a> {
+        *self.as_mut_header() = write_var(
             data, 
             self.borrow_mut_data_in_page_space(), 
             pager
@@ -284,21 +286,22 @@ impl SpillPageData {
 }
 
 /// Libère toutes les pages de débordement de la liste chaînée.
-pub fn free_overflow_pages<Pager: IPager + ?Sized>(head: PageId, pager: &Pager) -> Result<()> {
-    let mut current = Some(head);
+pub fn free_overflow_pages<'a, Pager: IPager<'a>>(head: PageId, pager: &Pager) -> Result<()> {
+    let mut current = Some(pager.tag().in_page(head));
 
-    while let Some(pid) = current {
-        let raw = pager.borrow_page(&pid)?;
+    while let Some(tag) = current {
+        let raw = pager.borrow_element(&tag)?;
         let page = SpillPageData::get(&raw);
-        current = page.get_next();
-        pager.delete_page(&pid)?;
+        current = page.get_next().map(|pid| pager.tag().in_page(pid));
+        drop(page);
+        pager.delete_element(&tag)?;
     }
 
     Ok(())
 }
 
 /// Lit les données d'une taille dynamique dans une région d'une page.
-pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
+pub fn read_var<'a, Pager: IPager<'a>, W: Write>(
     header: &VarMeta,
     dest: &mut W,
     src: &[u8],
@@ -309,8 +312,8 @@ pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
 
     let mut current = header.spill_page_id;
 
-    while let Some(pid) = current.as_ref() {
-        let raw = pager.borrow_page(pid)?;
+    while let Some(tag) = current.as_ref().map(|pid| pager.tag().in_page(pid)) {
+        let raw = pager.borrow_element(&tag)?;
         let page = SpillPageData::get(&raw);
         page.read(dest);
         current = page.get_next().into();
@@ -323,7 +326,7 @@ pub fn read_dynamic_sized_data<Pager: IPager + ?Sized, W: Write>(
 ///
 /// Si les données ne peuvent être stockées intégralement dans la région,
 /// alors la fonction réalise un débordement (Overflow) sur une à plusieurs pages.
-pub fn write_var_data<Pager: IPager + ?Sized>(
+pub fn write_var<'a, Pager: IPager<'a>>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,
@@ -336,32 +339,31 @@ pub fn write_var_data<Pager: IPager + ?Sized>(
 
     remaining -= in_page_size;
 
-    let mut ov_head: Option<PageId> = None;
-    let mut prev_ov_pid: Option<PageId> = None;
+    let mut ov_head: Option<JarTag> = None;
+    let mut prev_ov_pid: Option<JarTag> = None;
 
     while remaining > 0 {
-        let pid = pager.new_page()?;
-        let mut page = pager.borrow_mut_page(&pid)?;
+        let mut page = pager.new_element()?;
         let spill = SpillPageData::new(&mut page);
  
         remaining -= spill.write(&mut cursor);
 
         if ov_head.is_none() {
-            ov_head = Some(pid)
+            ov_head = Some(*page.tag())
         }
 
         if let Some(prev_ov_pid) = prev_ov_pid {
-            let mut prev_page = pager.borrow_mut_page(&prev_ov_pid)?;
+            let mut prev_page = pager.borrow_mut_element(&prev_ov_pid)?;
             let prev_sp = SpillPageData::get_mut(&mut prev_page);
-            prev_sp.set_next(Some(pid));
+            prev_sp.set_next(Some(page.tag().page_id));
         }
 
-        prev_ov_pid = Some(pid);
+        prev_ov_pid = Some(*page.tag());
     }
 
     // Si il reste des pages de débordement, on va les libérer, ça sert à rien de les garder.
     if let Some(tail) = prev_ov_pid {
-        let mut tail_page = pager.borrow_mut_page(&tail)?;
+        let mut tail_page = pager.borrow_mut_element(&tail)?;
         let tail_sp = SpillPageData::get_mut(&mut tail_page);
         tail_sp.get_next().iter().try_for_each(|rem| {
             free_overflow_pages(*rem, pager)
@@ -371,21 +373,20 @@ pub fn write_var_data<Pager: IPager + ?Sized>(
     Ok(VarMeta {
         total_size: total_size.try_into().unwrap(),
         in_page_size: in_page_size.try_into().unwrap(),
-        spill_page_id: ov_head.into(),
+        spill_page_id: ov_head.map(|tag| tag.page_id).into(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}, rc::Rc};
+    use std::{error::Error, io::Cursor, ops::{Deref, DerefMut}};
     use rand::RngCore;
-    use crate::{fs::in_memory::InMemoryFs, pager::{var::read_dynamic_sized_data, page::{PageId, PageSize}, Pager, PagerOptions}};
-    use super::write_var_data;
+    use crate::{pager::stub::new_stub_pager, page::PageId, var::read_var};
+    use super::write_var;
 
     #[test]
-    pub fn test_spilled() -> Result<(), Box<dyn Error>>{
-        let fs = Rc::new(InMemoryFs::default());
-        let pager = Pager::new(fs, "test", PageSize::new(4_096), PagerOptions::default())?;
+    pub fn test_spilled() -> Result<(), Box<dyn Error>> {
+        let pager = new_stub_pager::<4_096>();
 
         let mut data = unsafe {
             let mut data = Box::<[u8; 1_000_000]>::new_uninit().assume_init();
@@ -397,7 +398,7 @@ mod tests {
         
         let mut dest: [u8;100] = [0;100];
 
-        let dsd_header: crate::pager::var::VarMeta = write_var_data(data.deref(), &mut dest, &pager)?;
+        let dsd_header: crate::var::VarMeta = write_var(data.deref(), &mut dest, &pager)?;
         assert!(dsd_header.in_page_size == u64::try_from(dest.len()).unwrap(), "la portion destinatrice en taille restreinte doit être remplie à 100%");
         assert!(dsd_header.total_size == u64::try_from(data.len()).unwrap(), "la totalité des données doivent avoir été écrites dans le pager");
         assert!(dsd_header.get_spill_page() == Some(PageId::from(1u64)), "il doit y avoir eu du débordement");
@@ -405,7 +406,7 @@ mod tests {
         // Efface les données stockées dans le tampon.
         data.deref_mut().fill(0);
 
-        read_dynamic_sized_data(
+        read_var(
             &dsd_header, 
             &mut Cursor::new(data.deref_mut().as_mut_slice()), 
             &dest, 

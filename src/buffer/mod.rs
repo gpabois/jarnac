@@ -12,7 +12,7 @@ use stress::BufferStressStrategy;
 
 use crate::{
     error::{Error, ErrorKind}, 
-    pager::page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, 
+    page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, 
     result::Result, 
     tag::JarTag, utils::Flip
 };

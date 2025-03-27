@@ -6,9 +6,9 @@ use std::{
 use byteorder::{LittleEndian, WriteBytesExt};
 use zerocopy::FromBytes;
 
-use crate::{fs::{FileOpenOptions, IFileSystem}, result::Result};
+use crate::{page::PageId, fs::{FileOpenOptions, IFileSystem}, result::Result};
 
-use super::{page::PageId, storage::IPagerStorageHandle, PagerMetadata, PAGER_HEADER_SIZE};
+use super::{storage::IPagerStorageHandle, PagerMetadata, PAGER_HEADER_SIZE};
 
 const PAGER_LOGS_HEADER_SIZE: u64 = 16;
 const PAGER_LOGS_PAGER_HEADER_LOC: u64 = PAGER_LOGS_HEADER_SIZE;
