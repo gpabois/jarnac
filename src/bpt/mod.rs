@@ -7,7 +7,7 @@ use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
 use crate::{
     pager::IPager, 
     error::{Error, ErrorKind}, 
-    knack::{GetKnackKind, Knack, KnackKind, MaybeSizedValueKind, SizedKnackKind}, 
+    knack::{kind::{GetKnackKind, KnackKind}, Knack}, 
     cell::CellCapacity, 
     page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, 
     var::{MaybeSpilled, VarMeta}, 
@@ -99,7 +99,7 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
                 return Ok(Some(tag));
             } else {
                 let interior = self.borrow_interior(&tag)?;
-                current = Some(interior.search_child(key, &self.as_descriptor().key_kind()))
+                current = Some(interior.search_child(key))
             }
         }
 
@@ -255,3 +255,4 @@ impl BPlusTreeDefinition {
         (valid && valid_value_requirements).then(|| Valid(self)).ok_or_else(|| Error::new(ErrorKind::InvalidBPlusTreeDefinition))
     }
 }
+

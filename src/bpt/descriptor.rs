@@ -1,6 +1,6 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{MaybeSized, Sized, Valid, VarSized}, knack::KnackKind};
+use crate::{knack::kind::KnackKind, page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{Comparable, MaybeSized, Sized, Valid, VarSized}};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
@@ -32,7 +32,7 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
         self.as_description().value_kind()
     }
 
-    pub fn key_kind(&self) -> Sized<KnackKind> {
+    pub fn key_kind(&self) -> Comparable<Sized<KnackKind>> {
         self.as_description().key_kind()
     }
 

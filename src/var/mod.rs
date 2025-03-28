@@ -293,7 +293,6 @@ pub fn free_overflow_pages<'a, Pager: IPager<'a>>(head: PageId, pager: &Pager) -
         let raw = pager.borrow_element(&tag)?;
         let page = SpillPageData::get(&raw);
         current = page.get_next().map(|pid| pager.tag().in_page(pid));
-        drop(page);
         pager.delete_element(&tag)?;
     }
 

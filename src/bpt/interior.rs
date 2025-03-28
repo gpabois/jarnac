@@ -1,16 +1,10 @@
-use std::ops::Range;
+use std::ops::{Div, Range};
 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    error::Error, 
-    cell::{Cell, CellCapacity, CellPage, Cells, WithCells}, 
-    page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, 
-    result::Result, 
-    tag::DataArea, 
-    utils::{Shift, Sized}, 
-    knack::{Knack, KnackKind}
+    cell::{Cell, CellCapacity, CellPage, Cells, WithCells}, error::Error, knack::{Knack, buf::KnackBuf, kind::KnackKind}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, result::Result, tag::DataArea, utils::{Comparable, Shift, Sized}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -38,15 +32,27 @@ impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeInterior<MutPage<'buf>> {
 }
 
 impl<Page> BPlusTreeInterior<Page> where Page: AsRefPageSlice {
-    pub fn search_child(&self, key: &Knack, key_kind: &Sized<KnackKind>) -> PageId {
+    pub fn search_child(&self, key: &Comparable<Knack>) -> PageId {
         let maybe_child: Option<PageId> = self.iter()
-            .filter(|&interior| interior.borrow_key(key_kind) >= key)
+            .filter(|&interior| interior.borrow_key() >= key)
             .next()
             .map(|interior| interior.left().clone())
             .unwrap_or_else(|| self.as_meta().tail())
             .into();
 
         maybe_child.expect("should have a child to perform the search")
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.0.is_full()
+    }
+    
+    pub fn parent(&self) -> Option<PageId> {
+        self.as_meta().parent()
+    }
+
+    pub fn tail(&self) -> Option<PageId> {
+        self.as_meta().tail()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &BPTreeInteriorCell<PageSlice>> {
@@ -67,6 +73,76 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
             desc.k,
             BPlusTreeInterior::<()>::reserved_space()
         ).map(Self)
+    }
+    
+    /// Insère un nouveau triplet {gauche | clé | droit} dans le noeud intérieur.
+    pub fn insert(&mut self, left: PageId, key: &Knack, key_kind: &Sized<KnackKind>, right: PageId) -> Result<()> {
+        let maybe_existing_cid = self.iter()
+            .filter(|cell| cell.left() == Some(left))
+            .map(|cell| cell.as_cell().id())
+            .last();
+       
+        match maybe_existing_cid {
+            None => {
+                // Le lien de gauche est en butée de cellule, on ajoute une cellule
+                if self.tail() == Some(left) {
+                    let cid = self.as_mut_cells().push()?;
+                    let cell = &mut self[&cid];
+                    cell.initialise(key, left);       
+                    self.as_mut_header().set_tail(Some(right));            
+                // Le noeud est vide
+                } else {
+                    let cid = self.as_mut_cells().push()?;
+                    let cell = &mut self[&cid];
+                    cell.initialise(key, left);
+                    self.as_mut_header().set_tail(Some(right))
+                }
+            },
+
+            // Il existe une cellule contenant déjà le lien gauche.
+            // On va intercaler une nouvelle cellule.
+            Some(existing_cid) => {
+                let cid = self.as_mut_cells().insert_after(&existing_cid)?;
+                let cell = &mut self[&cid];
+                cell.initialise(key, right);
+            },
+
+        };
+
+        Ok(())
+    }
+
+    /// Divise le noeud à la moitié de sa capacité et retourne la clé pivot.
+    pub fn split_into<P2>(&mut self, dest: &mut BPlusTreeInterior<P2>) -> Result<KnackBuf> where P2: AsMutPageSlice {
+        let at = self.0.len().div(2) + 1;
+        
+        self.0.split_at_into(&mut dest.0, at)?;
+        dest.set_tail(self.tail());
+
+
+        let (to_remove, pivot, new_left_tail) = self
+            .iter()
+            .last()
+            .map(|cell| (
+                cell.0.id(), 
+                cell.borrow_key().to_owned(), 
+                cell.left().unwrap()
+            ))
+            .unwrap();
+        
+        self.0.free_cell(&to_remove);
+        self.set_tail(Some(new_left_tail));
+
+        
+        Ok(pivot)
+    }
+
+    pub fn set_parent(&mut self, parent: Option<PageId>) {
+        self.as_mut_meta().set_parent(parent);
+    }
+
+    fn set_tail(&mut self, tail: Option<PageId>) {
+        self.as_mut_meta().set_tail(tail);
     }
 
     fn as_mut_meta(&mut self) -> &mut BPTreeInteriorMeta {
@@ -142,8 +218,8 @@ impl From<&mut Cell<PageSlice>> for &mut BPTreeInteriorCell<PageSlice> {
 }
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
-    pub fn borrow_key(&self, kind: &Sized<KnackKind>) -> &Knack {
-        Knack::from_ref(self.as_key_slice(kind))
+    pub fn borrow_key(&self) -> &Knack {
+        Knack::from_ref(self.as_key_slice())
     }
 
     pub fn left(&self) -> Option<PageId> {
@@ -158,21 +234,26 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker
         return 0..size_of::<OptionalPageId>()    
     }
 
-    fn key_range(&self, kind: &Sized<KnackKind>) -> Range<usize> {
-        kind.as_area().shift(size_of::<PageId>())
+    fn key_range(&self) -> Range<usize> {
+        self.kind().as_area().shift(size_of::<PageId>())
     }
 
     fn as_left_slice(&self) -> &[u8] {
         &self.as_cell().as_content_slice().as_bytes()[self.left_range()]
     }
 
-    fn as_key_slice(&self, kind: &Sized<KnackKind>) -> &[u8] {
-        &self.as_cell().as_content_slice()[self.key_range(kind)]
+    fn as_key_slice(&self) -> &[u8] {
+        &self.as_cell().as_content_slice()[self.key_range()]
+    }
+
+    fn kind(&self) -> Comparable<Sized<KnackKind>> {
+        let kind = KnackKind::try_from(&self.0[..size_of::<KnackKind>()]).unwrap();
+        kind.try_as_comparable().unwrap()
     }
 }
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?std::marker::Sized {
-    pub fn initialise(&mut self, kind: &Sized<KnackKind>, key: &Knack, left: PageId) {
+    pub fn initialise(&mut self, key: &Comparable<Knack>, left: PageId) {
         key.kind().outer_size().expect(&format!("expecting key to be a sized-type (kind: {0})", key.kind()));
         let loc = self.left_range().end;
         
@@ -181,12 +262,12 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?std::marker
             .as_mut_content_slice()
             .as_mut_bytes()[loc] = key.kind().clone().into();
 
-        self.borrow_mut_key(kind).set(key);
+        self.borrow_mut_key().set(key);
         self.set_left(Some(left));
     }
 
-    pub fn borrow_mut_key(&mut self, kind: &Sized<KnackKind>) -> &mut Knack {
-        Knack::from_mut(self.as_mut_key_slice(kind))
+    pub fn borrow_mut_key(&mut self) -> &mut Knack {
+        Knack::from_mut(self.as_mut_key_slice())
     }
 
     pub fn set_left(&mut self, left: Option<PageId>) {
@@ -206,8 +287,8 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?std::marker
         &mut self.as_mut_cell().as_mut_content_slice()[range]
     }
 
-    fn as_mut_key_slice(&mut self, kind: &Sized<KnackKind>) -> &mut [u8] {
-        let range = self.key_range(kind);
+    fn as_mut_key_slice(&mut self) -> &mut [u8] {
+        let range = self.key_range();
         &mut self.as_mut_cell().as_mut_content_slice()[range]
     }
 }

@@ -4,12 +4,12 @@ use std::ops::Range;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    error::Error, knack::{Knack, KnackCell, KnackKind}, 
+    error::Error, knack::{Knack, KnackCell, kind::KnackKind}, 
         cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
         page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, 
         var::{MaybeSpilled, Var}, 
         result::Result, 
-        tag::DataArea, utils::{MaybeSized, Shift, Sized}
+        tag::DataArea, utils::{MaybeSized, Sized}
 };
 
 use super::descriptor::BPlusTreeDescription;

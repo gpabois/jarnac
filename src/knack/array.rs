@@ -1,11 +1,11 @@
 use std::ops::Deref;
 
-use super::{IntoKnackBuf, KnackBuilder};
+use super::{buf::{IntoKnackBuf, KnackBuf}, KnackBuilder};
 
 pub struct Array(Vec<KnackBuilder>);
 
 impl IntoKnackBuf for Array {
-    fn into_value_buf(self) -> super::KnackBuf {
+    fn into_value_buf(self) -> KnackBuf {
         todo!()
     }
 }

@@ -2,16 +2,12 @@ use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
-use crate::{error::Error, result::Result, utils::VarSized};
+use crate::{error::Error, result::Result};
 
-use super::{FromKnack, GetKnackKind, IntoKnackBuf, IntoKnackBuilder, path::IntoKnackPath, Knack, KnackBuf, KnackBuilder, KnackKind, DOCUMENT_KIND, KV_PAIR_KIND};
+use super::{buf::{IntoKnackBuf, KnackBuf}, builder::IntoKnackBuilder, path::IntoKnackPath, FromKnack, GetKnackKind, Knack, KnackBuilder};
 
 pub struct KeyValue([u8]);
 
-impl GetKnackKind for KeyValue {
-    type Kind = VarSized<KnackKind>;
-    const KIND: VarSized<KnackKind> = VarSized::new(KV_PAIR_KIND);
-}
 impl Deref for KeyValue {
     type Target = [u8];
 
@@ -23,6 +19,8 @@ impl Deref for KeyValue {
 impl KeyValue {
     /// Lit une paire clé/valeur depuis la base de la tranche.
     pub fn read_from_slice(slice: &[u8]) -> &Self {
+        todo!();
+        /*
         let kind = KnackKind::from(slice[0]);
         KeyValue::KIND.assert_eq(&kind).expect("not a kv pair");
 
@@ -33,6 +31,7 @@ impl KeyValue {
         unsafe {
             std::mem::transmute(kv_slice)
         }
+         */
     }
 
     fn read_key_len(slice: &[u8]) -> u32 {
@@ -106,7 +105,7 @@ impl TryFrom<&Knack> for &DocumentRef {
     type Error = Error;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        DOCUMENT_KIND.assert_eq(value.kind())?;
+        Document::KIND.assert_eq(&value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -117,7 +116,7 @@ impl TryFrom<&mut Knack> for &mut DocumentRef {
     type Error = Error;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        DOCUMENT_KIND.assert_eq(value.kind())?;
+        Document::KIND.assert_eq(&value.kind())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -147,11 +146,6 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 #[derive(Default)]
 pub struct Document(HashMap<String, KnackBuilder>);
 
-impl GetKnackKind for Document {
-    type Kind = VarSized<KnackKind>;
-    const KIND: Self::Kind = VarSized::new(DOCUMENT_KIND);
-}
-
 impl FromKnack for Document {
     type Output = DocumentRef;
 
@@ -178,12 +172,6 @@ impl<Q> Index<Q> for Document where Q: IntoKnackPath {
     }
 }
 
-impl IntoKnackBuilder for Document {
-    fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Document(self)
-    }
-}
-
 impl Document {
     pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
         let key = key.into_value_buf();
@@ -207,13 +195,15 @@ impl Document {
 
 impl IntoKnackBuf for Document {
     fn into_value_buf(self) -> KnackBuf {
-        let mut buf: Vec<u8> = vec![Document::KIND.0.into()];
+        let mut buf: Vec<u8> = vec![];
+
+        buf.write_all(&Document::KIND).unwrap();
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
             buf.write_all(&kv).unwrap();
         }
 
-        KnackBuf(buf)
+        KnackBuf::from_bytes(buf)
     }
 }
 
