@@ -1,8 +1,9 @@
 use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
+use zerocopy::IntoBytes;
 
-use crate::{error::Error, result::Result};
+use super::{error::KnackError, marker::kernel::AsKernelRef, result::KnackResult};
 
 use super::{buf::{IntoKnackBuf, KnackBuf}, builder::IntoKnackBuilder, path::IntoKnackPath, FromKnack, GetKnackKind, Knack, KnackBuilder};
 
@@ -18,7 +19,7 @@ impl Deref for KeyValue {
 
 impl KeyValue {
     /// Lit une paire clé/valeur depuis la base de la tranche.
-    pub fn read_from_slice(slice: &[u8]) -> &Self {
+    pub fn read_from_slice(_slice: &[u8]) -> &Self {
         todo!();
         /*
         let kind = KnackKind::from(slice[0]);
@@ -82,9 +83,8 @@ impl DocumentRef {
         DocAttributesIter { doc: self, base: Self::KV_BASE }
     }
 
-    pub fn get<K: IntoKnackBuf>(&self, key: K) -> &Knack {
-        let key = key.into_value_buf();
-        self.iter().find(|kv| kv.key() == key.deref()).map(|kv| kv.value()).unwrap()
+    pub fn get<K: IntoKnackPath>(&self, _key: K) -> &Knack {
+        todo!()
     }
 
     pub fn to_owned(&self) -> Document {
@@ -102,10 +102,12 @@ impl Deref for DocumentRef {
     }
 }
 impl TryFrom<&Knack> for &DocumentRef {
-    type Error = Error;
+    type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        Document::KIND.assert_eq(&value.kind())?;
+        Document::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -113,10 +115,10 @@ impl TryFrom<&Knack> for &DocumentRef {
     }
 }
 impl TryFrom<&mut Knack> for &mut DocumentRef {
-    type Error = Error;
+    type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        Document::KIND.assert_eq(&value.kind())?;
+        Document::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
 
         unsafe {
             Ok(std::mem::transmute(value))
@@ -149,11 +151,11 @@ pub struct Document(HashMap<String, KnackBuilder>);
 impl FromKnack for Document {
     type Output = DocumentRef;
 
-    fn try_ref_from_knack(value: &Knack) -> Result<&Self::Output> {
+    fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
         value.try_into()    
     }
     
-    fn try_mut_from_knack(value: &mut Knack) -> Result<&mut Self::Output> {
+    fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
 }
@@ -197,7 +199,7 @@ impl IntoKnackBuf for Document {
     fn into_value_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![];
 
-        buf.write_all(&Document::KIND).unwrap();
+        buf.write_all(&Document::kind().as_kernel_ref().as_bytes()).unwrap();
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
             buf.write_all(&kv).unwrap();
@@ -210,6 +212,7 @@ impl IntoKnackBuf for Document {
 #[cfg(test)]
 mod tests {
     use crate::knack::document::Document;
+
 
     #[test]
     pub fn test_insert() {

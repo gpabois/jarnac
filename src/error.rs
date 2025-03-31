@@ -7,8 +7,9 @@ use std::{
 
 use zerocopy::TryFromBytes;
 
-use crate::{tag::JarTag, knack::KnackKind};
+use crate::tag::JarTag;
 use crate::page::PageKind;
+use crate::knack::error::KnackError as KnackError;
 
 pub struct Error {
     pub backtrace: Backtrace,
@@ -84,7 +85,7 @@ pub enum ErrorKind {
     SpilledVar,
     CellPageOverflow,
     CellPageFull,
-    WrongValueKind {expected: KnackKind, got: KnackKind},
+    KnackError(KnackError),
     InvalidBPlusTreeDefinition,
     IoError(io::Error),
 }
@@ -99,16 +100,16 @@ impl Display for ErrorKind {
             ErrorKind::InvalidPageKind(invalid_kind) => write!(f, "unknown page kind, got {0}", invalid_kind),
             ErrorKind::InvalidFormat => write!(f, "invalid pager format"),
             ErrorKind::WrongPageKind { expected, got } => {
-                                                        write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)
-                                                    }
+                                                                write!(f, "wrong page kind, expecting {0}, got {1}", expected, got)
+                                                            }
             ErrorKind::IoError(_) => write!(f, "an io error occured"),
             ErrorKind::PageNotCached(id) => write!(f, "page {id} not cached"),
             ErrorKind::CellPageFull => write!(f, "cell page is full"),
             ErrorKind::SpilledVar => write!(f, "var data has spilled"),
             ErrorKind::CellPageOverflow => write!(f, "cell space overflows allocated page space"),
-            ErrorKind::WrongValueKind { expected, got } => write!(f, "expecting value type {expected}, got {got} instead"),
             ErrorKind::PageLoadingFailed { tag: id, source } => write!(f, "failed to load page {id}, reason: {source}"),
             ErrorKind::InvalidBPlusTreeDefinition => write!(f, "the b+ tree definition is invalid"),
+            ErrorKind::KnackError(error) => todo!(),
         }
     }
 }

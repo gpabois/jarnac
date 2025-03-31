@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use super::marker::kernel::AsKernelRef;
 
 use super::{array::Array, buf::{IntoKnackBuf, KnackBuf}, document::Document, path::IntoKnackPath, GetKnackKind, Knack, KnackKind, Str, F32, F64, U16, U32, I128, I16, I32, I64, I8, U128, U64};
 
@@ -44,25 +44,25 @@ impl KnackBuilder {
     }
 
     pub fn cast<T: GetKnackKind + FromKnackBuilder + ?Sized>(&self) -> &T::Output {
-        self.kind().assert_eq(&T::KIND).expect("wrong types");
+        self.kind().assert_eq(&T::kind()).expect("wrong types");
         T::borrow_value(self)
     }
 
     pub fn cast_mut<T: GetKnackKind + FromKnackBuilder + ?Sized>(&mut self) -> &mut T::Output {
-        self.kind().assert_eq(&T::KIND).expect("wrong types");
+        self.kind().assert_eq(&T::kind()).expect("wrong types");
         T::borrow_mut_value(self)
     }
 
     pub fn is<T: GetKnackKind + ?Sized>(&self) -> bool {
-        self.kind() == T::KIND.deref()
+        self.kind() == *T::kind().as_kernel_ref()
     }
 
-    pub fn kind(&self) -> &KnackKind {
+    pub fn kind(&self) -> KnackKind {
         match self {
-            KnackBuilder::Document(_) => &Document::KIND,
+            KnackBuilder::Document(_) => Document::kind().as_kernel_ref().clone(),
             KnackBuilder::Array(_) => todo!(),
-            KnackBuilder::Str(_) => &str::KIND,
-            KnackBuilder::Other(value_buf) => value_buf.kind(),
+            KnackBuilder::Str(_) => str::kind().as_kernel_ref().clone(),
+            KnackBuilder::Other(value_buf) => *value_buf.kind(),
         }
     }
 }

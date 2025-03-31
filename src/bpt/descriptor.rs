@@ -94,8 +94,6 @@ pub struct BPlusTreeDescription {
     pub(super) flags: u8,
     /// Type de la clé
     pub(super) key_kind: KnackKind,
-    /// La taille de la clé
-    pub(super) key_size: u16,
     /// Type de la valeur
     pub(super) value_kind: KnackKind,
     /// La taille de la donnée stockable dans une cellule d'une feuille
@@ -112,7 +110,6 @@ impl BPlusTreeDescription {
             k: def.0.k,
             flags: def.0.flags,
             key_kind: def.0.key,
-            key_size: def.0.key_size,
             value_kind: def.0.value,
             value_size: def.0.value_size,
             root: None.into(),
@@ -120,7 +117,7 @@ impl BPlusTreeDescription {
         }
     }
 
-    pub fn key_kind(&self) -> Sized<KnackKind> {
+    pub fn key_kind(&self) -> Comparable<Sized<KnackKind>> {
         Sized::new(self.key_kind, usize::from(self.key_size))
     }
 
