@@ -5,15 +5,7 @@ use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
 use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
 
 use crate::{
-    pager::IPager, 
-    error::{Error, ErrorKind}, 
-    knack::{kind::{GetKnackKind, KnackKind}, Knack}, 
-    cell::CellCapacity, 
-    page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, 
-    var::{MaybeSpilled, VarMeta}, 
-    result::Result, 
-    tag::JarTag, 
-    utils::{MaybeSized, Sized, Valid}};
+    cell::CellCapacity, error::{Error, ErrorKind}, knack::{kind::{GetKnackKind, KnackKind}, marker::{kernel::AsKernelRef, AsComparable, AsSized}, Knack, KnackTypeId}, page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, pager::IPager, result::Result, tag::JarTag, utils::{MaybeSized, Sized, Valid}, var::{MaybeSpilled, VarMeta}};
 
 pub mod descriptor;
 pub mod leaf;
@@ -160,19 +152,20 @@ impl TryFrom<u8> for BPTreeNodeKind {
 /// Les arguments à passer pour instancier un nouvel arbre B
 pub struct BPlusTreeArgs {
     k: Option<CellCapacity>,
-    key: Sized<KnackKind>,
-    value: MaybeSized<KnackKind>,
+    key: KnackKind,
+    value: KnackKind,
 }
 
 impl BPlusTreeArgs {
     pub fn new<K, V>(k: Option<CellCapacity>) -> Self where 
-        K: GetKnackKind<Kind=SizedKnackKind>,
-        V: GetKnackKind, 
-        V::Kind: Into<MaybeSizedValueKind> {
+        K: GetKnackKind,
+        K::Kind: AsSized<KnackKind> + AsComparable<KnackKind>,
+        V: GetKnackKind 
+{
         Self {
             k,
-            key: K::KIND,
-            value: V::KIND.into()
+            key: K::kind().as_kernel_ref().clone(),
+            value: V::kind().as_kernel_ref().clone()
         }
     }
 
@@ -232,9 +225,7 @@ pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
     key: KnackKind,
-    key_size: u16,
     value: KnackKind,
-    value_size: u16,
     page_size: PageSize
 }
 impl BPlusTreeDefinition {
@@ -242,7 +233,8 @@ impl BPlusTreeDefinition {
     pub const VAL_IS_VAR_SIZED: u8 = 0b10;
 
     pub fn validate(self) -> Result<Valid<BPlusTreeDefinition>> {
-        let key_kind = Sized::new(self.key, self.key_size.into());
+        let key_kind = self.key.try_as_sized().unwrap();
+        
         let valid = BPlusTreeLeaf::<()>::within_available_cell_space_size(self.page_size, key_kind, self.value_size, self.k)
             && BPlusTreeInterior::<()>::within_available_cell_space_size(self.page_size, key_kind, self.k);
 

@@ -79,11 +79,11 @@ impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPageSlice {
 }
 
 impl BPlusTreeLeaf<()> {
-    pub fn compute_cell_content_size(key: Sized<KnackKind>, value_size: u16) -> u16 {
+    pub fn compute_cell_content_size(key: &Sized<KnackKind>, value_size: u16) -> u16 {
         u16::try_from(key.outer_size()).unwrap() + value_size
     }
     /// Calcule la taille disponible dans une cellule pour stocker une valeur.
-    pub fn compute_available_value_space_size(page_size: PageSize, key: Sized<KnackKind>, k: CellCapacity) -> u16 {
+    pub fn compute_available_value_space_size(page_size: PageSize, key: &Sized<KnackKind>, k: CellCapacity) -> u16 {
         let key_size = u16::try_from(key.outer_size()).unwrap();
         let max_cell_size = Cells::compute_available_cell_content_size(page_size, Self::reserved_space(), k);
         max_cell_size - key_size
@@ -93,7 +93,7 @@ impl BPlusTreeLeaf<()> {
         u16::try_from(size_of::<BPTreeLeafMeta>()).unwrap()
     }
 
-    pub fn within_available_cell_space_size(page_size: PageSize, key: Sized<KnackKind>, value_size: u16, k: CellCapacity) -> bool {
+    pub fn within_available_cell_space_size(page_size: PageSize, key: &Sized<KnackKind>, value_size: u16, k: CellCapacity) -> bool {
         let content_size = Self::compute_cell_content_size(key, value_size);
         Cells::within_available_cell_space_size(page_size, Self::reserved_space(), content_size, k)
     }
