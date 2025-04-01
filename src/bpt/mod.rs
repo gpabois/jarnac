@@ -1,11 +1,16 @@
-use std::ops::Deref;
 
 use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
 use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::CellCapacity, error::{Error, ErrorKind}, knack::{kind::{GetKnackKind, KnackKind}, marker::{kernel::AsKernelRef, AsComparable, AsSized}, Knack, KnackTypeId}, page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, pager::IPager, result::Result, tag::JarTag, utils::{MaybeSized, Sized, Valid}, var::{MaybeSpilled, VarMeta}};
+    cell::CellCapacity, 
+    error::{Error, ErrorKind}, 
+    knack::{kind::{GetKnackKind, KnackKind}, 
+    marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized}, Knack}, 
+    page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, 
+    pager::IPager, result::Result, tag::JarTag, utils::Valid, var::{MaybeSpilled, VarMeta}};
 
 pub mod descriptor;
 pub mod leaf;
@@ -17,7 +22,11 @@ pub struct BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
 }
 
 impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
-    pub fn new(arena: &'nodes Arena, args: BPlusTreeArgs) -> Result<Self> {
+    pub fn new<Key, Value>(arena: &'nodes Arena, args: BPlusTreeArgs<Key::Kind, Value::Kind>) -> Result<Self> 
+        where Key: GetKnackKind, 
+                Key::Kind: AsFixedSized + AsComparable,
+                Value: GetKnackKind
+    {
         let node_size: PageSize = arena.size_of().try_into().unwrap();
         let valid_definition = args.define(node_size).validate()?;
 
@@ -84,14 +93,14 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
         let mut current = self.as_descriptor().root();
 
         // Le type de la clé passée en argument doit être celle supportée par l'arbre.
-        assert_eq!(key.kind(), self.as_descriptor().key_kind().deref(), "wrong key type");
+        assert_eq!(key.kind(), self.as_descriptor().key_kind().as_kernel_ref(), "wrong key type");
 
         while let Some(tag) = current.as_ref().map(|&pid| self.tag.in_page(pid)) {
             if self.node_kind(&tag)? == BPTreeNodeKind::Leaf {
                 return Ok(Some(tag));
             } else {
                 let interior = self.borrow_interior(&tag)?;
-                current = Some(interior.search_child(key))
+                current = Some(interior.search_child(key.try_as_comparable().unwrap()))
             }
         }
 
@@ -150,40 +159,48 @@ impl TryFrom<u8> for BPTreeNodeKind {
 }
 
 /// Les arguments à passer pour instancier un nouvel arbre B
-pub struct BPlusTreeArgs {
+pub struct BPlusTreeArgs<K, V> 
+    where K: AsFixedSized<Kernel=KnackKind> + AsComparable<Kernel = KnackKind>, 
+            V: AsKernelRef<Kernel = KnackKind>
+{
     k: Option<CellCapacity>,
-    key: KnackKind,
-    value: KnackKind,
+    key: K,
+    value: V,
 }
 
-impl BPlusTreeArgs {
-    pub fn new<K, V>(k: Option<CellCapacity>) -> Self where 
-        K: GetKnackKind,
-        K::Kind: AsSized<KnackKind> + AsComparable<KnackKind>,
-        V: GetKnackKind 
+impl<K, V> BPlusTreeArgs<K, V>
+    where K: AsFixedSized<Kernel=KnackKind> + AsComparable<Kernel = KnackKind>,
+            V: AsKernelRef<Kernel = KnackKind>
 {
+    pub fn new<Key, Value>(k: Option<CellCapacity>) -> Self 
+        where Key: GetKnackKind<Kind=K>, Value: GetKnackKind<Kind=V>
+    {
         Self {
             k,
-            key: K::kind().as_kernel_ref().clone(),
-            value: V::kind().as_kernel_ref().clone()
+            key: Key::kind(),
+            value: Value::kind()
         }
     }
 
 }
-impl BPlusTreeArgs {
+
+impl<K, V> BPlusTreeArgs<K, V> 
+    where K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind>, 
+            V: AsKernelRef<Kernel = KnackKind> 
+{
     /// Prend les exigences et transforme cela en une définition des paramètres de l'arbre B+.
     pub fn define(self, page_size: PageSize) -> BPlusTreeDefinition {
         let k = self.k.unwrap_or_else(|| self.find_best_k(page_size));
-        let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(page_size, self.key, k);
+        let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(page_size, self.key.as_fixed_sized(), k);
 
-        let (flags, value_size) = match self.value {
-            MaybeSized::Sized(sized) => {
+        let (flags, in_cell_value_size) = match self.value.as_kernel_ref().as_sized() {
+            Sized::Fixed(sized) => {
                 let value_size = u16::try_from(sized.outer_size()).unwrap();
                 let will_spill = value_size > available_value_size;
 
                 (will_spill.then_some(BPlusTreeDefinition::VAL_IS_VAR_SIZED).unwrap_or_default(), value_size)
             },
-            MaybeSized::Var(_) => {                
+            Sized::Var(_) => {                
                 (BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0)
             },
         };
@@ -191,10 +208,11 @@ impl BPlusTreeArgs {
         BPlusTreeDefinition {
             k,
             flags,
-            key: *self.key.deref(),
-            key_size: u16::try_from(self.key.outer_size()).unwrap(),
-            value: self.value.into_inner(),
-            value_size,
+            key: unsafe {
+                std::mem::transmute(self.key.as_kernel_ref().clone())
+            },
+            value: self.value.as_kernel_ref().clone(),
+            in_cell_value_size,
             page_size
         }
     }
@@ -204,16 +222,32 @@ impl BPlusTreeArgs {
         (1..CellCapacity::MAX)
             .into_iter()
             .filter(|&k| {
-                let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(page_size, self.key, k);
+                let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(
+                    page_size, 
+                    self.key.as_fixed_sized(), 
+                    k
+                );
 
-                let value_size = self.value
-                    .outer_size()
-                    .map(|size| u16::try_from(size).unwrap())
+                let value_size = self.value.as_kernel_ref()
+                    .try_as_fixed_sized()
+                    .map(|fxd| u16::try_from(fxd.outer_size()).unwrap())
                     .unwrap_or_else(|| available_value_size)
                     .min(available_value_size);
 
-                BPlusTreeLeaf::<()>::within_available_cell_space_size(page_size, self.key, value_size, k)
-                && BPlusTreeInterior::<()>::within_available_cell_space_size(page_size, self.key, k)
+                let leaf_compliant = BPlusTreeLeaf::<()>::within_available_cell_space_size(
+                    page_size, 
+                    self.key.as_fixed_sized(), 
+                    value_size, 
+                    k
+                );
+
+                let interior_compliant = BPlusTreeInterior::<()>::within_available_cell_space_size(
+                    page_size, 
+                    self.key.as_fixed_sized(), 
+                    k
+                );
+
+                leaf_compliant && interior_compliant
             })
             .last()
             .expect("cannot find k")
@@ -221,25 +255,42 @@ impl BPlusTreeArgs {
 
 }
 
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
     key: KnackKind,
     value: KnackKind,
+    in_cell_value_size: u16,
     page_size: PageSize
 }
+
 impl BPlusTreeDefinition {
     pub const VAL_WILL_SPILL: u8 = 0b1;
     pub const VAL_IS_VAR_SIZED: u8 = 0b10;
 
     pub fn validate(self) -> Result<Valid<BPlusTreeDefinition>> {
-        let key_kind = self.key.try_as_sized().unwrap();
-        
-        let valid = BPlusTreeLeaf::<()>::within_available_cell_space_size(self.page_size, key_kind, self.value_size, self.k)
-            && BPlusTreeInterior::<()>::within_available_cell_space_size(self.page_size, key_kind, self.k);
+        let key_kind = self.key
+            .try_as_fixed_sized()
+            .expect("the key kind must be fixed sized");
+
+        let leaf_compliant = BPlusTreeLeaf::<()>::within_available_cell_space_size(
+            self.page_size, 
+            key_kind, 
+            self.in_cell_value_size, 
+            self.k
+        );
+
+        let interior_compliant = BPlusTreeInterior::<()>::within_available_cell_space_size(
+            self.page_size, 
+            key_kind, 
+            self.k
+        );
+
+        let valid = leaf_compliant && interior_compliant;
 
         let valid_value_requirements = if self.flags & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0 {
-            self.value_size >= u16::try_from(size_of::<VarMeta>()).unwrap()
+            self.in_cell_value_size >= u16::try_from(size_of::<VarMeta>()).unwrap()
         } else {
             true
         };

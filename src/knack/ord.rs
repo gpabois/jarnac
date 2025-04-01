@@ -1,14 +1,20 @@
+use std::ops::Deref;
+
+use super::{marker::Comparable, Knack, GetKnackKind as _};
+
 
 impl PartialEq<Knack> for Comparable<Knack> {
     fn eq(&self, other: &Knack) -> bool {
-        self.raw_value() == other.raw_value()
+        self.as_value_bytes() == other.as_value_bytes()
     }
 }
 
 
 impl PartialOrd<Knack> for Comparable<Knack> {
     fn partial_cmp(&self, other: &Knack) -> Option<std::cmp::Ordering> {
-        if self.kind().deref() != other.kind() {
+        let other = other.try_as_comparable().unwrap();
+
+        if self.kind() != other.kind() {
             return None
         }
 

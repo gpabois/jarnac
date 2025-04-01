@@ -4,12 +4,11 @@ use std::ops::Range;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    error::Error, knack::{Knack, KnackCell, kind::KnackKind}, 
-        cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
-        page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, 
-        var::{MaybeSpilled, Var}, 
-        result::Result, 
-        tag::DataArea, utils::{MaybeSized, Sized}
+    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
+    error::Error, 
+    knack::{kind::KnackKind, marker::{sized::Sized, AsComparable, AsFixedSized, Comparable, FixedSized}, Knack, KnackCell}, 
+    page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, 
+    result::Result, tag::DataArea, utils::Shift, var::{MaybeSpilled, Var}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -43,8 +42,8 @@ impl<Page> BPlusTreeLeaf<Page> where Page: AsMutPageSlice {
         
         CellPage::new(
             page, 
-            BPlusTreeLeaf::<()>::compute_cell_content_size(desc.key_kind(), desc.value_size),
-            desc.k,
+            desc.leaf_content_size(),
+            desc.k(),
             BPlusTreeLeaf::<()>::reserved_space()
         ).map(Self)
     }
@@ -61,10 +60,14 @@ impl<'buf> BPlusTreeLeaf<RefPage<'buf>> {
         Some(BPTreeLeafCell(self.0.into_cell(cid)?))
     }
 
-    pub fn into_value(self, key: &Knack, key_kind: &Sized<KnackKind>, value_kind: &MaybeSized<KnackKind>) -> Option<MaybeSpilled<RefPageSlice<'buf>>> {
+    pub fn into_value(self, key: &Knack, key_kind: &FixedSized<KnackKind>, value_kind: &KnackKind) -> Option<MaybeSpilled<RefPageSlice<'buf>>> {
         self
         .into_iter()
-        .filter(|cell| cell.borrow_key(key_kind) == key)
+        .filter(|cell| {
+            cell
+                .borrow_key()
+                .as_comparable() == key
+        })
         .map(|cell| cell.into_value(key_kind, value_kind))
         .last()
     }
@@ -79,11 +82,11 @@ impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPageSlice {
 }
 
 impl BPlusTreeLeaf<()> {
-    pub fn compute_cell_content_size(key: &Sized<KnackKind>, value_size: u16) -> u16 {
+    pub fn compute_cell_content_size(key: &FixedSized<KnackKind>, value_size: u16) -> u16 {
         u16::try_from(key.outer_size()).unwrap() + value_size
     }
     /// Calcule la taille disponible dans une cellule pour stocker une valeur.
-    pub fn compute_available_value_space_size(page_size: PageSize, key: &Sized<KnackKind>, k: CellCapacity) -> u16 {
+    pub fn compute_available_value_space_size(page_size: PageSize, key: &FixedSized<KnackKind>, k: CellCapacity) -> u16 {
         let key_size = u16::try_from(key.outer_size()).unwrap();
         let max_cell_size = Cells::compute_available_cell_content_size(page_size, Self::reserved_space(), k);
         max_cell_size - key_size
@@ -93,7 +96,7 @@ impl BPlusTreeLeaf<()> {
         u16::try_from(size_of::<BPTreeLeafMeta>()).unwrap()
     }
 
-    pub fn within_available_cell_space_size(page_size: PageSize, key: &Sized<KnackKind>, value_size: u16, k: CellCapacity) -> bool {
+    pub fn within_available_cell_space_size(page_size: PageSize, key: &FixedSized<KnackKind>, value_size: u16, k: CellCapacity) -> bool {
         let content_size = Self::compute_cell_content_size(key, value_size);
         Cells::within_available_cell_space_size(page_size, Self::reserved_space(), content_size, k)
     }
@@ -117,15 +120,15 @@ pub struct BPTreeLeafCell<Slice>(Cell<Slice>) where Slice: AsRefPageSlice + ?std
 
 impl<'buf> BPTreeLeafCell<RefPageSlice<'buf>> {
     /// Transforme la cellule en une valeur possédant une référence vers une tranche de la page.
-    pub fn into_value(self, key_kind: &Sized<KnackKind>, value_kind: &MaybeSized<KnackKind>) -> MaybeSpilled<RefPageSlice<'buf>> {
-        match value_kind {
-            MaybeSized::Sized(sized) => {
+    pub fn into_value(self, key_kind: &FixedSized<KnackKind>, value_kind: &KnackKind) -> MaybeSpilled<RefPageSlice<'buf>> {
+        match value_kind.as_sized() {
+            Sized::Fixed(sized) => {
                 let value_range = sized.as_area().shift(key_kind.outer_size());
                 let value_bytes = self.0.into_content_slice().into_page_slice(value_range);
                 KnackCell::from(value_bytes).into()
             },
-            MaybeSized::Var(_) => {
-                let value_range = key_kind.1..;
+            Sized::Var(_) => {
+                let value_range = key_kind.outer_size()..;
                 let value_bytes = self.0.into_content_slice().into_page_slice(value_range);
                 Var::from_owned_slice(value_bytes).into()
             },
@@ -160,13 +163,27 @@ where Slice: AsRefPageSlice + ?std::marker::Sized
         &self.0
     }
 
-    pub fn borrow_key(&self, kind: &Sized<KnackKind>) -> &Knack {
-        let slice = &self.as_cell().as_content_slice()[Self::key_area(kind)];
-        Knack::from_ref(slice)
+    pub fn borrow_key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
+        let kernel: &KnackKind = self.as_cell()
+            .as_content_slice()[..size_of::<KnackKind>()]
+            .as_bytes()
+            .try_into()
+            .unwrap();
+        
+        unsafe {
+            std::mem::transmute(kernel)
+        }
     }
 
-    pub fn key_area(kind: &Sized<KnackKind>) -> Range<usize> {
-        0..kind.outer_size()
+    pub fn borrow_key(&self) -> &Comparable<FixedSized<Knack>> {
+        let slice = &self.as_cell().as_content_slice()[self.key_area()];
+        unsafe {
+            std::mem::transmute(Knack::from_ref(slice))
+        }
+    }
+
+    pub fn key_area(&self) -> Range<usize> {
+        0..self.borrow_key_kind().as_fixed_sized().outer_size()
     }
 }
 

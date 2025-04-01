@@ -37,32 +37,13 @@ impl<T, E> Flip for std::result::Result<Option<T>, E> {
 /// Type utilisé pour assurer des types de données valides.
 pub struct Valid<T>(pub(crate) T);
 
-#[derive(Clone, Copy)]
-/// Type utilisé pour assurer que le type de donnée ait une taille déterminée.
-pub struct Sized<T>(pub(crate)T);
-
-impl<T> Deref for Sized<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl<T> Valid<T> {
+    pub fn into_inner(self) -> T {
+        self.0
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct VarSized<T>(pub(crate)T);
-
-impl<T> Deref for VarSized<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+pub enum Either<L,R> {
+    Left(L),
+    Right(R)
 }
-
-#[derive(Clone, Copy)]
-pub struct MaybeSized<T>(pub(crate)T) where T: ?std::marker::Sized;
-
-pub struct Comparable<T>(pub(crate) T) where T: ?std::marker::Sized;
-
-pub struct MaybeComparable<T>(pub(crate) T) where T: ?std::marker::Sized;

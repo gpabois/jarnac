@@ -1,6 +1,6 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{knack::kind::KnackKind, page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::{Comparable, MaybeSized, Sized, Valid, VarSized}};
+use crate::{knack::{kind::KnackKind, marker::{AsFixedSized, Comparable, FixedSized}}, page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::Valid};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
@@ -21,23 +21,23 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
 
     /// Le nombre de cellules que peut contenir un noeud intérieur ou une feuille.
     pub fn k(&self) -> u8 {
-        self.as_description().k
+        self.as_description().k()
     }
 
     pub fn root(&self) -> Option<PageId> {
         self.as_description().root.into()
     }
 
-    pub fn value_kind(&self) -> MaybeSized<KnackKind> {
+    pub fn value_kind(&self) -> &KnackKind {
         self.as_description().value_kind()
     }
 
-    pub fn key_kind(&self) -> Comparable<Sized<KnackKind>> {
+    pub fn key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
         self.as_description().key_kind()
     }
 
     pub fn is_var_sized(&self) -> bool {
-        return self.as_description().flags & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
+        return self.as_description().flags() & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
     }
 
     pub(super) fn as_description(&self) -> &BPlusTreeDescription {
@@ -88,16 +88,8 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C, packed)]
 pub struct BPlusTreeDescription {
-    /// Nombre maximum de clés dans l'arbre B+
-    pub(super) k: u8,
-    /// Quelques caractéristiques de l'Arbre B+ (VAL_WILL_SPILL, VAL_IS_VAR_SIZED)
-    pub(super) flags: u8,
-    /// Type de la clé
-    pub(super) key_kind: KnackKind,
-    /// Type de la valeur
-    pub(super) value_kind: KnackKind,
-    /// La taille de la donnée stockable dans une cellule d'une feuille
-    pub(super) value_size: u16,
+    /// Définition de l'arbre B+
+    pub(super) def: BPlusTreeDefinition,
     /// Pointeur vers la racine
     pub(super) root: OptionalPageId,
     /// Nombre d'éléments stockés
@@ -107,34 +99,36 @@ pub struct BPlusTreeDescription {
 impl BPlusTreeDescription {
     pub fn new(def: Valid<BPlusTreeDefinition>) -> Self {
         Self {
-            k: def.0.k,
-            flags: def.0.flags,
-            key_kind: def.0.key,
-            value_kind: def.0.value,
-            value_size: def.0.value_size,
+            def: def.into_inner(),
             root: None.into(),
             len: 0
         }
     }
 
-    pub fn key_kind(&self) -> Comparable<Sized<KnackKind>> {
-        Sized::new(self.key_kind, usize::from(self.key_size))
+    pub fn k(&self) -> u8 {
+        self.def.k
     }
 
-    pub fn value_kind(&self) -> MaybeSized<KnackKind> {
-        if self.flags | BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0 {
-            return MaybeSized::Var(VarSized::new(self.value_kind))
-        } else {
-            return MaybeSized::Sized(Sized::new(self.value_kind, self.value_size.into()))
+    pub fn flags(&self) -> &u8 {
+        &self.def.flags
+    }
+
+    pub fn value_kind(&self) -> &KnackKind {
+        &self.def.value
+    }
+
+    pub fn key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
+        unsafe {
+            std::mem::transmute(&self.def.key)
         }
     }
 
     pub fn leaf_content_size(&self) -> u16 {
-        BPlusTreeLeaf::<()>::compute_cell_content_size(self.key_kind(), self.value_size)
+        BPlusTreeLeaf::<()>::compute_cell_content_size(self.key_kind().as_fixed_sized(), self.def.in_cell_value_size)
     }
 
     pub fn interior_content_size(&self) -> u16 {
-        BPlusTreeInterior::<()>::compute_cell_content_size(self.key_kind())
+        BPlusTreeInterior::<()>::compute_cell_content_size(self.key_kind().as_fixed_sized())
     }
 
     pub fn set_root(&mut self, root: Option<PageId>) {

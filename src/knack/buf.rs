@@ -75,7 +75,7 @@ impl From<(String, KnackBuilder)> for KnackBuf {
         buf.write_all(KeyValue::kind().as_kernel_ref().as_bytes()).unwrap();
         let v = kv.1.into_value_buf();
         let k = kv.0;
-        let size: u32 = u32::try_from(k.len() + v.len()).unwrap();
+        let size: u32 = u32::try_from(k.len() + v.as_bytes().len()).unwrap();
         buf.write_all(&size.to_le_bytes()).unwrap();
         buf.write_all(k.as_bytes()).unwrap();
         buf.write_all(v.as_bytes()).unwrap();

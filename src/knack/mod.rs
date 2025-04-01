@@ -15,6 +15,7 @@ pub mod marker;
 pub mod error;
 pub mod result;
 pub mod prelude;
+pub mod ord;
 
 use std::ops::{Deref, DerefMut};
 
@@ -22,11 +23,11 @@ use buf::KnackBuf;
 use builder::KnackBuilder;
 use error::KnackError;
 use kind::{GetKnackKind, KnackKind};
-use marker::kernel::AsKernelRef;
+use marker::{kernel::AsKernelRef, Comparable};
 use result::KnackResult;
 use zerocopy::{FromBytes, LittleEndian};
 
-use crate::{error::Error, result::Result};
+use crate::{error::Error, page::{AsRefPageSlice, PageSlice}, result::Result};
 
 pub type KnackTypeId = u8;
 pub type KnackSize = u16;
@@ -46,28 +47,28 @@ pub trait FromKnack: GetKnackKind {
 }
 
 
-pub struct KnackCell<Slice>(Slice) where Slice: AsRef<[u8]>;
+pub struct KnackCell<Slice>(Slice) where Slice: AsRefPageSlice;
 
-impl<Slice> From<Slice> for KnackCell<Slice> where Slice: AsRef<[u8]> {
+impl<Slice> From<Slice> for KnackCell<Slice> where Slice: AsRefPageSlice {
     fn from(value: Slice) -> Self {
         Self(value)
     }
 }
 
-impl<Slice> Deref for KnackCell<Slice> where Slice: AsRef<[u8]> {
+impl<Slice> Deref for KnackCell<Slice> where Slice: AsRefPageSlice {
     type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
-        <&Knack>::from(self.0.as_ref())
+        <&Knack>::from(self.0.as_bytes())
     }
 }
 
-pub enum CowKnack<Slice> where Slice: AsRef<[u8]> {
+pub enum CowKnack<Slice> where Slice: AsRefPageSlice {
     Borrow(KnackCell<Slice>),
     Owned(KnackBuf)
 }
 
-impl<Slice> Deref for CowKnack<Slice> where Slice: AsRef<[u8]> {
+impl<Slice> Deref for CowKnack<Slice> where Slice: AsRefPageSlice {
     type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
@@ -82,9 +83,18 @@ pub struct Knack([u8]);
 
 impl std::fmt::Display for Knack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{0}({1:?})", self.kind(), self.raw_value())
+        write!(f, "{0}({1:?})", self.kind(), self.as_value_bytes())
     }
 }
+
+impl From<&PageSlice> for &Knack {
+    fn from(value: &PageSlice) -> Self {
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+}
+
 impl From<&[u8]> for &Knack {
     fn from(value: &[u8]) -> Self {
         unsafe {
@@ -92,14 +102,13 @@ impl From<&[u8]> for &Knack {
         }
     }
 }
- 
-impl Deref for Knack {
-    type Target = [u8];
 
-    fn deref(&self) -> &Self::Target {
+impl AsRef<[u8]> for Knack {
+    fn as_ref(&self) -> &[u8] {
         &self.0
     }
 }
+
 impl Knack {
     pub(crate) fn from_ref(bytes: &[u8]) -> &Self {
         unsafe {
@@ -114,8 +123,8 @@ impl Knack {
         }
     }
 
-    pub fn is<T: GetKnackKind + ?std::marker::Sized>(&self) -> bool {
-        T::kind().as_ref().assert_eq(self.kind()).is_ok()
+    pub fn is<T>(&self) -> bool where T: GetKnackKind + ?std::marker::Sized {
+        T::kind().as_kernel_ref().assert_eq(self.kind()).is_ok()
     }
 
     pub fn cast<T: FromKnack + ?std::marker::Sized>(&self) -> &T::Output {
@@ -134,10 +143,20 @@ impl Knack {
     }
 
     pub fn set(&mut self, value: &Self) {
-        self.0.clone_from_slice(value.deref());
+        self.0.clone_from_slice(value.as_ref());
     }
 
-    fn raw_value(&self) -> &[u8] {
+    pub fn try_as_comparable(&self) -> Option<&Comparable<Self>> {
+        self.kind().try_as_comparable().map(|_| unsafe {
+            std::mem::transmute(self)
+        })
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        self.as_ref()
+    }
+
+    pub fn as_value_bytes(&self) -> &[u8] {
         &self.0[size_of::<KnackKind>()..]
     }
 

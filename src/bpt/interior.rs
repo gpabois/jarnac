@@ -4,7 +4,12 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::{Cell, CellCapacity, CellPage, Cells, WithCells}, error::Error, knack::{Knack, buf::KnackBuf, kind::KnackKind}, page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, result::Result, tag::DataArea, utils::{Comparable, Shift, Sized}
+    cell::{Cell, CellCapacity, CellPage, Cells, WithCells}, 
+    error::Error, 
+    knack::{buf::KnackBuf, kind::KnackKind, marker::{kernel::AsKernelRef, AsComparable, Comparable, FixedSized}, Knack}, 
+    page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, 
+    result::Result, 
+    tag::DataArea, utils::Shift, 
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -34,7 +39,7 @@ impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeInterior<MutPage<'buf>> {
 impl<Page> BPlusTreeInterior<Page> where Page: AsRefPageSlice {
     pub fn search_child(&self, key: &Comparable<Knack>) -> PageId {
         let maybe_child: Option<PageId> = self.iter()
-            .filter(|&interior| interior.borrow_key() >= key)
+            .filter(|&interior| interior.borrow_key().as_comparable() >= key.as_kernel_ref())
             .next()
             .map(|interior| interior.left().clone())
             .unwrap_or_else(|| self.as_meta().tail())
@@ -70,13 +75,13 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
         CellPage::new(
             page, 
             BPlusTreeInterior::<()>::compute_cell_content_size(desc.key_kind()),
-            desc.k,
+            desc.k(),
             BPlusTreeInterior::<()>::reserved_space()
         ).map(Self)
     }
     
     /// Insère un nouveau triplet {gauche | clé | droit} dans le noeud intérieur.
-    pub fn insert(&mut self, left: PageId, key: &Knack, key_kind: &Sized<KnackKind>, right: PageId) -> Result<()> {
+    pub fn insert(&mut self, left: PageId, key: &Knack, right: PageId) -> Result<()> {
         let maybe_existing_cid = self.iter()
             .filter(|cell| cell.left() == Some(left))
             .map(|cell| cell.as_cell().id())
@@ -86,23 +91,23 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
             None => {
                 // Le lien de gauche est en butée de cellule, on ajoute une cellule
                 if self.tail() == Some(left) {
-                    let cid = self.as_mut_cells().push()?;
+                    let cid = self.0.push()?;
                     let cell = &mut self[&cid];
                     cell.initialise(key, left);       
-                    self.as_mut_header().set_tail(Some(right));            
+                    self.as_mut_meta().set_tail(Some(right));            
                 // Le noeud est vide
                 } else {
-                    let cid = self.as_mut_cells().push()?;
+                    let cid = self.0.push()?;
                     let cell = &mut self[&cid];
                     cell.initialise(key, left);
-                    self.as_mut_header().set_tail(Some(right))
+                    self.as_mut_meta().set_tail(Some(right))
                 }
             },
 
             // Il existe une cellule contenant déjà le lien gauche.
             // On va intercaler une nouvelle cellule.
             Some(existing_cid) => {
-                let cid = self.as_mut_cells().insert_after(&existing_cid)?;
+                let cid = self.0.insert_after(&existing_cid)?;
                 let cell = &mut self[&cid];
                 cell.initialise(key, right);
             },
@@ -152,11 +157,11 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
 
 
 impl BPlusTreeInterior<()> {
-    pub fn compute_cell_content_size(key: Sized<KnackKind>) -> PageSize {
+    pub fn compute_cell_content_size(key: &FixedSized<KnackKind>) -> PageSize {
         u16::try_from(size_of::<PageId>()+ key.outer_size()).unwrap()
     }
 
-    pub fn within_available_cell_space_size(page_size: PageSize, key: Sized<KnackKind>, k: CellCapacity) -> bool {
+    pub fn within_available_cell_space_size(page_size: PageSize, key: &FixedSized<KnackKind>, k: CellCapacity) -> bool {
         let content_size = Self::compute_cell_content_size(key);
         Cells::within_available_cell_space_size(page_size, Self::reserved_space(), content_size, k)
     }
@@ -218,8 +223,10 @@ impl From<&mut Cell<PageSlice>> for &mut BPTreeInteriorCell<PageSlice> {
 }
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker::Sized {
-    pub fn borrow_key(&self) -> &Knack {
-        Knack::from_ref(self.as_key_slice())
+    pub fn borrow_key(&self) -> &Comparable<FixedSized<Knack>> {
+        unsafe {
+            std::mem::transmute(Knack::from_ref(self.as_key_slice()))
+        }
     }
 
     pub fn left(&self) -> Option<PageId> {
@@ -246,9 +253,11 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker
         &self.as_cell().as_content_slice()[self.key_range()]
     }
 
-    fn kind(&self) -> Comparable<Sized<KnackKind>> {
-        let kind = KnackKind::try_from(&self.0[..size_of::<KnackKind>()]).unwrap();
-        kind.try_as_comparable().unwrap()
+    fn kind(&self) -> &Comparable<FixedSized<KnackKind>> {
+        let kind = <&KnackKind>::try_from(self.0[..size_of::<KnackKind>()].as_bytes()).unwrap();
+        unsafe {
+            std::mem::transmute(kind)
+        }
     }
 }
 

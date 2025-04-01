@@ -6,7 +6,7 @@ use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::{pager::IPager, knack::{CowKnack, Knack, KnackBuf, KnackCell}, result::Result, tag::JarTag};
+use crate::{knack::{buf::KnackBuf, CowKnack, Knack, KnackCell}, pager::IPager, result::Result, tag::JarTag};
 use crate::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice, RefPageSlice};
 
 /// Représente un truc dont le contenu peut avoir débordé ailleurs.
@@ -118,7 +118,7 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
 
     pub fn set<Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: for<'a> IPager<'a> {
         *self.as_mut_header() = write_var(
-            data, 
+            data.as_bytes(), 
             self.borrow_mut_data_in_page_space(), 
             pager
         )?;

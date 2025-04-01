@@ -905,7 +905,9 @@ mod tests {
 
     use itertools::Itertools;
 
-    use crate::{arena::IArena, cell::CellPage, knack::{GetKnackKind, IntoKnackBuf, Knack}, page::PageSize, pager::stub::new_stub_pager};
+    use crate::knack::Knack;
+    use crate::{arena::IArena, cell::CellPage, page::PageSize, pager::stub::new_stub_pager, prelude::IntoKnackBuf};
+    use crate::knack::kind::GetKnackKind;
     use super::CellHeader;
 
     #[test]
@@ -994,7 +996,7 @@ mod tests {
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
         let pager = new_stub_pager::<4096>();
-        let content_size = PageSize::try_from(u64::KIND.outer_size()).unwrap();
+        let content_size = PageSize::try_from(u64::kind().outer_size()).unwrap();
 
         let mut src = CellPage::new(
             pager.new_element()?, 
@@ -1017,7 +1019,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = new_stub_pager::<4096>();
-        let content_size = PageSize::try_from(u64::KIND.outer_size()).unwrap();
+        let content_size = PageSize::try_from(u64::kind().outer_size()).unwrap();
 
         let mut src = CellPage::new(
             pager.new_element()?, 

@@ -202,7 +202,7 @@ impl IntoKnackBuf for Document {
         buf.write_all(&Document::kind().as_kernel_ref().as_bytes()).unwrap();
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
-            buf.write_all(&kv).unwrap();
+            buf.write_all(kv.as_bytes()).unwrap();
         }
 
         KnackBuf::from_bytes(buf)
