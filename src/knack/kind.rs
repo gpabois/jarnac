@@ -4,6 +4,8 @@ use zerocopy::IntoBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 
+use crate::tag::DataArea;
+
 use super::{
     document::{Document, KeyValue}, error::{KnackError as KnackError, KnackErrorKind as KnackErrorKind}, marker::{
         kernel::{AsKernelMut, AsKernelRef}, 
@@ -36,7 +38,11 @@ pub trait GetKnackKind {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
-pub struct KnackKind([u8;4]);
+pub struct KnackKind([u8;5]);
+
+impl DataArea for KnackKind {
+    const AREA: Range<usize> = 0..size_of::<Self>();
+}
 
 impl Display for KnackKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -48,7 +54,7 @@ impl TryFrom<&[u8]> for &KnackKind {
     type Error = Infallible;
 
     fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
-        let bytes: &[u8;4] = value.try_into().unwrap();
+        let bytes: &[u8;5] = value.try_into().unwrap();
         unsafe {
             std::mem::transmute(bytes)
         }
@@ -70,13 +76,13 @@ impl Deref for KnackKind {
 }
 
 impl KnackKind {
-    pub const FLAG_SIZED: u8 = 0b1;
-    pub const FLAG_COMPARABLE: u8 = 0b10;
-    pub const FLAG_SIGNED: u8 = 0b100;
-    pub const FLAG_FLOAT: u8 = 0b1000;
+    pub const FLAG_SIZED: u8        = 0b1;
+    pub const FLAG_COMPARABLE: u8   = 0b10;
+    pub const FLAG_SIGNED: u8       = 0b100;
+    pub const FLAG_FLOAT: u8        = 0b1000;
 
     pub const fn new(id: KnackTypeId) -> Self {
-        Self([0, id, 0, 0])
+        Self([0, id, 0, 0, 0])
     }
     
     pub fn assert_eq<K: AsKernelRef<Kernel = KnackKind>>(&self, other: &K) -> KnackResult<()> {
@@ -197,43 +203,6 @@ impl AsRef<KnackKind> for FixedSized<KnackKind> {
     }
 }
 
-impl Comparable<FixedSized<KnackKind>> {
-    pub const fn new(kind: FixedSized<KnackKind>, signed: bool, float: bool) -> Self {
-        Self(
-            FixedSized(KnackKind([
-                kind.0.0[0] 
-                    | KnackKind::FLAG_COMPARABLE 
-                    | if signed {KnackKind::FLAG_SIGNED} else {0} 
-                    | if float {KnackKind::FLAG_FLOAT} else {0},
-                kind.0.0[1],
-                kind.0.0[2],
-                kind.0.0[3]
-            ]))
-        )
-    }
-
-    pub const fn is_signed(&self) -> bool {
-        self.0.0.0[0] & KnackKind::FLAG_SIGNED > 0
-    }
-
-    pub const fn is_float(&self) -> bool {
-        self.0.0.0[0] & KnackKind::FLAG_FLOAT > 0
-    }
-
-}
-
-impl AsRef<FixedSized<KnackKind>> for Comparable<FixedSized<KnackKind>> {
-    fn as_ref(&self) -> &FixedSized<KnackKind> {
-        &self.0
-    }
-}
-
-impl AsRef<KnackKind> for Comparable<FixedSized<KnackKind>> {
-    fn as_ref(&self) -> &KnackKind {
-        &self.0.0
-    }
-}
-
 impl GetKnackKind for u8 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
@@ -242,7 +211,12 @@ impl GetKnackKind for u8 {
             FixedSized::new(
                 KnackKind::new(U8_TYPE_ID), 
                 1
-            ), false, false)
+            ), 
+            false, 
+            false,
+            1,
+            0
+        )
     }
 }
 
@@ -250,87 +224,153 @@ impl GetKnackKind for u16 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(FixedSized::new(KnackKind::new(U16_TYPE_ID), 2), false, false)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(U16_TYPE_ID), 2), 
+            false, 
+            false,
+            2,
+            0
+        )
     }
 }
 
 impl GetKnackKind for u32 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(U32_TYPE_ID), 4)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(U32_TYPE_ID), 4),
+            false,
+            false,
+            3,
+            0
+        )
     }
 }
 
 impl GetKnackKind for u64 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(U64_TYPE_ID), 8)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(U64_TYPE_ID), 8),
+            false,
+            false,
+            4,
+            0
+        )
     }
 }
 
 impl GetKnackKind for u128 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(U128_TYPE_ID), 16)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(U128_TYPE_ID), 16),
+            false,
+            false,
+            5,
+            0
+        )
     }
 }
 
 impl GetKnackKind for i8 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(I8_TYPE_ID), 1)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(I8_TYPE_ID), 1),
+            false,
+            true,
+            1, 
+            0
+        )
     }
 }
 
 impl GetKnackKind for i16 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(I16_TYPE_ID), 2)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(I16_TYPE_ID), 2),
+            false,
+            true,
+            2,
+            0
+        )
     }
 }
 
 impl GetKnackKind for i32 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(I32_TYPE_ID), 4)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(I32_TYPE_ID), 4),
+            false,
+            true,
+            3,
+            0
+        )
     }
 }
 
 impl GetKnackKind for i64 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(I64_TYPE_ID), 8)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(I64_TYPE_ID), 8),
+            false,
+            true,
+            4,
+            0
+        )
     }
 }
 
 impl GetKnackKind for i128 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(I128_TYPE_ID), 16)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(I128_TYPE_ID), 16),
+            false,
+            true,
+            5,
+            0
+        )
     }
 }
 
 impl GetKnackKind for f32 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(F32_TYPE_ID), 4)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(F32_TYPE_ID), 4),
+            true,
+            true,
+            3,
+            0
+        )
     }
 }
 
 impl GetKnackKind for f64 {
-    type Kind = FixedSized<KnackKind>;
+    type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        FixedSized::new(KnackKind::new(F64_TYPE_ID), 8)
+        Comparable::new(
+            FixedSized::new(KnackKind::new(F64_TYPE_ID), 8),
+            true, 
+            true,
+            4,
+            0
+        )
     }
 }
 

@@ -1,15 +1,15 @@
-use std::ops::{Div, Range};
+use std::ops::{Div, Index, IndexMut, Range};
 
-use zerocopy::FromBytes;
+use zerocopy::{FromBytes, IntoBytes};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::{Cell, CellCapacity, CellPage, Cells, WithCells}, 
+    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
     error::Error, 
     knack::{buf::KnackBuf, kind::KnackKind, marker::{kernel::AsKernelRef, AsComparable, Comparable, FixedSized}, Knack}, 
     page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, 
     result::Result, 
-    tag::DataArea, utils::Shift, 
+    tag::{DataArea, JarTag}, utils::Shift, 
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -17,6 +17,26 @@ use super::descriptor::BPlusTreeDescription;
 pub struct BPlusTreeInterior<Page>(CellPage<Page>);
 pub type BPlusTreeInteriorMut<'page> = BPlusTreeInterior<MutPage<'page>>;
 pub type BPlusTreeInteriorRef<'page> = BPlusTreeInterior<RefPage<'page>>;
+
+impl BPlusTreeInteriorMut<'_> {
+    pub fn tag(&self) -> &JarTag {
+        self.0.tag()
+    }
+}
+
+impl<Page> Index<&CellId> for BPlusTreeInterior<Page> where Page: AsRefPageSlice {
+    type Output = BPTreeInteriorCell<PageSlice>;
+
+    fn index(&self, index: &CellId) -> &Self::Output {
+        self.borrow_cell(index).unwrap()
+    }
+}
+
+impl<Page> IndexMut<&CellId> for BPlusTreeInterior<Page> where Page: AsMutPageSlice {
+    fn index_mut(&mut self, index: &CellId) -> &mut Self::Output {
+        self.borrow_mut_cell(index).unwrap()
+    }
+}
 
 impl<'buf> TryFrom<RefPage<'buf>> for BPlusTreeInterior<RefPage<'buf>> {
     type Error = Error;
@@ -67,6 +87,11 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsRefPageSlice {
     fn as_meta(&self) -> &BPTreeInteriorMeta {
         BPTreeInteriorMeta::ref_from_bytes(&self.0.as_bytes()[BPTreeInteriorMeta::AREA]).unwrap()
     }
+
+    /// Emprunte une cellule en mutation.
+    fn borrow_cell(&self, cid: &CellId) -> Option<&BPTreeInteriorCell<PageSlice>> {
+        self.0.borrow_cell(cid).map(|cell| unsafe { std::mem::transmute(cell) })
+    }
 }
 
 impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
@@ -80,8 +105,8 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
         ).map(Self)
     }
     
-    /// Insère un nouveau triplet {gauche | clé | droit} dans le noeud intérieur.
-    pub fn insert(&mut self, left: PageId, key: &Knack, right: PageId) -> Result<()> {
+    /// Insère un nouveau triplet {gauche | clé | droit}s dans le noeud intérieur.
+    pub fn insert(&mut self, left: PageId, key: &Comparable<Knack>, right: PageId) -> Result<()> {
         let maybe_existing_cid = self.iter()
             .filter(|cell| cell.left() == Some(left))
             .map(|cell| cell.as_cell().id())
@@ -118,7 +143,7 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
     }
 
     /// Divise le noeud à la moitié de sa capacité et retourne la clé pivot.
-    pub fn split_into<P2>(&mut self, dest: &mut BPlusTreeInterior<P2>) -> Result<KnackBuf> where P2: AsMutPageSlice {
+    pub fn split_into<P>(&mut self, dest: &mut BPlusTreeInterior<P>) -> Result<KnackBuf> where P: AsMutPageSlice {
         let at = self.0.len().div(2) + 1;
         
         self.0.split_at_into(&mut dest.0, at)?;
@@ -130,7 +155,7 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
             .last()
             .map(|cell| (
                 cell.0.id(), 
-                cell.borrow_key().to_owned(), 
+                cell.borrow_key().as_kernel_ref().to_owned(), 
                 cell.left().unwrap()
             ))
             .unwrap();
@@ -146,6 +171,13 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
         self.as_mut_meta().set_parent(parent);
     }
 
+    /// Emprunte une cellule en mutation.
+    fn borrow_mut_cell(&mut self, cid: &CellId) -> Option<&mut BPTreeInteriorCell<PageSlice>> {
+        self.0.borrow_mut_cell(cid).map(|cell| unsafe {
+            std::mem::transmute(cell)
+        })
+    }
+
     fn set_tail(&mut self, tail: Option<PageId>) {
         self.as_mut_meta().set_tail(tail);
     }
@@ -154,7 +186,6 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
         BPTreeInteriorMeta::mut_from_bytes(&mut self.0.as_mut_bytes()[BPTreeInteriorMeta::AREA]).unwrap()
     }
 }
-
 
 impl BPlusTreeInterior<()> {
     pub fn compute_cell_content_size(key: &FixedSized<KnackKind>) -> PageSize {
@@ -263,14 +294,19 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?std::marker::Sized {
     pub fn initialise(&mut self, key: &Comparable<Knack>, left: PageId) {
-        key.kind().outer_size().expect(&format!("expecting key to be a sized-type (kind: {0})", key.kind()));
+        key.kind().outer_size().expect(
+                &format!("expecting key to be a sized-type (kind: {0})", 
+                key.kind().as_kernel_ref()
+            )
+        );
         let loc = self.left_range().end;
-        
-        self
-            .as_mut_cell()
-            .as_mut_content_slice()
-            .as_mut_bytes()[loc] = key.kind().clone().into();
+        let area = KnackKind::AREA.shift(loc);
 
+        self.as_mut_cell()
+            .as_mut_content_slice()
+            .as_mut_bytes()[area]
+            .clone_from_slice(key.kind().as_bytes());
+        
         self.borrow_mut_key().set(key);
         self.set_left(Some(left));
     }

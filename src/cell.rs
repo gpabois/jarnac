@@ -27,7 +27,7 @@ use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit, num::NonZeroU8, ops
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, result::Result, tag::DataArea};
+use crate::{error::{Error, ErrorKind}, result::Result, tag::{DataArea, JarTag}};
 use super::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageSize, PageSlice, RefPage, InPage};
 use crate::prelude::*;
 
@@ -106,6 +106,10 @@ impl<Page> AsMut<PageSlice> for CellPage<Page> where Page: AsMutPageSlice {
 pub const HEADER_SLICE_RANGE: Range<usize> = 1..(size_of::<CellsMeta>() + 1);
 
 impl<'pager> CellPage<MutPage<'pager>> {
+    pub fn tag(&self) -> &JarTag {
+        self.0.tag()
+    }
+    
     pub fn into_ref(self) -> CellPage<RefPage<'pager>> {
         CellPage(self.0.into_ref())
     }
@@ -1037,7 +1041,7 @@ mod tests {
         
         for i in 0..5u64 {
             let cid = src.push().unwrap();
-            src[&cid].as_mut_content_slice().clone_from_slice(i.into_value_buf().as_ref());
+            src[&cid].as_mut_content_slice().clone_from_slice(i.into_knack_buf().as_ref());
         }
 
         src.split_at_into(&mut dest, 3)?;

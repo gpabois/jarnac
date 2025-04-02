@@ -6,8 +6,8 @@ use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::{knack::{buf::KnackBuf, CowKnack, Knack, KnackCell}, pager::IPager, result::Result, tag::JarTag};
-use crate::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind, PageSlice, RefPageSlice};
+use crate::{knack::{buf::KnackBuf, CowKnack, Knack, KnackCell}, page::PageSlice, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift};
+use crate::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind, RefPageSlice};
 
 /// Représente un truc dont le contenu peut avoir débordé ailleurs.
 pub enum MaybeSpilled<Slice> where Slice: AsRefPageSlice {
@@ -77,35 +77,35 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
     }
 
     pub fn len(&self) -> u64 {
-        self.as_header().total_size
+        self.as_meta().total_size
     }
     
     pub fn has_spilled(&self) -> bool {
-        self.as_header().has_spilled()
+        self.as_meta().has_spilled()
     }
 
-    pub fn copy_into<S2>(&self, dest: &mut Var<S2>) -> Result<()> where S2: AsMutPageSlice + ? Sized {
-        *dest.as_mut_header() = self.as_header().clone();
+    pub fn copy_into<S2>(&self, dest: &mut Var<S2>) -> Result<()> where S2: AsMutPageSlice + ?std::marker::Sized {
+        *dest.as_mut_meta() = self.as_meta().clone();
         dest.borrow_mut_content().copy_from_slice(self.borrow_content());
         Ok(())
     }   
 
     /// Récupère l'ensemble du truc de taille variable.
     pub fn read<'a, Pager, Dest>(&self, dest: &mut Dest, pager: &Pager) -> Result<()> where Pager: IPager<'a>, Dest: Write{
-        read_var(self.as_header(), dest, self.borrow_content(), pager)
+        read_var(self.as_meta(), dest, self.borrow_content(), pager)
     }
 
     fn data_range(&self) -> Range<usize> {
-        let in_page_size = usize::try_from(self.as_header().get_in_page_size()).unwrap();
-        Self::DATA_BASE..(Self::DATA_BASE + in_page_size)
+        let in_page_size = usize::try_from(self.as_meta().get_in_page_size()).unwrap();
+        (0..in_page_size).shift(VarMeta::AREA.end)
     }
 
     fn borrow_content(&self) -> &PageSlice {
         &self.0.as_ref()[self.data_range()]
     }
 
-    fn as_header(&self) -> &VarMeta {
-        self.as_ref()
+    fn as_meta(&self) -> &VarMeta {
+        VarMeta::ref_from_bytes(&self.0.as_bytes()[VarMeta::AREA]).unwrap()
     }
 }
 
@@ -116,8 +116,8 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         }
     }
 
-    pub fn set<Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: for<'a> IPager<'a> {
-        *self.as_mut_header() = write_var(
+    pub fn set<'a, Pager>(&mut self, data: &Knack, pager: &Pager) -> Result<()> where Pager: IPager<'a> + ?std::marker::Sized {
+        *self.as_mut_meta() = write_var(
             data.as_bytes(), 
             self.borrow_mut_data_in_page_space(), 
             pager
@@ -125,38 +125,25 @@ impl<Slice> Var<Slice> where Slice: AsMutPageSlice + ?Sized {
         Ok(())
     }
 
-    fn borrow_mut_content(&mut self) -> &mut PageSlice {
+    fn borrow_mut_content(&mut self) -> &mut [u8] {
         let range = self.data_range();
         &mut self.0.as_mut()[range]
     }
 
-    fn borrow_mut_data_in_page_space(&mut self) -> &mut PageSlice {
+    fn borrow_mut_data_in_page_space(&mut self) -> &mut [u8] {
         &mut self.0.as_mut()[Self::DATA_BASE..]
     }
 
-    fn as_mut_header(&mut self) -> &mut VarMeta {
-        self.as_mut()
+    fn as_mut_meta(&mut self) -> &mut VarMeta {
+        VarMeta::mut_from_bytes(&mut self.0.as_mut_bytes()[VarMeta::AREA]).unwrap()
     }
 }
 
-impl<Slice> AsRef<[u8]> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
-    fn as_ref(&self) -> &[u8] {
+impl<Slice> AsRef<PageSlice> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
+    fn as_ref(&self) -> &PageSlice {
         self.borrow_content()
     }
 }
-
-impl<Slice> AsRef<VarMeta> for Var<Slice> where Slice: AsRefPageSlice + ?Sized {
-    fn as_ref(&self) -> &VarMeta {
-        VarMeta::ref_from_bytes(&self.0.as_ref()[Self::HEADER_RANGE]).unwrap()
-    }
-}
-
-impl<Slice> AsMut<VarMeta> for Var<Slice> where Slice: AsMutPageSlice + ?Sized {
-    fn as_mut(&mut self) -> &mut VarMeta {
-        VarMeta::mut_from_bytes(&mut self.0.as_mut()[Self::HEADER_RANGE]).unwrap()
-    }
-}
-
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Clone)]
 #[repr(C, packed)]
@@ -168,6 +155,10 @@ pub struct VarMeta {
     pub in_page_size: u64,
     /// Tête de la liste chaînée des pages de débordement
     pub spill_page_id: OptionalPageId,
+}
+
+impl DataArea for VarMeta {
+    const AREA: Range<usize> = 0..size_of::<Self>();
 }
 
 impl VarMeta {
@@ -286,7 +277,7 @@ impl SpillPageData {
 }
 
 /// Libère toutes les pages de débordement de la liste chaînée.
-pub fn free_overflow_pages<'a, Pager: IPager<'a>>(head: PageId, pager: &Pager) -> Result<()> {
+pub fn free_overflow_pages<'a, Pager: IPager<'a> + ?std::marker::Sized>(head: PageId, pager: &Pager) -> Result<()> {
     let mut current = Some(pager.tag().in_page(head));
 
     while let Some(tag) = current {
@@ -325,7 +316,7 @@ pub fn read_var<'a, Pager: IPager<'a>, W: Write>(
 ///
 /// Si les données ne peuvent être stockées intégralement dans la région,
 /// alors la fonction réalise un débordement (Overflow) sur une à plusieurs pages.
-pub fn write_var<'a, Pager: IPager<'a>>(
+pub fn write_var<'a, Pager: IPager<'a> + ?std::marker::Sized>(
     data: &[u8],
     dest: &mut [u8],
     pager: &Pager,

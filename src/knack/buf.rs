@@ -9,11 +9,11 @@ use super::{builder::KnackBuilder, document::KeyValue, kind::GetKnackKind, Knack
 
 
 pub trait IntoKnackBuf {
-    fn into_value_buf(self) -> KnackBuf;
+    fn into_knack_buf(self) -> KnackBuf;
 }
 
 impl<U> IntoKnackBuf for U where KnackBuf: From<U> {
-    fn into_value_buf(self) -> KnackBuf {
+    fn into_knack_buf(self) -> KnackBuf {
         KnackBuf::from(self)
     }
 }
@@ -73,7 +73,7 @@ impl From<(String, KnackBuilder)> for KnackBuf {
     fn from(kv: (String, KnackBuilder)) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(KeyValue::kind().as_kernel_ref().as_bytes()).unwrap();
-        let v = kv.1.into_value_buf();
+        let v = kv.1.into_knack_buf();
         let k = kv.0;
         let size: u32 = u32::try_from(k.len() + v.as_bytes().len()).unwrap();
         buf.write_all(&size.to_le_bytes()).unwrap();

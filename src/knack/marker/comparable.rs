@@ -4,7 +4,7 @@ use super::{kernel::{AsKernelMut, AsKernelRef}, sized::VarSized, FixedSized};
 
 pub struct Comparable<T>(pub(crate) T) where T: ?std::marker::Sized;
 
-impl<T> Deref for Comparable<T> {
+impl<T> Deref for Comparable<T> where T: ?std::marker::Sized {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
@@ -48,7 +48,7 @@ impl<L> AsKernelRef for Comparable<L> where L: AsKernelRef + ?std::marker::Sized
     }
 }
 
-impl<L> AsKernelMut for Comparable<L> where L: AsKernelMut {
+impl<L> AsKernelMut for Comparable<L> where L: AsKernelMut + ?std::marker::Sized {
     fn as_kernel_mut(&mut self) -> &mut Self::Kernel {
         self.0.as_kernel_mut()
     }

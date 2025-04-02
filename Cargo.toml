@@ -18,6 +18,3 @@ zerocopy-derive = "0.8.17"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
-[[bench]]
-name = "jarnac_benchmark"
-harness = false

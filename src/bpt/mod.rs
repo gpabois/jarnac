@@ -8,8 +8,8 @@ use crate::{
     cell::CellCapacity, 
     error::{Error, ErrorKind}, 
     knack::{kind::{GetKnackKind, KnackKind}, 
-    marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized}, Knack}, 
-    page::{AsRefPageSlice, PageKind, PageSize, RefPageSlice}, 
+    marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, Comparable}, Knack}, 
+    page::{AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPageSlice}, 
     pager::IPager, result::Result, tag::JarTag, utils::Valid, var::{MaybeSpilled, VarMeta}};
 
 pub mod descriptor;
@@ -36,6 +36,7 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
         Ok(Self{arena, tag})
     }
 
+    /// Recherche une valeur associée à la clé
     pub fn search(&self, key: &Knack) -> Result<Option<MaybeSpilled<RefPageSlice<'nodes>>>> {
         let maybe_tag = self.search_leaf(key)?;
 
@@ -55,7 +56,111 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
         Ok(None)
     }
 
-    
+    /// Insère une nouvelle clé/valeur
+    pub fn insert(&mut self, key: &Knack, value: &Knack) -> Result<()> {
+        assert_eq!(key.kind(), self.as_descriptor().key_kind().as_kernel_ref(), "wrong key kind");
+        assert_eq!(value.kind(), self.as_descriptor().value_kind(), "wrong value kind");
+
+        let leaf_pid = match self.search_leaf(&key)? {
+            Some(pid) => pid,
+            None => {
+                let new_leaf = self.new_leaf()?;
+                self.as_mut_descriptor().set_root(Some(new_leaf.tag().page_id));
+                *new_leaf.tag()
+            }
+        };
+
+        let mut leaf = self.borrow_mut_leaf(&leaf_pid)?;
+
+        // si la feuille est pleine on va la diviser en deux.
+        if leaf.is_full() {
+            self.split(leaf.as_mut())?;
+        }
+
+        leaf.insert(key, value, self.pager).inspect(|_| self.desc.inc_len())
+    }
+
+    /// Divise un noeud
+    ///
+    /// Cette opération est utilisée lors d'une insertion si le noeud est plein.
+    fn split(&mut self, page: &mut MutPage<'_>) -> Result<()> {
+        let node_kind: BPTreeNodeKind = TryFrom::try_from(page.as_bytes()[0])?;
+        
+        match node_kind {
+            BPTreeNodeKind::Interior => {
+                let mut left= BPlusTreeInterior::try_from(page)?;
+
+                // on ne divise pas un noeud intérieur qui n'est pas plein.
+                if !left.is_full() {
+                    return Ok(());
+                }
+
+                // on ajoute un nouveau noeud intérieur
+                let mut right = self.new_interior()?;
+                
+                // on divise le le noeud en deux au niveau [K/2]
+                let key = left.split_into(&mut right)?.to_owned();
+
+                // récupère le parent du noeud à gauche
+                // si aucun parent n'existe alors on crée un noeud intérieur.
+                let parent_id = match left.parent() {
+                    Some(parent_id) => self.tag.in_page(parent_id),
+                    None => {
+                        let parent_id = self.new_interior()?.tag().page_id;
+                        self.as_mut_descriptor().set_root(Some(parent_id));
+                        left.set_parent(Some(parent_id));
+                        self.tag.in_page(parent_id)
+                    }
+                };
+
+                right.set_parent(left.parent());
+                let mut parent = self.borrow_mut_interior(&parent_id)?;
+                
+                self.insert_in_interior(&mut parent, *left.id(), &key, *right.id())?;
+
+                Ok(())
+            }
+
+            BPTreeNodeKind::Leaf => {
+                let mut left = BPlusTreeLeaf::try_from(node.into_inner())?;
+
+                // On ne divise pas un noeud qui n'est pas plein.
+                if !left.is_full() {
+                    return Ok(());
+                }
+
+                let mut right = self.new_leaf()?;
+
+                let key = left.split_into(&mut right)?.to_owned();
+
+                right.set_prev(Some(*left.id()));
+                left.set_next(Some(*right.id()));
+
+                let parent_id = match left.get_parent() {
+                    Some(parent_id) => parent_id,
+                    None => {
+                        let new_parent = self.new_interior()?;
+                        self.as_mut_descriptor().set_root(Some(new_parent.tag().page_id));
+                        left.set_parent(Some(new_parent.tag().page_id));
+                        self.tag.in_page(new_parent.tag().page_id)
+                    }
+                };
+
+                right.set_parent(left.get_parent());
+
+                let mut parent = self.borrow_mut_interior(&parent_id)?;
+                self.insert_in_interior(
+                    &mut parent,
+                    *left.as_page().tag(),
+                    &key,
+                    *right.as_page().tag(),
+                )?;
+
+                Ok(())
+            }
+        }
+    }
+
     fn new_leaf(&self) -> Result<BPlusTreeLeafMut<'nodes>> {
         self.arena
             .new_element()
@@ -83,7 +188,7 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
     fn borrow_interior(&self, tag: &JarTag) -> Result<BPlusTreeInteriorRef<'nodes>> {
         self.arena.borrow_element(tag).and_then(TryFrom::try_from)
     }
-
+    
     fn borrow_mut_interior(&mut self, tag: &JarTag) -> Result<BPlusTreeInteriorMut<'nodes>> {
         self.arena.borrow_mut_element(tag).and_then(TryFrom::try_from)
     }
@@ -105,6 +210,31 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
         }
 
         Ok(None)
+    }
+
+    /// Insère un triplet {gauche | clé | droit} dans le noeud intérieur.
+    ///
+    /// Split si le noeud est complet.
+    fn insert_in_interior(&mut self, interior: &mut BPlusTreeInterior<MutPage<'_>>, left: PageId, key: &Comparable<Knack>, right: PageId) -> Result<()> {
+
+        if interior.is_full() {
+            self.split(interior.as_mut())?;
+        }
+
+        interior.insert(left, key, right)?;
+
+        interior
+            .parent()
+            .as_ref()
+            .iter()
+            .cloned()
+            .map(|&pid| self.tag.in_page(pid))
+            .try_for_each(|parent_id| {
+                let mut page = self.arena.borrow_mut_element(&parent_id)?;
+                self.split(&mut page)
+            })?;
+
+        Ok(())
     }
 
     fn node_kind(&self, tag: &JarTag) -> Result<BPTreeNodeKind> {

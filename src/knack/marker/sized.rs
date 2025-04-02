@@ -30,7 +30,7 @@ impl<L> AsKernelRef for FixedSized<L> where L: AsKernelRef + ?std::marker::Sized
     }
 }
 
-impl<L> AsKernelMut for FixedSized<L> where L: AsKernelMut {
+impl<L> AsKernelMut for FixedSized<L> where L: AsKernelMut + ?std::marker::Sized {
     fn as_kernel_mut(&mut self) -> &mut Self::Kernel {
         self.0.as_kernel_mut()
     }
@@ -59,7 +59,7 @@ impl<T> AsVarSized for Comparable<T> where T: AsVarSized
 }
 
 
-impl<L> AsKernelRef for VarSized<L> where L: AsKernelRef {
+impl<L> AsKernelRef for VarSized<L> where L: AsKernelRef + ?std::marker::Sized {
     type Kernel = L::Kernel;
 
     fn as_kernel_ref(&self) -> &Self::Kernel {
@@ -67,7 +67,7 @@ impl<L> AsKernelRef for VarSized<L> where L: AsKernelRef {
     }
 }
 
-impl<L> AsKernelMut for VarSized<L> where L: AsKernelMut {
+impl<L> AsKernelMut for VarSized<L> where L: AsKernelMut + ?std::marker::Sized{
     fn as_kernel_mut(&mut self) -> &mut Self::Kernel {
         self.0.as_kernel_mut()
     }

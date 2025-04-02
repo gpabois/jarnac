@@ -176,7 +176,7 @@ impl<Q> Index<Q> for Document where Q: IntoKnackPath {
 
 impl Document {
     pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
-        let key = key.into_value_buf();
+        let key = key.into_knack_buf();
         let value = value.into_value_builder();
         self.0.insert(key.to_string(), value);
     }
@@ -196,12 +196,12 @@ impl Document {
 }
 
 impl IntoKnackBuf for Document {
-    fn into_value_buf(self) -> KnackBuf {
+    fn into_knack_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![];
 
         buf.write_all(&Document::kind().as_kernel_ref().as_bytes()).unwrap();
 
-        for kv in self.0.into_iter().map(IntoKnackBuf::into_value_buf) {
+        for kv in self.0.into_iter().map(IntoKnackBuf::into_knack_buf) {
             buf.write_all(kv.as_bytes()).unwrap();
         }
 

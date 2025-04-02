@@ -20,6 +20,6 @@ mod tests {
         let szd = kind.as_fixed_sized();
         let cmp = kind.as_comparable();
 
-        let knack = 8u8.into_value_buf();
+        let knack = 8u8.into_knack_buf();
     }
 }

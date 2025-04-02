@@ -5,7 +5,7 @@ use super::{buf::{IntoKnackBuf, KnackBuf}, KnackBuilder};
 pub struct Array(Vec<KnackBuilder>);
 
 impl IntoKnackBuf for Array {
-    fn into_value_buf(self) -> KnackBuf {
+    fn into_knack_buf(self) -> KnackBuf {
         todo!()
     }
 }

@@ -27,7 +27,7 @@ use marker::{kernel::AsKernelRef, Comparable};
 use result::KnackResult;
 use zerocopy::{FromBytes, LittleEndian};
 
-use crate::{error::Error, page::{AsRefPageSlice, PageSlice}, result::Result};
+use crate::page::{AsRefPageSlice, PageSlice};
 
 pub type KnackTypeId = u8;
 pub type KnackSize = u16;
@@ -59,7 +59,7 @@ impl<Slice> Deref for KnackCell<Slice> where Slice: AsRefPageSlice {
     type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
-        <&Knack>::from(self.0.as_bytes())
+        <&Knack>::from(self.0.as_ref())
     }
 }
 
@@ -1110,35 +1110,35 @@ mod tests {
 
     #[test]
     fn test_is() {
-        assert!(10_u8.into_value_buf().is::<u8>());
-        assert!(10_i8.into_value_buf().is::<i8>());
-        assert!(10_u16.into_value_buf().is::<u16>());
-        assert!(10_i16.into_value_buf().is::<i16>());
-        assert!(10_u32.into_value_buf().is::<u32>());
-        assert!(10_i32.into_value_buf().is::<i32>());
-        assert!(10_u64.into_value_buf().is::<u64>());
-        assert!(10_i64.into_value_buf().is::<i64>());
-        assert!(10_u128.into_value_buf().is::<u128>());
-        assert!(10_i128.into_value_buf().is::<i128>());
+        assert!(10_u8.into_knack_buf().is::<u8>());
+        assert!(10_i8.into_knack_buf().is::<i8>());
+        assert!(10_u16.into_knack_buf().is::<u16>());
+        assert!(10_i16.into_knack_buf().is::<i16>());
+        assert!(10_u32.into_knack_buf().is::<u32>());
+        assert!(10_i32.into_knack_buf().is::<i32>());
+        assert!(10_u64.into_knack_buf().is::<u64>());
+        assert!(10_i64.into_knack_buf().is::<i64>());
+        assert!(10_u128.into_knack_buf().is::<u128>());
+        assert!(10_i128.into_knack_buf().is::<i128>());
     }
 
     #[test]
     fn test_cast() {
-        assert!(10_u8.into_value_buf().cast::<u8>() == &10_u8)
+        assert!(10_u8.into_knack_buf().cast::<u8>() == &10_u8)
     }
 
     #[test]
     fn test_sizes() {
-        assert_eq!(10u8.into_value_buf().kind().inner_size(), Some(1), "unsigned int8 must have a size of 1");
-        assert_eq!(10i8.into_value_buf().kind().inner_size(), Some(1), "signed int8 must have a size of 1");
-        assert_eq!(10u16.into_value_buf().kind().inner_size(), Some(2), "unsigned int16 must have a size of 2");
-        assert_eq!(10i16.into_value_buf().kind().inner_size(), Some(2), "signed int16 must have a size of 2");
-        assert_eq!(10u32.into_value_buf().kind().inner_size(), Some(4), "unsigned int32 must have a size of 4");
-        assert_eq!(10i32.into_value_buf().kind().inner_size(), Some(4), "signed int32 must have a size of 4");
-        assert_eq!(10u64.into_value_buf().kind().inner_size(), Some(8), "unsigned int64 must have a size of 8");
-        assert_eq!(10i64.into_value_buf().kind().inner_size(), Some(8), "signed int64 must have a size of 8");
-        assert_eq!(10u128.into_value_buf().kind().inner_size(), Some(16), "unsigned int128 must have a size of 16");
-        assert_eq!(10i128.into_value_buf().kind().inner_size(), Some(16), "signed int128 must have a size of 16");
+        assert_eq!(10u8.into_knack_buf().kind().inner_size(), Some(1), "unsigned int8 must have a size of 1");
+        assert_eq!(10i8.into_knack_buf().kind().inner_size(), Some(1), "signed int8 must have a size of 1");
+        assert_eq!(10u16.into_knack_buf().kind().inner_size(), Some(2), "unsigned int16 must have a size of 2");
+        assert_eq!(10i16.into_knack_buf().kind().inner_size(), Some(2), "signed int16 must have a size of 2");
+        assert_eq!(10u32.into_knack_buf().kind().inner_size(), Some(4), "unsigned int32 must have a size of 4");
+        assert_eq!(10i32.into_knack_buf().kind().inner_size(), Some(4), "signed int32 must have a size of 4");
+        assert_eq!(10u64.into_knack_buf().kind().inner_size(), Some(8), "unsigned int64 must have a size of 8");
+        assert_eq!(10i64.into_knack_buf().kind().inner_size(), Some(8), "signed int64 must have a size of 8");
+        assert_eq!(10u128.into_knack_buf().kind().inner_size(), Some(16), "unsigned int128 must have a size of 16");
+        assert_eq!(10i128.into_knack_buf().kind().inner_size(), Some(16), "signed int128 must have a size of 16");
     }
 
 }
