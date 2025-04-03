@@ -27,7 +27,7 @@ use std::{fmt::Debug, marker::PhantomData, mem::MaybeUninit, num::NonZeroU8, ops
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{error::{Error, ErrorKind}, result::Result, tag::{DataArea, JarTag}};
+use crate::{error::{Error, ErrorKind}, page::AsRefPage, result::Result, tag::{DataArea, JarTag}};
 use super::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, PageSize, PageSlice, RefPage, InPage};
 use crate::prelude::*;
 
@@ -90,6 +90,12 @@ impl DataArea for CellsMeta {
 
 /// Sous-sytème permettant de découper une page en cellules de tailles égales
 pub struct CellPage<Page>(Page);
+
+impl<Page> AsRefPage for CellPage<Page> where Page: AsRefPage {
+    fn tag(&self) -> &JarTag {
+        self.0.tag()
+    }
+}
 
 impl<Page> AsRef<PageSlice> for CellPage<Page> where Page: AsRefPageSlice {
     fn as_ref(&self) -> &PageSlice {

@@ -34,6 +34,12 @@ impl<T> DataArea for InPage<T> {
     const INTEGRATED_AREA: Range<usize> = 0..Self::AREA.end + 1;
 }
 
+pub trait AsRefPage: AsRefPageSlice {
+    fn tag(&self) -> &JarTag;
+}
+
+pub trait AsMutPage: AsRefPage + AsMutPageSlice {}
+
 /// Référence vers une page.
 pub struct RefPage<'pager>(PageDescriptor<'pager>);
 
@@ -42,6 +48,12 @@ impl AsRef<PageSlice> for RefPage<'_> {
         unsafe {
             self.0.get_content_ptr().as_ref()
         }
+    }
+}
+
+impl AsRefPage for RefPage<'_> {
+    fn tag(&self) -> &JarTag {
+        self.0.tag()
     }
 }
 
@@ -100,6 +112,14 @@ impl AsRef<PageSlice> for MutPage<'_> {
         self.deref()
     }
 }
+
+impl AsRefPage for MutPage<'_> {
+    fn tag(&self) -> &JarTag {
+        self.inner.tag()
+    }
+}
+
+impl AsMutPage for MutPage<'_> {}
 
 impl AsMut<PageSlice> for MutPage<'_> {
     fn as_mut(&mut self) -> &mut PageSlice {

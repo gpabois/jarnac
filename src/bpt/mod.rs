@@ -9,7 +9,7 @@ use crate::{
     error::{Error, ErrorKind}, 
     knack::{kind::{GetKnackKind, KnackKind}, 
     marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, Comparable}, Knack}, 
-    page::{AsRefPageSlice, MutPage, PageId, PageKind, PageSize, RefPageSlice}, 
+    page::{AsRefPageSlice, MutPage, PageKind, PageSize, RefPageSlice}, 
     pager::IPager, result::Result, tag::JarTag, utils::Valid, var::{MaybeSpilled, VarMeta}};
 
 pub mod descriptor;
@@ -74,10 +74,14 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
 
         // si la feuille est pleine on va la diviser en deux.
         if leaf.is_full() {
-            self.split(leaf.as_mut())?;
+            self.split(leaf.as_mut_page())?;
         }
 
-        leaf.insert(key, value, self.pager).inspect(|_| self.desc.inc_len())
+        leaf.insert(
+            key.try_as_comparable().expect("key must be comparable"), 
+            value, 
+            self.arena
+        ).inspect(|_| self.as_mut_descriptor().inc_len())
     }
 
     /// Divise un noeud
@@ -116,7 +120,12 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
                 right.set_parent(left.parent());
                 let mut parent = self.borrow_mut_interior(&parent_id)?;
                 
-                self.insert_in_interior(&mut parent, *left.id(), &key, *right.id())?;
+                self.insert_in_interior(
+                    &mut parent, 
+                    *left.tag(), 
+                    &key, 
+                    *right.id()
+                )?;
 
                 Ok(())
             }
@@ -215,20 +224,17 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
     /// Insère un triplet {gauche | clé | droit} dans le noeud intérieur.
     ///
     /// Split si le noeud est complet.
-    fn insert_in_interior(&mut self, interior: &mut BPlusTreeInterior<MutPage<'_>>, left: PageId, key: &Comparable<Knack>, right: PageId) -> Result<()> {
+    fn insert_in_interior(&mut self, interior: &mut BPlusTreeInterior<MutPage<'_>>, left: JarTag, key: &Comparable<Knack>, right: JarTag) -> Result<()> {
+        let jar = self.tag;
 
         if interior.is_full() {
-            self.split(interior.as_mut())?;
+            self.split(interior.as_mut_page())?;
         }
 
         interior.insert(left, key, right)?;
 
-        interior
-            .parent()
-            .as_ref()
-            .iter()
-            .cloned()
-            .map(|&pid| self.tag.in_page(pid))
+        interior.parent().iter()
+            .map(move |&pid| jar.in_page(pid))
             .try_for_each(|parent_id| {
                 let mut page = self.arena.borrow_mut_element(&parent_id)?;
                 self.split(&mut page)

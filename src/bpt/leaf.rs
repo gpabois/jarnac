@@ -115,6 +115,10 @@ impl<Page> BPlusTreeLeaf<Page> where Page: AsMutPageSlice {
         self.as_mut_meta().set_parent(parent);
     }
 
+    pub fn as_mut_page(&mut self) -> &mut Page {
+        self.0.as_mut()
+    }
+
     fn borrow_mut_cell(&mut self, cid: &CellId) -> Option<&mut BPlusTreeLeafCell<PageSlice>> {
         self.0
         .borrow_mut_cell(cid)

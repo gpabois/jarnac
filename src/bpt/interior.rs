@@ -7,7 +7,7 @@ use crate::{
     cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, 
     error::Error, 
     knack::{buf::KnackBuf, kind::KnackKind, marker::{kernel::AsKernelRef, AsComparable, Comparable, FixedSized}, Knack}, 
-    page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, 
+    page::{AsMutPageSlice, AsRefPage, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage}, 
     result::Result, 
     tag::{DataArea, JarTag}, utils::Shift, 
 };
@@ -18,8 +18,8 @@ pub struct BPlusTreeInterior<Page>(CellPage<Page>);
 pub type BPlusTreeInteriorMut<'page> = BPlusTreeInterior<MutPage<'page>>;
 pub type BPlusTreeInteriorRef<'page> = BPlusTreeInterior<RefPage<'page>>;
 
-impl BPlusTreeInteriorMut<'_> {
-    pub fn tag(&self) -> &JarTag {
+impl<Page> AsRefPage for BPlusTreeInterior<Page> where Page: AsRefPage {
+    fn tag(&self) -> &JarTag {
         self.0.tag()
     }
 }
@@ -51,6 +51,15 @@ impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeInterior<MutPage<'buf>> {
     type Error = Error;
 
     fn try_from(page: MutPage<'buf>) -> Result<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeLeaf.assert(kind).map(move |_| Self(CellPage::from(page)))
+    }
+}
+
+impl<'a, 'buf> TryFrom<&'a mut MutPage<'buf>> for BPlusTreeInterior<&'a mut MutPage<'buf>> {
+    type Error = Error;
+
+    fn try_from(page: &'a mut MutPage<'buf>) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTreeLeaf.assert(kind).map(move |_| Self(CellPage::from(page)))
     }
@@ -106,26 +115,26 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
     }
     
     /// Insère un nouveau triplet {gauche | clé | droit}s dans le noeud intérieur.
-    pub fn insert(&mut self, left: PageId, key: &Comparable<Knack>, right: PageId) -> Result<()> {
+    pub fn insert(&mut self, left: JarTag, key: &Comparable<Knack>, right: JarTag) -> Result<()> {
         let maybe_existing_cid = self.iter()
-            .filter(|cell| cell.left() == Some(left))
+            .filter(|cell| cell.left() == Some(left.page_id))
             .map(|cell| cell.as_cell().id())
             .last();
        
         match maybe_existing_cid {
             None => {
                 // Le lien de gauche est en butée de cellule, on ajoute une cellule
-                if self.tail() == Some(left) {
+                if self.tail() == Some(left.page_id) {
                     let cid = self.0.push()?;
                     let cell = &mut self[&cid];
-                    cell.initialise(key, left);       
-                    self.as_mut_meta().set_tail(Some(right));            
+                    cell.initialise(key, left.page_id);       
+                    self.as_mut_meta().set_tail(Some(right.page_id));            
                 // Le noeud est vide
                 } else {
                     let cid = self.0.push()?;
                     let cell = &mut self[&cid];
-                    cell.initialise(key, left);
-                    self.as_mut_meta().set_tail(Some(right))
+                    cell.initialise(key, left.page_id);
+                    self.as_mut_meta().set_tail(Some(right.page_id))
                 }
             },
 
@@ -134,7 +143,7 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
             Some(existing_cid) => {
                 let cid = self.0.insert_after(&existing_cid)?;
                 let cell = &mut self[&cid];
-                cell.initialise(key, right);
+                cell.initialise(key, right.page_id);
             },
 
         };
@@ -169,6 +178,10 @@ impl<Page> BPlusTreeInterior<Page> where Page: AsMutPageSlice {
 
     pub fn set_parent(&mut self, parent: Option<PageId>) {
         self.as_mut_meta().set_parent(parent);
+    }
+
+    pub fn as_mut_page(&mut self) -> &mut Page {
+        self.0.as_mut()
     }
 
     /// Emprunte une cellule en mutation.
