@@ -1,7 +1,6 @@
 use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use zerocopy::IntoBytes;
 
 use super::{error::KnackError, marker::kernel::AsKernelRef, result::KnackResult};
 
@@ -75,15 +74,19 @@ impl KeyValue {
     }
 }
 
-pub struct DocumentRef([u8]);
-impl DocumentRef {
+pub struct DocRef([u8]);
+impl DocRef {
     const KV_BASE: usize = 1;
 
     pub fn iter(&self) -> DocAttributesIter<'_> {
         DocAttributesIter { doc: self, base: Self::KV_BASE }
     }
 
-    pub fn get<K: IntoKnackPath>(&self, _key: K) -> &Knack {
+    pub fn get_field(&self, name: &str) -> Option<&Knack> {
+        self.iter().filter(|kv| kv.key().cast::<str>() == name).map(|kv| kv.value()).next()
+    }
+
+    pub fn get<Path: IntoKnackPath>(&self, key: Path) -> &Knack {
         todo!()
     }
 
@@ -94,14 +97,14 @@ impl DocumentRef {
             .collect()
     }
 }
-impl Deref for DocumentRef {
+impl Deref for DocRef {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl TryFrom<&Knack> for &DocumentRef {
+impl TryFrom<&Knack> for &DocRef {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
@@ -114,7 +117,7 @@ impl TryFrom<&Knack> for &DocumentRef {
         }
     }
 }
-impl TryFrom<&mut Knack> for &mut DocumentRef {
+impl TryFrom<&mut Knack> for &mut DocRef {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
@@ -127,7 +130,7 @@ impl TryFrom<&mut Knack> for &mut DocumentRef {
 }
 
 pub struct DocAttributesIter<'a> {
-    doc: &'a DocumentRef,
+    doc: &'a DocRef,
     base: usize
 }
 impl<'a> Iterator for DocAttributesIter<'a> {
@@ -149,7 +152,7 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 pub struct Document(HashMap<String, KnackBuilder>);
 
 impl FromKnack for Document {
-    type Output = DocumentRef;
+    type Output = DocRef;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
         value.try_into()    
@@ -175,8 +178,8 @@ impl<Q> Index<Q> for Document where Q: IntoKnackPath {
 }
 
 impl Document {
+    /// Insère une paire clé/valeur dans le document.
     pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
-        let key = key.into_knack_buf();
         let value = value.into_value_builder();
         self.0.insert(key.to_string(), value);
     }

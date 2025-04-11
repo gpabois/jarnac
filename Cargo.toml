@@ -10,6 +10,7 @@ either = "1.13.0"
 into_variant = "0.3.0"
 itertools = "0.14.0"
 parking_lot = "0.12.3"
+phf = { version = "0.11.2", features = ["macros", "phf_macros"] }
 rand = "0.9.0"
 serde = "1.0.217"
 zerocopy = "0.8.17" 

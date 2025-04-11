@@ -123,15 +123,15 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
                 self.insert_in_interior(
                     &mut parent, 
                     *left.tag(), 
-                    &key, 
-                    *right.id()
+                    key.try_as_comparable().unwrap(), 
+                    *right.tag()
                 )?;
 
                 Ok(())
             }
 
             BPTreeNodeKind::Leaf => {
-                let mut left = BPlusTreeLeaf::try_from(node.into_inner())?;
+                let mut left = BPlusTreeLeaf::try_from(page)?;
 
                 // On ne divise pas un noeud qui n'est pas plein.
                 if !left.is_full() {
@@ -142,11 +142,11 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
 
                 let key = left.split_into(&mut right)?.to_owned();
 
-                right.set_prev(Some(*left.id()));
-                left.set_next(Some(*right.id()));
+                right.set_prev(Some(left.tag().page_id));
+                left.set_next(Some(right.tag().page_id));
 
                 let parent_id = match left.get_parent() {
-                    Some(parent_id) => parent_id,
+                    Some(parent_id) => self.tag.in_page(parent_id),
                     None => {
                         let new_parent = self.new_interior()?;
                         self.as_mut_descriptor().set_root(Some(new_parent.tag().page_id));
@@ -160,9 +160,9 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena> where Arena: IPager<'nodes> {
                 let mut parent = self.borrow_mut_interior(&parent_id)?;
                 self.insert_in_interior(
                     &mut parent,
-                    *left.as_page().tag(),
-                    &key,
-                    *right.as_page().tag(),
+                    *left.tag(),
+                    key.try_as_comparable().unwrap(),
+                    *right.tag(),
                 )?;
 
                 Ok(())

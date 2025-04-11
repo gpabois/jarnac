@@ -1,40 +1,11 @@
-use std::mem::transmute;
-
-use zerocopy::{FromBytes, IntoBytes, F32, F64, I128, I16, I32, I64, U128, U16, U32, U64, LE};
-
-use crate::utils::Shift;
-
-use super::{kind::KnackKind, marker::{kernel::{AsKernelMut, AsKernelRef}, Comparable}, GetKnackKind as _, Knack};
+use super::{kind::{KnackKind, F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID}, marker::{kernel::{AsKernelMut, AsKernelRef}, Comparable}, Knack};
 
 impl<L> Comparable<L> where L: AsKernelRef<Kernel = KnackKind> {
     /// offset-size : xx [111:offset] [111:size]
     /// Size is a power of 2
     /// Offset is a power of 2
-    pub fn new(mut base: L, float: bool, signed: bool, size: u8, offset: u8) -> Self where L: AsKernelMut<Kernel = KnackKind> {
-        base.as_kernel_mut().as_mut_bytes()[0] |= signed.then(|| KnackKind::FLAG_SIGNED).unwrap_or_default() 
-            | float.then(|| KnackKind::FLAG_FLOAT).unwrap_or_default();
-        base.as_kernel_mut().as_mut_bytes()[4] = size | offset;
+    pub(crate) fn new(base: L) -> Self where L: AsKernelMut<Kernel = KnackKind> {
         Self(base)
-    }
-}
-
-impl Comparable<KnackKind> {
-    fn is_float(&self) -> bool {
-        let flags = self.0.as_bytes()[0];
-        flags & KnackKind::FLAG_FLOAT > 0
-    }
-
-    fn is_signed(&self) -> bool {
-        let flags = self.0.as_bytes()[0];
-        flags & KnackKind::FLAG_SIGNED > 0
-    }
-
-    fn size(&self) -> u8 {
-        self.as_kernel_ref().as_bytes()[4] & 0b111
-    }
-
-    fn offset(&self) -> u8 {
-        self.as_kernel_ref().as_bytes()[4] & 0b111000
     }
 }
 
@@ -42,17 +13,12 @@ impl Comparable<Knack> {
     pub fn kind(&self) -> &Comparable<KnackKind> {
         self.0.kind().try_as_comparable().unwrap()
     }
-
-    fn raw(&self) -> &[u8] {
-        let kind = self.kind();
-        let slice = (0..usize::from(self.kind().size())).shift(usize::from(kind.offset()));
-        &self.as_bytes()[slice]
-    }
 }
 
 impl PartialEq<Knack> for Comparable<Knack> {
     fn eq(&self, other: &Knack) -> bool {
-        self.as_value_bytes() == other.as_value_bytes()
+        self.kind().as_kernel_ref() == other.kind() 
+        && self.as_value_bytes() == other.as_value_bytes()
     }
 }
 
@@ -61,76 +27,24 @@ impl PartialOrd<Knack> for Comparable<Knack> {
         if self.kind().as_kernel_ref() != other.kind() {
             return None
         }
+
         let other = other.try_as_comparable().unwrap();
+        let type_id = self.kind().type_id();
 
-        let kind = self.kind();
-
-        match (kind.is_float(), kind.is_signed(), kind.size()) {
-            (true, _, 3) => {
-                let lhs = F32::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = F32::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)
-            }, 
-            (true, _, 4) => {
-                let lhs = F64::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = F64::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)          
-            }, 
-            (_, true, 1) => {
-                unsafe {
-                    let lhs: i8 = transmute(self.raw()[0]);
-                    let rhs: i8 = transmute(other.raw()[0]);
-                    lhs.partial_cmp(&rhs)   
-                }   
-            }, 
-            (_, false, 1) => {
-                unsafe {
-                    let lhs: u8 = transmute(self.raw()[0]);
-                    let rhs: u8 = transmute(other.raw()[0]);
-                    lhs.partial_cmp(&rhs)   
-                }  
-            },
-            (_, true, 2) => {
-                let lhs = I16::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = I16::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)               
-            },
-            (_, false, 2) => {
-                let lhs = U16::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = U16::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)        
-            },
-            (_, true, 3) => {
-                let lhs = I32::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = I32::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            }, 
-            (_, false, 3) => {
-                let lhs = U32::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = U32::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            },  
-            (_, true, 4) => {
-                let lhs = I64::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = I64::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            }, 
-            (_, false, 4) => {
-                let lhs = U64::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = U64::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            }, 
-            (_, true, 5) => {
-                let lhs = I128::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = I128::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            }, 
-            (_, false, 5) => {
-                let lhs = U128::<LE>::ref_from_bytes(self.raw()).unwrap();
-                let rhs = U128::<LE>::ref_from_bytes(other.raw()).unwrap();
-                lhs.partial_cmp(rhs)     
-            },
-            _ => None 
+        match type_id {
+            U8_TYPE_ID => self.cast::<u8>().partial_cmp(other.cast::<u8>()),
+            I8_TYPE_ID => self.cast::<i8>().partial_cmp(other.cast::<i8>()),
+            U16_TYPE_ID => self.cast::<u16>().partial_cmp(other.cast::<u16>()),
+            I16_TYPE_ID => self.cast::<i16>().partial_cmp(other.cast::<i16>()),
+            U32_TYPE_ID => self.cast::<u32>().partial_cmp(other.cast::<u32>()),
+            I32_TYPE_ID => self.cast::<i32>().partial_cmp(other.cast::<i32>()),
+            U64_TYPE_ID => self.cast::<u64>().partial_cmp(other.cast::<u64>()),
+            I64_TYPE_ID => self.cast::<i64>().partial_cmp(other.cast::<i64>()),
+            U128_TYPE_ID => self.cast::<u128>().partial_cmp(other.cast::<u128>()),
+            I128_TYPE_ID => self.cast::<i128>().partial_cmp(other.cast::<i128>()),
+            F32_TYPE_ID => self.cast::<f32>().partial_cmp(other.cast::<f32>()),
+            F64_TYPE_ID => self.cast::<f64>().partial_cmp(other.cast::<f64>()),
+            _ => None
         }
     }
 }

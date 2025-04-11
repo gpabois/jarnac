@@ -1,3 +1,5 @@
+use crate::knack::kind::KnackKind;
+
 use super::{kernel::{AsKernelMut, AsKernelRef}, Comparable};
 
 pub struct FixedSized<T>(pub(crate) T) where T: ?std::marker::Sized;
@@ -76,4 +78,28 @@ impl<L> AsKernelMut for VarSized<L> where L: AsKernelMut + ?std::marker::Sized{
 pub enum Sized<'a, K> {
     Fixed(&'a FixedSized<K>),
     Var(&'a VarSized<K>)
+}
+
+impl<K> Sized<'_, K> where K: AsKernelRef<Kernel=KnackKind> {
+    pub fn is_variable(&self) -> bool {
+        matches!(self, Self::Var(_))
+    }
+
+    pub fn is_fixed(&self) -> bool {
+        matches!(self, Self::Fixed(_))
+    }
+
+    pub fn inner_size(&self) -> Option<usize> {
+        match self {
+            Sized::Fixed(fixed_sized) => Some(fixed_sized.as_fixed_sized().inner_size()),
+            Sized::Var(_) => None,
+        }
+    }
+
+    pub fn outer_size(&self) -> Option<usize> {
+        match self {
+            Sized::Fixed(fixed_sized) => Some(fixed_sized.as_fixed_sized().outer_size()),
+            Sized::Var(_) => None,
+        }
+    }
 }

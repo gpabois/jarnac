@@ -1,12 +1,12 @@
 //pub mod stream;
 
-use std::{io::{Cursor, Read, Write}, ops::Range};
+use std::{io::{Cursor, Read, Write}, mem::MaybeUninit, ops::Range};
 
 use zerocopy::{FromBytes, TryFromBytes};
 use zerocopy_derive::*;
 
 
-use crate::{knack::{buf::KnackBuf, CowKnack, Knack, KnackCell}, page::PageSlice, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift};
+use crate::{knack::{buf::KnackBuf, CowKnack, Knack, KnackCell}, page::{AsRefPage, InPage, PageSize, PageSlice}, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift};
 use crate::page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind, RefPageSlice};
 
 /// Représente un truc dont le contenu peut avoir débordé ailleurs.
@@ -75,6 +75,7 @@ impl<Slice> Var<Slice> where Slice: AsRefPageSlice + ?Sized {
             std::mem::transmute(slice)
         }
     }
+    
 
     pub fn len(&self) -> u64 {
         self.as_meta().total_size
@@ -181,79 +182,93 @@ impl VarMeta {
 
 pub struct SpillPage<Page>(Page) where Page: AsRefPageSlice;
 
+impl<Page> SpillPage<Page> where Page: AsRefPage {
+    pub fn tag(&self) -> &JarTag {
+        self.0.tag()
+    }
+}
+
 impl<Page> SpillPage<Page> where Page: AsRefPageSlice {
     pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into().unwrap();
         PageKind::Spill.assert(kind).map(|_| Self(page))
     }
 
-    pub fn as_data(&self) -> &SpillPageData {
-        self.as_ref()
+    pub fn get_next(&self) -> Option<PageId> {
+        self.as_meta().get_next()
+    }
+
+    pub fn read<W: Write>(&self, dest: &mut W) {
+        dest.write_all(self.borrow_body()).unwrap();
+    }
+
+    fn borrow_body(&self) -> &[u8] {
+        let area = (0..usize::from(self.as_meta().get_in_page_size())).shift(SpillMeta::AREA.end);
+        &self.0.as_bytes()[area]
+    }
+
+
+    fn as_meta(&self) -> &SpillMeta {
+        SpillMeta::ref_from_bytes(&self.0.as_bytes()[SpillMeta::AREA]).unwrap()
     }
 }
 
-impl<Page> AsRef<SpillPageData> for SpillPage<Page> where Page: AsRefPageSlice {
-    fn as_ref(&self) -> &SpillPageData {
-        SpillPageData::try_ref_from_bytes(self.0.as_ref()).unwrap()
+impl<Page> SpillPage<Page> where Page: AsMutPageSlice {
+    pub fn new(page: Page) -> Self {
+        let mut page = Self(page);
+        page.as_uinit_meta().write(Default::default());
+        page
+    }
+
+    pub fn write<R: Read>(&mut self, src: &mut R) -> usize {
+        let written = src.read(&mut self.borrow_mut_available_body()).unwrap();
+        self.as_mut_meta().set_in_page_size(written.try_into().unwrap());
+        written
+    }
+
+    pub fn set_next(&mut self, next: Option<PageId>) {
+        self.as_mut_meta().set_next(next);
+    }
+
+    fn borrow_mut_available_body(&mut self) -> &mut [u8] {
+        &mut self.0.as_mut_bytes()[SpillMeta::AREA.end..]
+    }
+
+    fn as_uinit_meta(&mut self) -> &mut MaybeUninit<SpillMeta> {
+        unsafe {
+            std::mem::transmute(self.as_mut_meta())
+        }
+    }
+
+    fn as_mut_meta(&mut self) -> &mut SpillMeta {
+        SpillMeta::mut_from_bytes(&mut self.0.as_mut_bytes()[SpillMeta::AREA]).unwrap()
     }
 }
 
-impl<Page> AsMut<SpillPageData> for SpillPage<Page> where Page: AsMutPageSlice {
-    fn as_mut(&mut self) -> &mut SpillPageData {
-        SpillPageData::try_mut_from_bytes(self.0.as_mut()).unwrap()
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout)]
+#[repr(C, packed)]
+pub struct SpillMeta {
+    in_page_size: PageSize,
+    next: OptionalPageId,   
+}
+
+impl Default for SpillMeta {
+    fn default() -> Self {
+        Self { in_page_size: Default::default(), next: None.into() }
     }
 }
 
-impl<Page> AsRef<[u8]> for SpillPage<Page> where Page: AsRefPageSlice {
-    fn as_ref(&self) -> &[u8] {
-        let in_page_size: usize = self.as_data().in_page_size.try_into().unwrap();
-        &self.as_data().body[..in_page_size]
-    }
+impl DataArea for SpillMeta {
+    const AREA: Range<usize> = InPage::<Self>::AREA;
 }
 
-#[derive(TryFromBytes, KnownLayout, Immutable)]
-#[repr(u8)]
-#[allow(dead_code)]
-enum SpillKind {
-    Spill = PageKind::Spill as u8
-}
-
-#[derive(TryFromBytes, KnownLayout, Immutable)]
-#[repr(C)]
-/// Page de débordement sans copie. 
-pub struct SpillPageData {
-    kind: SpillKind,
-    in_page_size: u64,
-    next: OptionalPageId,
-    body: [u8]
-}
-
-impl SpillPageData {
-    #[inline]
-    /// Récupère une référence sur la page de débordement.
-    pub fn get<Page>(page: &Page) -> &Self
-    where Page: AsRefPageSlice
-    {
-        Self::try_ref_from_bytes(page.as_ref()).unwrap()
-    }
-
-    #[inline]
-    /// Récupère une référence mutable de la page de débordement.
-    pub fn get_mut(page: &mut [u8]) -> &mut Self {
-        Self::try_mut_from_bytes(page).unwrap()
-    }
-
-    /// Crée une nouvelle page de débordement.
-    pub fn new<Page>(page: &mut Page) -> &mut Self 
-    where Page: AsMutPageSlice
-    {
-        page.as_mut().fill(0);
-        page.as_mut().as_mut_bytes()[0] = PageKind::Spill as u8;
-        Self::try_mut_from_bytes(page.as_mut()).unwrap()
-    }
-
-    pub fn get_in_page_size(&self) -> u64 {
+impl SpillMeta {
+    pub fn get_in_page_size(&self) -> PageSize {
         self.in_page_size
+    }
+
+    pub fn set_in_page_size(&mut self, in_page_size: PageSize) {
+        self.in_page_size = in_page_size
     }
 
     pub fn get_next(&self) -> Option<PageId> {
@@ -264,16 +279,6 @@ impl SpillPageData {
         self.next = next.into()
     } 
 
-    pub fn write<R: Read>(&mut self, src: &mut R) -> usize {
-        let written = src.read(&mut self.body).unwrap();
-        self.in_page_size = written.try_into().unwrap();
-        written
-    }
-
-    pub fn read<W: Write>(&self, dest: &mut W) {
-        let fragment = &self.body[..self.in_page_size.try_into().unwrap()];
-        dest.write_all(fragment).unwrap();
-    }
 }
 
 /// Libère toutes les pages de débordement de la liste chaînée.
@@ -281,8 +286,7 @@ pub fn free_overflow_pages<'a, Pager: IPager<'a> + ?std::marker::Sized>(head: Pa
     let mut current = Some(pager.tag().in_page(head));
 
     while let Some(tag) = current {
-        let raw = pager.borrow_element(&tag)?;
-        let page = SpillPageData::get(&raw);
+        let page = pager.borrow_element(&tag).and_then(SpillPage::try_from)?;
         current = page.get_next().map(|pid| pager.tag().in_page(pid));
         pager.delete_element(&tag)?;
     }
@@ -292,19 +296,18 @@ pub fn free_overflow_pages<'a, Pager: IPager<'a> + ?std::marker::Sized>(head: Pa
 
 /// Lit les données d'une taille dynamique dans une région d'une page.
 pub fn read_var<'a, Pager: IPager<'a>, W: Write>(
-    header: &VarMeta,
+    meta: &VarMeta,
     dest: &mut W,
     src: &[u8],
     pager: &Pager,
 ) -> Result<()> {
-    let in_page_data = &src[..header.in_page_size.try_into().unwrap()];
+    let in_page_data = &src[..meta.in_page_size.try_into().unwrap()];
     dest.write_all(in_page_data)?;
 
-    let mut current = header.spill_page_id;
+    let mut current = meta.spill_page_id;
 
     while let Some(tag) = current.as_ref().map(|pid| pager.tag().in_page(pid)) {
-        let raw = pager.borrow_element(&tag)?;
-        let page = SpillPageData::get(&raw);
+        let page = pager.borrow_element(&tag).and_then(SpillPage::try_from)?;
         page.read(dest);
         current = page.get_next().into();
     }
@@ -333,31 +336,31 @@ pub fn write_var<'a, Pager: IPager<'a> + ?std::marker::Sized>(
     let mut prev_ov_pid: Option<JarTag> = None;
 
     while remaining > 0 {
-        let mut page = pager.new_element()?;
-        let spill = SpillPageData::new(&mut page);
- 
+        let mut spill = pager.new_element().map(SpillPage::new)?;
+
         remaining -= spill.write(&mut cursor);
 
         if ov_head.is_none() {
-            ov_head = Some(*page.tag())
+            ov_head = Some(*spill.tag())
         }
 
         if let Some(prev_ov_pid) = prev_ov_pid {
-            let mut prev_page = pager.borrow_mut_element(&prev_ov_pid)?;
-            let prev_sp = SpillPageData::get_mut(&mut prev_page);
-            prev_sp.set_next(Some(page.tag().page_id));
+            let mut prev_page = pager.borrow_mut_element(&prev_ov_pid).and_then(SpillPage::try_from)?;
+            prev_page.set_next(Some(spill.tag().page_id));
         }
 
-        prev_ov_pid = Some(*page.tag());
+        prev_ov_pid = Some(*spill.tag());
     }
 
     // Si il reste des pages de débordement, on va les libérer, ça sert à rien de les garder.
     if let Some(tail) = prev_ov_pid {
-        let mut tail_page = pager.borrow_mut_element(&tail)?;
-        let tail_sp = SpillPageData::get_mut(&mut tail_page);
-        tail_sp.get_next().iter().try_for_each(|rem| {
-            free_overflow_pages(*rem, pager)
-        })?;
+        let tail_page = pager.borrow_mut_element(&tail).and_then(SpillPage::try_from)?;
+        tail_page
+            .get_next()
+            .iter()
+            .try_for_each(|rem| {
+                free_overflow_pages(*rem, pager)
+            })?;
     }
 
     Ok(VarMeta {

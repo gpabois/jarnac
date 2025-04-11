@@ -19,11 +19,14 @@ pub mod ord;
 
 use std::ops::{Deref, DerefMut};
 
+use array::Array;
 use buf::KnackBuf;
 use builder::KnackBuilder;
+use document::Document;
 use error::KnackError;
 use kind::{GetKnackKind, KnackKind};
 use marker::{kernel::AsKernelRef, Comparable};
+use path::IntoKnackPath;
 use result::KnackResult;
 use zerocopy::{FromBytes, LittleEndian};
 
@@ -137,8 +140,25 @@ impl Knack {
 
     pub fn kind(&self) -> &KnackKind {
         unsafe {
-            let slice: &[u8; 4] = (&self.0[0..=4]).try_into().unwrap();
-            std::mem::transmute(slice)
+            std::mem::transmute(&self.0[0])
+        }
+    }
+
+    pub fn get<Path: IntoKnackPath>(&self, path: Path) -> Option<&Knack> {
+        let mut pth = path.into_value_path();
+
+        match pth.pop() {
+            None => Some(self),
+            Some(attr_name) => {
+                if self.is::<Document>() {
+                    self.cast::<Document>().get_field(&attr_name).and_then(|v| v.get(pth))
+                } else if self.is::<Array>() {
+                    let index = attr_name.parse::<usize>().ok()?;
+                    self.cast::<Array>().get(&index).and_then(|v| v.get(pth))
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -1129,16 +1149,16 @@ mod tests {
 
     #[test]
     fn test_sizes() {
-        assert_eq!(10u8.into_knack_buf().kind().inner_size(), Some(1), "unsigned int8 must have a size of 1");
-        assert_eq!(10i8.into_knack_buf().kind().inner_size(), Some(1), "signed int8 must have a size of 1");
-        assert_eq!(10u16.into_knack_buf().kind().inner_size(), Some(2), "unsigned int16 must have a size of 2");
-        assert_eq!(10i16.into_knack_buf().kind().inner_size(), Some(2), "signed int16 must have a size of 2");
-        assert_eq!(10u32.into_knack_buf().kind().inner_size(), Some(4), "unsigned int32 must have a size of 4");
-        assert_eq!(10i32.into_knack_buf().kind().inner_size(), Some(4), "signed int32 must have a size of 4");
-        assert_eq!(10u64.into_knack_buf().kind().inner_size(), Some(8), "unsigned int64 must have a size of 8");
-        assert_eq!(10i64.into_knack_buf().kind().inner_size(), Some(8), "signed int64 must have a size of 8");
-        assert_eq!(10u128.into_knack_buf().kind().inner_size(), Some(16), "unsigned int128 must have a size of 16");
-        assert_eq!(10i128.into_knack_buf().kind().inner_size(), Some(16), "signed int128 must have a size of 16");
+        assert_eq!(10u8.into_knack_buf().kind().as_sized().inner_size(), Some(1), "unsigned int8 must have a size of 1");
+        assert_eq!(10i8.into_knack_buf().kind().as_sized().inner_size(), Some(1), "signed int8 must have a size of 1");
+        assert_eq!(10u16.into_knack_buf().kind().as_sized().inner_size(), Some(2), "unsigned int16 must have a size of 2");
+        assert_eq!(10i16.into_knack_buf().kind().as_sized().inner_size(), Some(2), "signed int16 must have a size of 2");
+        assert_eq!(10u32.into_knack_buf().kind().as_sized().inner_size(), Some(4), "unsigned int32 must have a size of 4");
+        assert_eq!(10i32.into_knack_buf().kind().as_sized().inner_size(), Some(4), "signed int32 must have a size of 4");
+        assert_eq!(10u64.into_knack_buf().kind().as_sized().inner_size(), Some(8), "unsigned int64 must have a size of 8");
+        assert_eq!(10i64.into_knack_buf().kind().as_sized().inner_size(), Some(8), "signed int64 must have a size of 8");
+        assert_eq!(10u128.into_knack_buf().kind().as_sized().inner_size(), Some(16), "unsigned int128 must have a size of 16");
+        assert_eq!(10i128.into_knack_buf().kind().as_sized().inner_size(), Some(16), "signed int128 must have a size of 16");
     }
 
 }

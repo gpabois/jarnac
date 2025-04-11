@@ -5,7 +5,7 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, error::Error, knack::{kind::KnackKind, marker::{kernel::{AsKernelMut, AsKernelRef}, sized::Sized, AsComparable, AsFixedSized, Comparable, FixedSized}, Knack, KnackCell}, page::{AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift, var::{MaybeSpilled, Var}
+    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, error::Error, knack::{kind::KnackKind, marker::{kernel::{AsKernelMut, AsKernelRef}, sized::Sized, AsComparable, AsFixedSized, Comparable, FixedSized}, Knack, KnackCell}, page::{AsMutPageSlice, AsRefPage, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId, PageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice}, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift, var::{MaybeSpilled, Var}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -29,7 +29,7 @@ impl<Page> IndexMut<&CellId> for BPlusTreeLeaf<Page> where Page: AsMutPageSlice 
     }
 }
 
-impl BPlusTreeLeafMut<'_> {
+impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPage {
     pub fn tag(&self) -> &JarTag {
         self.0.tag()
     }
@@ -53,6 +53,16 @@ impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeLeaf<MutPage<'buf>> {
     }
 }
 
+impl<'a, 'buf> TryFrom<&'a mut MutPage<'buf>> for BPlusTreeLeaf<&'a mut MutPage<'buf>> {
+    type Error = Error;
+
+    fn try_from(page: &'a mut MutPage<'buf>) -> Result<Self> {
+        let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        PageKind::BPlusTreeLeaf.assert(kind).map(move |_| Self(CellPage::from(page)))
+    }
+}
+
+
 impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPageSlice {
     pub fn len(&self) -> u8 {
         self.0.len()
@@ -62,12 +72,20 @@ impl<Page> BPlusTreeLeaf<Page> where Page: AsRefPageSlice {
         self.0.is_full()
     }
 
+    pub fn get_parent(&self) -> Option<PageId> {
+        self.as_meta().get_parent()
+    }
+
     fn borrow_cell(&self, cid: &CellId) -> Option<&BPlusTreeLeafCell<PageSlice>> {
         self.0
         .borrow_cell(cid)
         .map(|cell| unsafe {
             std::mem::transmute(cell)
         })
+    }
+
+    fn as_meta(&self) -> &BPTreeLeafMeta {
+        BPTreeLeafMeta::ref_from_bytes(&self.0.as_bytes()[BPTreeLeafMeta::AREA]).unwrap()
     }
 }
 
@@ -207,6 +225,9 @@ pub struct BPTreeLeafMeta {
 }
 
 impl BPTreeLeafMeta {
+    pub fn get_parent(&self) -> Option<PageId> {
+        self.parent.into()
+    }
     pub fn set_parent(&mut self, parent: Option<PageId>) {
         self.parent = parent.into();
     }
@@ -229,11 +250,11 @@ impl<Slice> BPlusTreeLeafCell<Slice> where Slice: AsMutPageSlice + ?std::marker:
     /// Initialise la cellule
     pub fn initialise<'buf, Pager: IPager<'buf> + ?std::marker::Sized>(cell: &mut Self, key: &Knack, value: &Knack, pager: &Pager) -> Result<()> {
         let area = KnackKind::AREA;
-
+        
         cell.0
             .as_mut_content_slice()
             .as_mut_bytes()[area]
-            .clone_from_slice(key.kind().as_ref());
+            .clone_from_slice(key.kind().as_bytes());
 
         cell.borrow_mut_key().as_kernel_mut().set(key);
         cell.borrow_mut_value().set(value, pager)?;

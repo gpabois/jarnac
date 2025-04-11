@@ -119,6 +119,13 @@ impl AsRefPage for MutPage<'_> {
     }
 }
 
+impl AsRefPage for &mut MutPage<'_> {
+    fn tag(&self) -> &JarTag {
+        self.inner.tag()
+    }
+}
+
+
 impl AsMutPage for MutPage<'_> {}
 
 impl AsMut<PageSlice> for MutPage<'_> {

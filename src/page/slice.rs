@@ -1,6 +1,5 @@
 use std::{mem::forget, ops::{Deref, DerefMut, Index, IndexMut}, slice::SliceIndex};
 
-use zerocopy::{Immutable, KnownLayout, TryFromBytes};
 
 use crate::page::descriptor::PageDescriptor;
 
@@ -22,24 +21,10 @@ impl AsRef<PageSlice> for PageSlice {
     }
 }
 
-impl AsMutPageSlice for PageSlice{}
+impl AsMutPageSlice for PageSlice {}
 impl AsMut<PageSlice> for PageSlice {
     fn as_mut(&mut self) -> &mut PageSlice {
         self
-    }
-}
-
-impl PageSlice {
-    pub fn try_into_ref<T>(&self) -> Result<&T, zerocopy::ConvertError<zerocopy::AlignmentError<&[u8], T>, zerocopy::SizeError<&[u8], T>, zerocopy::ValidityError<&[u8], T>>>
-    where T: TryFromBytes + KnownLayout + Immutable + ?Sized
-    {
-        T::try_ref_from_bytes(&self.0)
-    }
-
-    pub fn try_into_mut<T>(&mut self) ->  Result<&mut T, zerocopy::ConvertError<zerocopy::AlignmentError<&mut [u8], T>, zerocopy::SizeError<&mut [u8], T>, zerocopy::ValidityError<&mut [u8], T>>>
-    where T: TryFromBytes + KnownLayout + Immutable + ?Sized
-    {
-        T::try_mut_from_bytes(&mut self.0)
     }
 }
 

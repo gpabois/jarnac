@@ -1,6 +1,6 @@
 use std::ops::{Div, Index, IndexMut, Range};
 
-use zerocopy::{FromBytes, IntoBytes};
+use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
@@ -18,8 +18,8 @@ pub struct BPlusTreeInterior<Page>(CellPage<Page>);
 pub type BPlusTreeInteriorMut<'page> = BPlusTreeInterior<MutPage<'page>>;
 pub type BPlusTreeInteriorRef<'page> = BPlusTreeInterior<RefPage<'page>>;
 
-impl<Page> AsRefPage for BPlusTreeInterior<Page> where Page: AsRefPage {
-    fn tag(&self) -> &JarTag {
+impl<Page> BPlusTreeInterior<Page> where Page: AsRefPage {
+    pub fn tag(&self) -> &JarTag {
         self.0.tag()
     }
 }
@@ -307,7 +307,7 @@ impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsRefPageSlice + ?std::marker
 
 impl<Slice> BPTreeInteriorCell<Slice> where Slice: AsMutPageSlice + ?std::marker::Sized {
     pub fn initialise(&mut self, key: &Comparable<Knack>, left: PageId) {
-        key.kind().outer_size().expect(
+        key.kind().as_sized().outer_size().expect(
                 &format!("expecting key to be a sized-type (kind: {0})", 
                 key.kind().as_kernel_ref()
             )

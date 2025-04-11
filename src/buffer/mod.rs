@@ -11,10 +11,7 @@ use itertools::Itertools;
 use stress::BufferStressStrategy;
 
 use crate::{
-    error::{Error, ErrorKind}, 
-    page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, 
-    result::Result, 
-    tag::JarTag, utils::Flip
+    error::{Error, ErrorKind}, page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, result::Result, tag::JarTag, utils::Flip
 };
 
 pub trait IBufferPool {
@@ -44,6 +41,12 @@ pub trait IBufferPool {
 #[derive(Clone)]
 pub struct SharedBufferPool(Arc<BufferPool>);
 
+impl SharedBufferPool {
+    pub fn new(buffer_size: usize, page_size: PageSize, stress_strategy: BufferStressStrategy) -> Self {
+        Self(Arc::new(BufferPool::new(buffer_size, page_size, stress_strategy)))
+    }
+}
+
 impl IBufferPool for SharedBufferPool {
     fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>> {
         self.0.alloc(tag)
@@ -53,6 +56,9 @@ impl IBufferPool for SharedBufferPool {
         self.0.try_get_descriptor(tag)
     }
 }
+
+unsafe impl Sync for SharedBufferPool {}
+unsafe impl Send for SharedBufferPool {}
 
 pub struct BufferPool {
     /// Le layout de l'espace allouée
@@ -108,10 +114,12 @@ impl BufferPool {
         }
     }
 
+    /// Nombre de pages stockées
     pub fn len(&self) -> usize {
         self.stored.len()
     }
 
+    /// Vérifie si le pool contient une certaine page.
     pub fn contains(&self, tag: &JarTag) -> bool {
         self.stored.contains(tag)
     }

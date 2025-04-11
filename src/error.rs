@@ -109,7 +109,7 @@ impl Display for ErrorKind {
             ErrorKind::CellPageOverflow => write!(f, "cell space overflows allocated page space"),
             ErrorKind::PageLoadingFailed { tag: id, source } => write!(f, "failed to load page {id}, reason: {source}"),
             ErrorKind::InvalidBPlusTreeDefinition => write!(f, "the b+ tree definition is invalid"),
-            ErrorKind::KnackError(error) => todo!(),
+            ErrorKind::KnackError(_error) => todo!(),
         }
     }
 }
