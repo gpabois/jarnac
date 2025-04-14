@@ -1,17 +1,35 @@
 use std::{mem::MaybeUninit, ops::DerefMut};
 
-use crate::{knack::{kind::KnackKind, marker::{AsFixedSized, Comparable, FixedSized}}, page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, result::Result, tag::DataArea, utils::Valid};
+use crate::{
+    knack::{
+        kind::KnackKind,
+        marker::{AsFixedSized, Comparable, FixedSized},
+    },
+    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind},
+    result::Result,
+    tag::DataArea,
+    utils::Valid,
+};
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
 use super::{interior::BPlusTreeInterior, leaf::BPlusTreeLeaf, BPlusTreeDefinition};
 
-pub struct BPTreeDescriptor<Page>(Page) where Page: AsRefPageSlice;
+pub struct BPTreeDescriptor<Page>(Page)
+where
+    Page: AsRefPageSlice;
 
-impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {    
+impl<Page> BPTreeDescriptor<Page>
+where
+    Page: AsRefPageSlice,
+{
     pub fn try_from(page: Page) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
         PageKind::BPlusTree.assert(kind).map(|_| Self(page))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Le nombre d'éléments stockés dans l'arbre
@@ -37,7 +55,7 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
     }
 
     pub fn is_var_sized(&self) -> bool {
-        return self.as_description().flags() & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
+        self.as_description().flags() & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
     }
 
     pub(super) fn as_description(&self) -> &BPlusTreeDescription {
@@ -45,19 +63,21 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsRefPageSlice {
     }
 }
 
-impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
+impl<Page> BPTreeDescriptor<Page>
+where
+    Page: AsMutPageSlice,
+{
     pub fn new(mut page: Page, definition: Valid<BPlusTreeDefinition>) -> Result<Self> {
         // initialisation bas-niveau de la page.
         page.as_mut().fill(0);
         page.as_mut().deref_mut()[0] = PageKind::BPlusTree as u8;
 
         let mut desc = Self::try_from(page)?;
-        
-        desc
-            .as_uninit_description()
+
+        desc.as_uninit_description()
             .write(BPlusTreeDescription::new(definition));
 
-        Ok(desc)   
+        Ok(desc)
     }
 
     pub fn inc_len(&mut self) {
@@ -73,15 +93,12 @@ impl<Page> BPTreeDescriptor<Page> where Page: AsMutPageSlice {
     }
 
     fn as_mut_description(&mut self) -> &mut BPlusTreeDescription {
-        BPlusTreeDescription::mut_from_bytes(
-            &mut self.0.as_mut()[BPlusTreeDescription::AREA]
-        ).unwrap()
+        BPlusTreeDescription::mut_from_bytes(&mut self.0.as_mut()[BPlusTreeDescription::AREA])
+            .unwrap()
     }
 
     fn as_uninit_description(&mut self) -> &mut MaybeUninit<BPlusTreeDescription> {
-        unsafe {
-            std::mem::transmute(self.as_mut_description())
-        }
+        unsafe { std::mem::transmute(self.as_mut_description()) }
     }
 }
 
@@ -93,7 +110,7 @@ pub struct BPlusTreeDescription {
     /// Pointeur vers la racine
     pub(super) root: OptionalPageId,
     /// Nombre d'éléments stockés
-    pub(super) len: u64
+    pub(super) len: u64,
 }
 
 impl BPlusTreeDescription {
@@ -101,7 +118,7 @@ impl BPlusTreeDescription {
         Self {
             def: def.into_inner(),
             root: None.into(),
-            len: 0
+            len: 0,
         }
     }
 
@@ -118,13 +135,14 @@ impl BPlusTreeDescription {
     }
 
     pub fn key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
-        unsafe {
-            std::mem::transmute(&self.def.key)
-        }
+        unsafe { std::mem::transmute(&self.def.key) }
     }
 
     pub fn leaf_content_size(&self) -> u16 {
-        BPlusTreeLeaf::<()>::compute_cell_content_size(self.key_kind().as_fixed_sized(), self.def.in_cell_value_size)
+        BPlusTreeLeaf::<()>::compute_cell_content_size(
+            self.key_kind().as_fixed_sized(),
+            self.def.in_cell_value_size,
+        )
     }
 
     pub fn interior_content_size(&self) -> u16 {
@@ -139,3 +157,4 @@ impl BPlusTreeDescription {
 impl DataArea for BPlusTreeDescription {
     const AREA: std::ops::Range<usize> = InPage::<Self>::AREA;
 }
+

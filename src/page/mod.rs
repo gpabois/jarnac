@@ -1,31 +1,38 @@
 //! Module de page
-//! 
+//!
 //! Les pages sont toujours renvoyées par le [pager](crate::pager::IPager) :
 //! - soit en [référence](self::RefPage) ;
 //! - soit en [référence mutable](self::MutPage).
-//! 
-//! Les pages sont indexées par [PageId]. 
+//!
+//! Les pages sont indexées par [PageId].
 pub mod data;
-pub mod slice;
-pub mod kind;
-pub mod size;
-pub mod location;
-pub mod id;
 pub mod descriptor;
+pub mod id;
+pub mod kind;
+pub mod location;
+pub mod size;
+pub mod slice;
 
 pub use data::*;
 use descriptor::PageDescriptor;
 pub use id::*;
 pub use kind::*;
+pub use location::*;
 pub use size::*;
 pub use slice::*;
-pub use location::*;
 
 use std::{
-    io::Cursor, marker::PhantomData, mem::forget, ops::{Deref, DerefMut, Range}
+    io::Cursor,
+    marker::PhantomData,
+    mem::forget,
+    ops::{Deref, DerefMut, Range},
 };
 
-use crate::{error::{Error, ErrorKind}, result::Result, tag::{DataArea, JarTag}};
+use crate::{
+    error::{Error, ErrorKind},
+    result::Result,
+    tag::{DataArea, JarTag},
+};
 
 pub struct InPage<T>(PhantomData<T>);
 
@@ -45,9 +52,7 @@ pub struct RefPage<'pager>(PageDescriptor<'pager>);
 
 impl AsRef<PageSlice> for RefPage<'_> {
     fn as_ref(&self) -> &PageSlice {
-        unsafe {
-            self.0.get_content_ptr().as_ref()
-        }
+        unsafe { self.0.get_content_ptr().as_ref() }
     }
 }
 
@@ -96,7 +101,7 @@ impl<'pager> RefPage<'pager> {
     }
 
     pub fn tag(&self) -> &JarTag {
-        &self.0.tag()
+        self.0.tag()
     }
 }
 
@@ -125,7 +130,6 @@ impl AsRefPage for &mut MutPage<'_> {
     }
 }
 
-
 impl AsMutPage for MutPage<'_> {}
 
 impl AsMut<PageSlice> for MutPage<'_> {
@@ -138,9 +142,7 @@ impl Deref for MutPage<'_> {
     type Target = PageSlice;
 
     fn deref(&self) -> &Self::Target {
-        unsafe { 
-            self.inner.get_content_ptr().as_ref()
-        }
+        unsafe { self.inner.get_content_ptr().as_ref() }
     }
 }
 
@@ -164,12 +166,9 @@ impl<'pager> MutPage<'pager> {
         }
     }
 
-    pub(crate) fn try_new_with_options(
-        inner: PageDescriptor<'pager>,
-        dry: bool,
-    ) -> Result<Self> {
+    pub(crate) fn try_new_with_options(inner: PageDescriptor<'pager>, dry: bool) -> Result<Self> {
         if inner.acquire_write_lock() {
-            Ok(Self { dry: dry, inner })
+            Ok(Self { dry, inner })
         } else {
             Err(Error::new(ErrorKind::PageCurrentlyBorrowed))
         }
@@ -185,7 +184,7 @@ impl<'pager> MutPage<'pager> {
         self.inner.release_write_lock_and_acquire_read_lock();
         let rf = RefPage(self.inner.clone());
         forget(self);
-        rf  
+        rf
     }
 
     pub fn tag(&self) -> &JarTag {
@@ -203,25 +202,23 @@ impl<'pager> MutPage<'pager> {
     }
 }
 
-
 impl Drop for MutPage<'_> {
     fn drop(&mut self) {
         self.inner.release_write_lock();
     }
 }
 
-
 #[derive(Clone)]
 /// Référence faible vers une page.
-/// 
-/// Le pointeur faible garde la page en mémoire, il faut donc veiller à ne 
+///
+/// Le pointeur faible garde la page en mémoire, il faut donc veiller à ne
 /// pas les garder trop longtemps pour éviter un phénomène d'engorgement
 /// du cache.
 pub struct WeakPage<'pager>(PageDescriptor<'pager>);
 
 impl<'pager> WeakPage<'pager> {
     /// Transforme la référence faible en référence.
-    /// 
+    ///
     /// #Panics
     /// Panique si une référence mutable est déjà prise.
     pub fn upgrade_ref(self) -> RefPage<'pager> {
@@ -229,7 +226,7 @@ impl<'pager> WeakPage<'pager> {
     }
 
     /// Transforme la référence faible en référence mutable.
-    /// 
+    ///
     /// #Panics
     /// Panique si une référence est déjà prise.
     pub fn upgrade_mut(self) -> MutPage<'pager> {

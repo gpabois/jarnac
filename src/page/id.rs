@@ -9,30 +9,25 @@ pub struct OptionalPageId(Option<NonZero<u64>>);
 
 impl AsRef<Option<PageId>> for OptionalPageId {
     fn as_ref(&self) -> &Option<PageId> {
-        unsafe {
-            std::mem::transmute(self)
-        }
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl AsMut<Option<PageId>> for OptionalPageId {
     fn as_mut(&mut self) -> &mut Option<PageId> {
-        unsafe {
-            std::mem::transmute(self)
-        }
+        unsafe { std::mem::transmute(self) }
     }
 }
 
 impl From<Option<PageId>> for OptionalPageId {
     fn from(value: Option<PageId>) -> Self {
-        unsafe {
-            std::mem::transmute(value.and_then(NonZero::new))
-        }
+        unsafe { std::mem::transmute(value.and_then(NonZero::new)) }
     }
 }
 
-impl Into<Option<PageId>> for OptionalPageId {
-    fn into(self) -> Option<PageId> {
-       self.0.map(|v| v.get())
+impl From<OptionalPageId> for Option<PageId> {
+    fn from(value: OptionalPageId) -> Self {
+        value.0.map(|v| v.get())
     }
 }
+

@@ -1,10 +1,26 @@
-use super::{kind::{KnackKind, F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID, I8_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID}, marker::{kernel::{AsKernelMut, AsKernelRef}, Comparable}, Knack};
+use super::{
+    kind::{
+        KnackKind, F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
+        I8_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID,
+    },
+    marker::{
+        kernel::{AsKernelMut, AsKernelRef},
+        Comparable,
+    },
+    Knack,
+};
 
-impl<L> Comparable<L> where L: AsKernelRef<Kernel = KnackKind> {
+impl<L> Comparable<L>
+where
+    L: AsKernelRef<Kernel = KnackKind>,
+{
     /// offset-size : xx [111:offset] [111:size]
     /// Size is a power of 2
     /// Offset is a power of 2
-    pub(crate) fn new(base: L) -> Self where L: AsKernelMut<Kernel = KnackKind> {
+    pub(crate) fn new(base: L) -> Self
+    where
+        L: AsKernelMut<Kernel = KnackKind>,
+    {
         Self(base)
     }
 }
@@ -17,15 +33,15 @@ impl Comparable<Knack> {
 
 impl PartialEq<Knack> for Comparable<Knack> {
     fn eq(&self, other: &Knack) -> bool {
-        self.kind().as_kernel_ref() == other.kind() 
-        && self.as_value_bytes() == other.as_value_bytes()
+        self.kind().as_kernel_ref() == other.kind()
+            && self.as_value_bytes() == other.as_value_bytes()
     }
 }
 
 impl PartialOrd<Knack> for Comparable<Knack> {
     fn partial_cmp(&self, other: &Knack) -> Option<std::cmp::Ordering> {
         if self.kind().as_kernel_ref() != other.kind() {
-            return None
+            return None;
         }
 
         let other = other.try_as_comparable().unwrap();
@@ -44,7 +60,8 @@ impl PartialOrd<Knack> for Comparable<Knack> {
             I128_TYPE_ID => self.cast::<i128>().partial_cmp(other.cast::<i128>()),
             F32_TYPE_ID => self.cast::<f32>().partial_cmp(other.cast::<f32>()),
             F64_TYPE_ID => self.cast::<f64>().partial_cmp(other.cast::<f64>()),
-            _ => None
+            _ => None,
         }
     }
 }
+

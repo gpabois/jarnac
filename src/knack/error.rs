@@ -2,7 +2,7 @@ use super::kind::KnackKind;
 
 #[derive(Debug)]
 pub struct KnackError {
-    kind: KnackErrorKind
+    kind: KnackErrorKind,
 }
 
 impl KnackError {
@@ -13,14 +13,12 @@ impl KnackError {
 
 impl KnackError {
     pub fn new(kind: KnackErrorKind) -> Self {
-        Self {kind}
+        Self { kind }
     }
 }
 
 #[derive(Debug)]
 pub enum KnackErrorKind {
-    WrongKind {
-        got: KnackKind,
-        expected: KnackKind
-    }
+    WrongKind { got: KnackKind, expected: KnackKind },
 }
+

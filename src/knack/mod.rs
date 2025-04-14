@@ -5,17 +5,17 @@
 //! Signed integers are between 6-10;
 //! Floats are between 11-12;
 
-pub mod document;
 pub mod array;
-pub mod builder;
-pub mod path;
-pub mod kind;
 pub mod buf;
-pub mod marker;
+pub mod builder;
+pub mod document;
 pub mod error;
-pub mod result;
-pub mod prelude;
+pub mod kind;
+pub mod marker;
 pub mod ord;
+pub mod path;
+pub mod prelude;
+pub mod result;
 
 use std::ops::{Deref, DerefMut};
 
@@ -49,16 +49,23 @@ pub trait FromKnack: GetKnackKind {
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output>;
 }
 
+pub struct KnackCell<Slice>(Slice)
+where
+    Slice: AsRefPageSlice;
 
-pub struct KnackCell<Slice>(Slice) where Slice: AsRefPageSlice;
-
-impl<Slice> From<Slice> for KnackCell<Slice> where Slice: AsRefPageSlice {
+impl<Slice> From<Slice> for KnackCell<Slice>
+where
+    Slice: AsRefPageSlice,
+{
     fn from(value: Slice) -> Self {
         Self(value)
     }
 }
 
-impl<Slice> Deref for KnackCell<Slice> where Slice: AsRefPageSlice {
+impl<Slice> Deref for KnackCell<Slice>
+where
+    Slice: AsRefPageSlice,
+{
     type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
@@ -66,12 +73,18 @@ impl<Slice> Deref for KnackCell<Slice> where Slice: AsRefPageSlice {
     }
 }
 
-pub enum CowKnack<Slice> where Slice: AsRefPageSlice {
+pub enum CowKnack<Slice>
+where
+    Slice: AsRefPageSlice,
+{
     Borrow(KnackCell<Slice>),
-    Owned(KnackBuf)
+    Owned(KnackBuf),
 }
 
-impl<Slice> Deref for CowKnack<Slice> where Slice: AsRefPageSlice {
+impl<Slice> Deref for CowKnack<Slice>
+where
+    Slice: AsRefPageSlice,
+{
     type Target = Knack;
 
     fn deref(&self) -> &Self::Target {
@@ -92,17 +105,13 @@ impl std::fmt::Display for Knack {
 
 impl From<&PageSlice> for &Knack {
     fn from(value: &PageSlice) -> Self {
-        unsafe {
-            std::mem::transmute(value)
-        }
+        unsafe { std::mem::transmute(value) }
     }
 }
 
 impl From<&[u8]> for &Knack {
     fn from(value: &[u8]) -> Self {
-        unsafe {
-            std::mem::transmute(value)
-        }
+        unsafe { std::mem::transmute(value) }
     }
 }
 
@@ -114,19 +123,18 @@ impl AsRef<[u8]> for Knack {
 
 impl Knack {
     pub(crate) fn from_ref(bytes: &[u8]) -> &Self {
-        unsafe {
-            std::mem::transmute(bytes)
-        }
+        unsafe { std::mem::transmute(bytes) }
     }
 
     #[allow(dead_code)]
     pub(crate) fn from_mut(bytes: &mut [u8]) -> &mut Self {
-        unsafe {
-            std::mem::transmute(bytes)
-        }
+        unsafe { std::mem::transmute(bytes) }
     }
 
-    pub fn is<T>(&self) -> bool where T: GetKnackKind + ?std::marker::Sized {
+    pub fn is<T>(&self) -> bool
+    where
+        T: GetKnackKind + ?std::marker::Sized,
+    {
         T::kind().as_kernel_ref().assert_eq(self.kind()).is_ok()
     }
 
@@ -139,9 +147,7 @@ impl Knack {
     }
 
     pub fn kind(&self) -> &KnackKind {
-        unsafe {
-            std::mem::transmute(&self.0[0])
-        }
+        unsafe { std::mem::transmute(&self.0[0]) }
     }
 
     pub fn get<Path: IntoKnackPath>(&self, path: Path) -> Option<&Knack> {
@@ -151,7 +157,9 @@ impl Knack {
             None => Some(self),
             Some(attr_name) => {
                 if self.is::<Document>() {
-                    self.cast::<Document>().get_field(&attr_name).and_then(|v| v.get(pth))
+                    self.cast::<Document>()
+                        .get_field(&attr_name)
+                        .and_then(|v| v.get(pth))
                 } else if self.is::<Array>() {
                     let index = attr_name.parse::<usize>().ok()?;
                     self.cast::<Array>().get(&index).and_then(|v| v.get(pth))
@@ -167,9 +175,9 @@ impl Knack {
     }
 
     pub fn try_as_comparable(&self) -> Option<&Comparable<Self>> {
-        self.kind().try_as_comparable().map(|_| unsafe {
-            std::mem::transmute(self)
-        })
+        self.kind()
+            .try_as_comparable()
+            .map(|_| unsafe { std::mem::transmute(self) })
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -179,10 +187,7 @@ impl Knack {
     pub fn as_value_bytes(&self) -> &[u8] {
         &self.0[size_of::<KnackKind>()..]
     }
-
 }
-
-
 
 #[derive(Debug)]
 pub struct U8([u8]);
@@ -227,22 +232,22 @@ impl TryFrom<&Knack> for &U8 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        u8::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u8::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut U8 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        u8::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u8::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -280,20 +285,18 @@ impl TryFrom<&Knack> for &U16 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         u16::kind().as_kernel_ref().assert_eq(value.kind())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut U16 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        u16::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u16::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 pub struct U32([u8]);
@@ -337,22 +340,22 @@ impl TryFrom<&Knack> for &U32 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        u32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut U32 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        u32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -407,22 +410,22 @@ impl TryFrom<&Knack> for &U64 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        u64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut U64 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        u64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -467,22 +470,22 @@ impl TryFrom<&Knack> for &U128 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        u128::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u128::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut U128 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        u128::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        u128::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -515,38 +518,34 @@ impl Deref for I8 {
     type Target = i8;
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            std::mem::transmute(&self.0[1])
-        }
+        unsafe { std::mem::transmute(&self.0[1]) }
     }
 }
 impl DerefMut for I8 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe {
-            std::mem::transmute(&mut self.0[1])
-        }
+        unsafe { std::mem::transmute(&mut self.0[1]) }
     }
 }
 impl TryFrom<&Knack> for &I8 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        i8::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i8::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut I8 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        i8::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i8::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 pub struct I16([u8]);
@@ -590,22 +589,22 @@ impl TryFrom<&Knack> for &I16 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        i16::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i16::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut I16 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        i16::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i16::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -650,22 +649,22 @@ impl TryFrom<&Knack> for &I32 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        i32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut I32 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        i32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -710,22 +709,22 @@ impl TryFrom<&Knack> for &I64 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        i64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut I64 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        i64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 pub struct I128([u8]);
@@ -769,22 +768,22 @@ impl TryFrom<&Knack> for &I128 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        i128::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i128::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut I128 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        i128::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        i128::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -839,22 +838,22 @@ impl TryFrom<&Knack> for &F32 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        f32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        f32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut F32 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        f32::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        f32::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -909,22 +908,22 @@ impl TryFrom<&Knack> for &F64 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        f64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        f64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut F64 {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        f64::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        f64::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
@@ -954,9 +953,7 @@ impl Deref for Str {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        unsafe {
-            std::str::from_utf8_unchecked(&self.0[1..])
-        }
+        unsafe { std::str::from_utf8_unchecked(&self.0[1..]) }
     }
 }
 impl TryFrom<&Knack> for &Str {
@@ -964,9 +961,7 @@ impl TryFrom<&Knack> for &Str {
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         str::kind().assert_eq(value.kind().as_kernel_ref())?;
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut Str {
@@ -974,19 +969,17 @@ impl TryFrom<&mut Knack> for &mut Str {
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         str::kind().assert_eq(value.kind().as_kernel_ref())?;
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
 impl FromKnack for u8 {
     type Output = U8;
-    
+
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -995,9 +988,9 @@ impl FromKnack for u16 {
     type Output = U16;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1006,9 +999,9 @@ impl FromKnack for u32 {
     type Output = U32;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1017,9 +1010,9 @@ impl FromKnack for u64 {
     type Output = U64;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1028,9 +1021,9 @@ impl FromKnack for u128 {
     type Output = U128;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1039,9 +1032,9 @@ impl FromKnack for i8 {
     type Output = I8;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1050,9 +1043,9 @@ impl FromKnack for i16 {
     type Output = I16;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1061,9 +1054,9 @@ impl FromKnack for i32 {
     type Output = I32;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1072,9 +1065,9 @@ impl FromKnack for i64 {
     type Output = I64;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1083,9 +1076,9 @@ impl FromKnack for i128 {
     type Output = I128;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1094,9 +1087,9 @@ impl FromKnack for f32 {
     type Output = F32;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1105,9 +1098,9 @@ impl FromKnack for f64 {
     type Output = F64;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1116,9 +1109,9 @@ impl FromKnack for str {
     type Output = Str;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -1149,16 +1142,56 @@ mod tests {
 
     #[test]
     fn test_sizes() {
-        assert_eq!(10u8.into_knack_buf().kind().as_sized().inner_size(), Some(1), "unsigned int8 must have a size of 1");
-        assert_eq!(10i8.into_knack_buf().kind().as_sized().inner_size(), Some(1), "signed int8 must have a size of 1");
-        assert_eq!(10u16.into_knack_buf().kind().as_sized().inner_size(), Some(2), "unsigned int16 must have a size of 2");
-        assert_eq!(10i16.into_knack_buf().kind().as_sized().inner_size(), Some(2), "signed int16 must have a size of 2");
-        assert_eq!(10u32.into_knack_buf().kind().as_sized().inner_size(), Some(4), "unsigned int32 must have a size of 4");
-        assert_eq!(10i32.into_knack_buf().kind().as_sized().inner_size(), Some(4), "signed int32 must have a size of 4");
-        assert_eq!(10u64.into_knack_buf().kind().as_sized().inner_size(), Some(8), "unsigned int64 must have a size of 8");
-        assert_eq!(10i64.into_knack_buf().kind().as_sized().inner_size(), Some(8), "signed int64 must have a size of 8");
-        assert_eq!(10u128.into_knack_buf().kind().as_sized().inner_size(), Some(16), "unsigned int128 must have a size of 16");
-        assert_eq!(10i128.into_knack_buf().kind().as_sized().inner_size(), Some(16), "signed int128 must have a size of 16");
+        assert_eq!(
+            10u8.into_knack_buf().kind().as_sized().inner_size(),
+            Some(1),
+            "unsigned int8 must have a size of 1"
+        );
+        assert_eq!(
+            10i8.into_knack_buf().kind().as_sized().inner_size(),
+            Some(1),
+            "signed int8 must have a size of 1"
+        );
+        assert_eq!(
+            10u16.into_knack_buf().kind().as_sized().inner_size(),
+            Some(2),
+            "unsigned int16 must have a size of 2"
+        );
+        assert_eq!(
+            10i16.into_knack_buf().kind().as_sized().inner_size(),
+            Some(2),
+            "signed int16 must have a size of 2"
+        );
+        assert_eq!(
+            10u32.into_knack_buf().kind().as_sized().inner_size(),
+            Some(4),
+            "unsigned int32 must have a size of 4"
+        );
+        assert_eq!(
+            10i32.into_knack_buf().kind().as_sized().inner_size(),
+            Some(4),
+            "signed int32 must have a size of 4"
+        );
+        assert_eq!(
+            10u64.into_knack_buf().kind().as_sized().inner_size(),
+            Some(8),
+            "unsigned int64 must have a size of 8"
+        );
+        assert_eq!(
+            10i64.into_knack_buf().kind().as_sized().inner_size(),
+            Some(8),
+            "signed int64 must have a size of 8"
+        );
+        assert_eq!(
+            10u128.into_knack_buf().kind().as_sized().inner_size(),
+            Some(16),
+            "unsigned int128 must have a size of 16"
+        );
+        assert_eq!(
+            10i128.into_knack_buf().kind().as_sized().inner_size(),
+            Some(16),
+            "signed int128 must have a size of 16"
+        );
     }
-
 }
+

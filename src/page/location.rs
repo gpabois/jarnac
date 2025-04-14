@@ -12,9 +12,8 @@ impl Add<u64> for PageLocation {
     }
 }
 
-impl Into<u64> for PageLocation {
-    fn into(self) -> u64 {
-        self.0
+impl From<PageLocation> for u64 {
+    fn from(value: PageLocation) -> Self {
+        value.0
     }
 }
-

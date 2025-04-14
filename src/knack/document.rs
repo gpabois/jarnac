@@ -1,10 +1,19 @@
-use std::{collections::HashMap, io::Write, ops::{Deref, Index}};
+use std::{
+    collections::HashMap,
+    io::Write,
+    ops::{Deref, Index},
+};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use super::{error::KnackError, marker::kernel::AsKernelRef, result::KnackResult};
 
-use super::{buf::{IntoKnackBuf, KnackBuf}, builder::IntoKnackBuilder, path::IntoKnackPath, FromKnack, GetKnackKind, Knack, KnackBuilder};
+use super::{
+    buf::{IntoKnackBuf, KnackBuf},
+    builder::IntoKnackBuilder,
+    path::IntoKnackPath,
+    FromKnack, GetKnackKind, Knack, KnackBuilder,
+};
 
 pub struct KeyValue([u8]);
 
@@ -60,7 +69,7 @@ impl KeyValue {
 
     fn kv_space(&self) -> &[u8] {
         let base = 1usize + 4usize + 4usize;
-        return &self.0[base..]
+        return &self.0[base..];
     }
 
     fn key_slice(&self) -> &[u8] {
@@ -79,11 +88,17 @@ impl DocRef {
     const KV_BASE: usize = 1;
 
     pub fn iter(&self) -> DocAttributesIter<'_> {
-        DocAttributesIter { doc: self, base: Self::KV_BASE }
+        DocAttributesIter {
+            doc: self,
+            base: Self::KV_BASE,
+        }
     }
 
     pub fn get_field(&self, name: &str) -> Option<&Knack> {
-        self.iter().filter(|kv| kv.key().cast::<str>() == name).map(|kv| kv.value()).next()
+        self.iter()
+            .filter(|kv| kv.key().cast::<str>() == name)
+            .map(|kv| kv.value())
+            .next()
     }
 
     pub fn get<Path: IntoKnackPath>(&self, key: Path) -> &Knack {
@@ -91,9 +106,13 @@ impl DocRef {
     }
 
     pub fn to_owned(&self) -> Document {
-        self
-            .iter()
-            .map(|kv| (kv.key().cast::<str>().to_owned(), KnackBuilder::from(kv.value())))
+        self.iter()
+            .map(|kv| {
+                (
+                    kv.key().cast::<str>().to_owned(),
+                    KnackBuilder::from(kv.value()),
+                )
+            })
             .collect()
     }
 }
@@ -112,33 +131,31 @@ impl TryFrom<&Knack> for &DocRef {
             .as_kernel_ref()
             .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 impl TryFrom<&mut Knack> for &mut DocRef {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        Document::kind().as_kernel_ref().assert_eq(value.kind().as_kernel_ref())?;
+        Document::kind()
+            .as_kernel_ref()
+            .assert_eq(value.kind().as_kernel_ref())?;
 
-        unsafe {
-            Ok(std::mem::transmute(value))
-        }
+        unsafe { Ok(std::mem::transmute(value)) }
     }
 }
 
 pub struct DocAttributesIter<'a> {
     doc: &'a DocRef,
-    base: usize
+    base: usize,
 }
 impl<'a> Iterator for DocAttributesIter<'a> {
     type Item = &'a KeyValue;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.base >= self.doc.len() {
-            return None
+            return None;
         }
 
         let kv = KeyValue::read_from_slice(&self.doc[self.base..]);
@@ -155,9 +172,9 @@ impl FromKnack for Document {
     type Output = DocRef;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
-        value.try_into()    
+        value.try_into()
     }
-    
+
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output> {
         value.try_into()
     }
@@ -169,7 +186,10 @@ impl FromIterator<(String, KnackBuilder)> for Document {
     }
 }
 
-impl<Q> Index<Q> for Document where Q: IntoKnackPath {
+impl<Q> Index<Q> for Document
+where
+    Q: IntoKnackPath,
+{
     type Output = KnackBuilder;
 
     fn index(&self, index: Q) -> &Self::Output {
@@ -189,7 +209,7 @@ impl Document {
 
         match pth.pop() {
             None => None,
-            Some(attr_name) => self.get_field(&attr_name).and_then(|val| val.get(pth))
+            Some(attr_name) => self.get_field(&attr_name).and_then(|val| val.get(pth)),
         }
     }
 
@@ -202,7 +222,8 @@ impl IntoKnackBuf for Document {
     fn into_knack_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![];
 
-        buf.write_all(&Document::kind().as_kernel_ref().as_bytes()).unwrap();
+        buf.write_all(&Document::kind().as_kernel_ref().as_bytes())
+            .unwrap();
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_knack_buf) {
             buf.write_all(kv.as_bytes()).unwrap();
@@ -216,15 +237,13 @@ impl IntoKnackBuf for Document {
 mod tests {
     use crate::knack::document::Document;
 
-
     #[test]
     pub fn test_insert() {
         let mut doc = Document::default();
-        
+
         let mut sub = Document::default();
         sub.insert("bar", "hello world !");
         sub.insert("barbar", 128u8);
-
 
         doc.insert("foo", sub);
 
@@ -233,3 +252,4 @@ mod tests {
         assert!(doc["foo.barbar"].cast::<u8>() == &128u8);
     }
 }
+

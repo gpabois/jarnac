@@ -1,20 +1,25 @@
-
-use zerocopy_derive::*;
 use zerocopy::TryFromBytes;
+use zerocopy_derive::*;
 
 use crate::{
-    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, 
-    pager::IPagerInternals, 
-    result::Result, 
-    tag::{DataArea, JarTag}
+    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind},
+    pager::IPagerInternals,
+    result::Result,
+    tag::{DataArea, JarTag},
 };
 
-pub struct FreePage<Page>(Page) where Page: AsRefPageSlice;
+pub struct FreePage<Page>(Page)
+where
+    Page: AsRefPageSlice;
 
-impl<Page> FreePage<Page> where Page: AsRefPageSlice {
+impl<Page> FreePage<Page>
+where
+    Page: AsRefPageSlice,
+{
     /// Initialise une page libre.
-    pub fn new(mut page: Page) -> Result<Self> 
-    where Page: AsMutPageSlice
+    pub fn new(mut page: Page) -> Result<Self>
+    where
+        Page: AsMutPageSlice,
     {
         page.as_mut().fill(0);
         page.as_mut().as_mut_bytes()[0] = PageKind::Free as u8;
@@ -37,7 +42,10 @@ impl<Page> FreePage<Page> where Page: AsRefPageSlice {
     }
 }
 
-impl<Page> FreePage<Page> where Page: AsMutPageSlice {
+impl<Page> FreePage<Page>
+where
+    Page: AsMutPageSlice,
+{
     pub fn set_next(&mut self, next: Option<PageId>) {
         self.as_mut_meta().next = next.into()
     }
@@ -46,7 +54,6 @@ impl<Page> FreePage<Page> where Page: AsMutPageSlice {
         FreePageMeta::try_mut_from_bytes(&mut self.0.as_mut()[FreePageMeta::AREA]).unwrap()
     }
 }
-
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C)]
@@ -60,7 +67,10 @@ impl DataArea for FreePageMeta {
 }
 
 /// Empile une nouvelle page libre dans la liste chaînée
-pub(super) fn push_free_page<'a, Pager: IPagerInternals<'a>>(pager: &Pager, tag: &JarTag) -> Result<()> {
+pub(super) fn push_free_page<'a, Pager: IPagerInternals<'a>>(
+    pager: &Pager,
+    tag: &JarTag,
+) -> Result<()> {
     let mut page = pager.borrow_mut_element(tag)?;
     page.fill(0);
 
@@ -72,7 +82,9 @@ pub(super) fn push_free_page<'a, Pager: IPagerInternals<'a>>(pager: &Pager, tag:
 }
 
 /// Dépile une page libre dans la liste chaînée
-pub(super) fn pop_free_page<'pager, Pager: IPagerInternals<'pager>>(pager: &Pager) -> Result<Option<JarTag>> {
+pub(super) fn pop_free_page<'pager, Pager: IPagerInternals<'pager>>(
+    pager: &Pager,
+) -> Result<Option<JarTag>> {
     if let Some(next) = pager.get_free_head() {
         let page = pager.borrow_element(&next).and_then(FreePage::try_from)?;
         let new_head = page.get_next();
@@ -82,4 +94,3 @@ pub(super) fn pop_free_page<'pager, Pager: IPagerInternals<'pager>>(pager: &Page
 
     Ok(None)
 }
-

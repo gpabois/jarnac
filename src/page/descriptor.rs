@@ -1,5 +1,10 @@
-use std::{fmt::Debug, marker::PhantomData, ptr::NonNull, sync::atomic::{AtomicIsize, AtomicUsize, Ordering as SyncOrdering}};
 use crate::{result::Result, tag::JarTag};
+use std::{
+    fmt::Debug,
+    marker::PhantomData,
+    ptr::NonNull,
+    sync::atomic::{AtomicIsize, AtomicUsize, Ordering as SyncOrdering},
+};
 
 use super::{MutPage, PageSlice, RefPage};
 
@@ -10,9 +15,7 @@ pub struct PageDescriptor<'buf> {
 
 impl Clone for PageDescriptor<'_> {
     fn clone(&self) -> Self {
-        unsafe {
-            Self::new(self.ptr)
-        }
+        unsafe { Self::new(self.ptr) }
     }
 }
 
@@ -26,7 +29,9 @@ impl Debug for PageDescriptor<'_> {
 
 impl Drop for PageDescriptor<'_> {
     fn drop(&mut self) {
-        self.as_mut_inner().ref_counter.fetch_sub(1, SyncOrdering::Relaxed);
+        self.as_mut_inner()
+            .ref_counter
+            .fetch_sub(1, SyncOrdering::Relaxed);
     }
 }
 
@@ -37,8 +42,10 @@ impl PageDescriptor<'_> {
             _pht: PhantomData,
             ptr: data,
         };
-        
-        page.as_mut_inner().ref_counter.fetch_add(1, SyncOrdering::Relaxed);
+
+        page.as_mut_inner()
+            .ref_counter
+            .fetch_add(1, SyncOrdering::Relaxed);
         page
     }
 
@@ -77,7 +84,6 @@ impl PageDescriptor<'_> {
         self.as_mut_inner().clear_flags();
     }
 
-
     /// Lève le "dirty" flag de la page.
     pub fn set_dirty(&self) {
         self.as_mut_inner().set_dirty();
@@ -97,7 +103,7 @@ impl PageDescriptor<'_> {
     pub fn is_mut_borrowed(&self) -> bool {
         self.as_ref_inner().is_mut_borrowed()
     }
-    
+
     /// Le nombre de fois où cette page est référencée.
     pub fn get_ref_counter(&self) -> usize {
         self.as_ref_inner().get_ref_counter()
@@ -108,7 +114,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Libère le verrou en écriture et récupère un verrou en lecture.
-    /// 
+    ///
     /// La fonction panique si aucun verrou en écriture n'a été préalablement acquis.
     pub fn release_write_lock_and_acquire_read_lock(&self) {
         self.as_ref_inner()
@@ -118,7 +124,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Récupère un verrou en écriture.
-    /// 
+    ///
     /// La fonction retourne *false* si le verrou n'a pas pu être récupéré.
     pub fn acquire_write_lock(&self) -> bool {
         self.as_ref_inner()
@@ -128,10 +134,10 @@ impl PageDescriptor<'_> {
     }
 
     /// Libère le verrou en écriture.
-    /// 
+    ///
     /// La fonction panique si aucun verrou en écriture n'a été préalablement acquis.
     pub fn release_write_lock(&self) {
-        self.as_ref_inner() 
+        self.as_ref_inner()
             .rw_counter
             .compare_exchange(-1, 0, SyncOrdering::Relaxed, SyncOrdering::Relaxed)
             .unwrap();
@@ -139,12 +145,15 @@ impl PageDescriptor<'_> {
 
     pub fn acquire_read_lock(&self) -> bool {
         let rw = self.get_rw_counter(SyncOrdering::Acquire);
-            
+
         if rw < 0 {
-            return false
+            return false;
         }
 
-        self.as_ref_inner().rw_counter.fetch_add(1, SyncOrdering::Release) > 0
+        self.as_ref_inner()
+            .rw_counter
+            .fetch_add(1, SyncOrdering::Release)
+            > 0
     }
 
     pub fn release_read_lock(&self) {
@@ -154,7 +163,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Emprunte les données de la page en lecture.
-    /// 
+    ///
     /// Panique si la page ne peut être empruntée en lecture.
     pub fn borrow(&self) -> RefPage<'_> {
         self.try_borrow().unwrap()
@@ -166,7 +175,7 @@ impl PageDescriptor<'_> {
     }
 
     /// Emprunte les données de la page en écriture.
-    /// 
+    ///
     /// Panique si la page ne peut être empruntée en écriture.
     pub fn borrow_mut(&self, dry: bool) -> MutPage<'_> {
         self.try_borrow_mut(dry).unwrap()
@@ -177,10 +186,9 @@ impl PageDescriptor<'_> {
         MutPage::try_new_with_options(self.clone(), dry)
     }
 
-
     /// Décrémente le RW lock
-    /// 
-    /// Cela signifie qu'une nouvelle référence en lecture a été acquise. 
+    ///
+    /// Cela signifie qu'une nouvelle référence en lecture a été acquise.
     pub(crate) unsafe fn dec_rw_counter(&self, order: SyncOrdering) {
         self.as_mut_inner().rw_counter.fetch_sub(1, order);
     }
@@ -198,22 +206,21 @@ impl PageDescriptor<'_> {
     }
 
     /// Retourne un pointeur vers la tranche de page
+    ///
+    /// # Safety
+    /// C'est un pointeur.
     pub unsafe fn get_content_ptr(&self) -> NonNull<PageSlice> {
         self.as_ref_inner().content
     }
 
     pub(crate) fn as_ref_inner(&self) -> &PageDescriptorInner {
-        unsafe {
-            self.ptr.as_ref()
-        }
+        unsafe { self.ptr.as_ref() }
     }
 
+    #[allow(clippy::mut_from_ref)]
     pub(crate) fn as_mut_inner(&self) -> &mut PageDescriptorInner {
-        unsafe {
-            self.ptr.as_ptr().as_mut().unwrap()
-        }
+        unsafe { self.ptr.as_ptr().as_mut().unwrap() }
     }
-    
 }
 
 pub(crate) type PageDescriptorPtr = NonNull<PageDescriptorInner>;
@@ -286,9 +293,10 @@ impl PageDescriptorInner {
     pub fn is_mut_borrowed(&self) -> bool {
         self.rw_counter.load(SyncOrdering::Relaxed) < 0
     }
-    
+
     /// Le nombre de fois où cette page est référencée.
     pub fn get_ref_counter(&self) -> usize {
         self.ref_counter.load(SyncOrdering::Relaxed)
     }
 }
+

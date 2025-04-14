@@ -1,9 +1,9 @@
-pub mod sized;
-pub mod kernel;
 pub mod comparable;
+pub mod kernel;
+pub mod sized;
 
-pub use sized::{AsFixedSized, FixedSized};
 pub use comparable::{AsComparable, Comparable};
+pub use sized::{AsFixedSized, FixedSized};
 
 #[cfg(test)]
 mod tests {

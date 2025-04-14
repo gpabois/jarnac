@@ -2,7 +2,12 @@ use std::ops::Deref;
 
 use crate::utils::Shift;
 
-use super::{buf::{IntoKnackBuf, KnackBuf}, kind::{GetKnackKind, KnackKind, ANY_TYPE_ID, ARRAY_FLAG}, marker::sized::Sized, FromKnack, Knack, KnackBuilder};
+use super::{
+    buf::{IntoKnackBuf, KnackBuf},
+    kind::{GetKnackKind, KnackKind, ANY_TYPE_ID, ARRAY_FLAG},
+    marker::sized::Sized,
+    FromKnack, Knack, KnackBuilder,
+};
 
 pub struct ArrayRef([u8]);
 
@@ -11,7 +16,7 @@ impl ArrayRef {
         if let Sized::Fixed(desc) = self.element_kind().as_sized() {
             let offset = index * desc.outer_size();
             let base = 1usize;
-            
+
             let range = (0..desc.outer_size()).shift(base + offset);
             Some(<&Knack>::from(&self.0[range]))
         } else {
@@ -43,7 +48,9 @@ impl FromKnack for Array {
         todo!()
     }
 
-    fn try_mut_from_knack(value: &mut super::Knack) -> super::result::KnackResult<&mut Self::Output> {
+    fn try_mut_from_knack(
+        value: &mut super::Knack,
+    ) -> super::result::KnackResult<&mut Self::Output> {
         todo!()
     }
 }

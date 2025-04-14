@@ -1,6 +1,12 @@
 use super::marker::kernel::AsKernelRef;
 
-use super::{array::Array, buf::{IntoKnackBuf, KnackBuf}, document::Document, path::IntoKnackPath, GetKnackKind, Knack, KnackKind, Str, F32, F64, U16, U32, I128, I16, I32, I64, I8, U128, U64};
+use super::{
+    array::Array,
+    buf::{IntoKnackBuf, KnackBuf},
+    document::Document,
+    path::IntoKnackPath,
+    GetKnackKind, Knack, KnackKind, Str, F32, F64, I128, I16, I32, I64, I8, U128, U16, U32, U64,
+};
 
 pub trait IntoKnackBuilder {
     fn into_value_builder(self) -> KnackBuilder;
@@ -14,16 +20,16 @@ pub trait FromKnackBuilder {
 }
 
 /// Type utilisé pour construire des valeurs stockables en base.
-pub enum KnackBuilder {   
+pub enum KnackBuilder {
     Document(Document),
     Array(Array),
     Str(String),
-    Other(KnackBuf)
+    Other(KnackBuf),
 }
 
 impl KnackBuilder {
     /// Permet de rechercher une valeur de manière récursive.
-    /// 
+    ///
     /// # Exemple
     /// let val = {
     ///     "foo": [{"bar": "hello world !"}]
@@ -33,13 +39,15 @@ impl KnackBuilder {
         let mut pth = path.into_value_path();
 
         match (pth.pop(), self) {
-            (Some(attr_name), KnackBuilder::Document(doc)) => doc.get_field(&attr_name).and_then(|attr| attr.get(pth)),
+            (Some(attr_name), KnackBuilder::Document(doc)) => {
+                doc.get_field(&attr_name).and_then(|attr| attr.get(pth))
+            }
             (Some(str_index), KnackBuilder::Array(array)) => {
                 let index = str_index.parse::<usize>().ok()?;
                 array.get(index).and_then(|element| element.get(pth))
             }
             (None, val) => Some(val),
-            _ => None
+            _ => None,
         }
     }
 
@@ -76,10 +84,10 @@ impl From<Document> for KnackBuilder {
 impl From<&Knack> for KnackBuilder {
     fn from(value: &Knack) -> Self {
         if value.is::<Document>() {
-            return Self::Document(value.cast::<Document>().to_owned())
+            return Self::Document(value.cast::<Document>().to_owned());
         }
         if value.is::<str>() {
-            return Self::Str(value.cast::<str>().to_owned())
+            return Self::Str(value.cast::<str>().to_owned());
         }
         Self::Other(value.to_owned())
     }
@@ -101,16 +109,16 @@ impl FromKnackBuilder for u8 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for u8 {
@@ -124,16 +132,16 @@ impl FromKnackBuilder for u16 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for u16 {
@@ -147,16 +155,16 @@ impl FromKnackBuilder for u32 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for u32 {
@@ -170,16 +178,16 @@ impl FromKnackBuilder for u64 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for u64 {
@@ -193,16 +201,16 @@ impl FromKnackBuilder for u128 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for u128 {
@@ -216,16 +224,16 @@ impl FromKnackBuilder for i8 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for i8 {
@@ -239,16 +247,16 @@ impl FromKnackBuilder for i16 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for i16 {
@@ -267,16 +275,16 @@ impl FromKnackBuilder for i32 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 
@@ -285,16 +293,16 @@ impl FromKnackBuilder for i64 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for i64 {
@@ -313,16 +321,16 @@ impl FromKnackBuilder for i128 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 
@@ -331,16 +339,16 @@ impl FromKnackBuilder for f32 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 impl IntoKnackBuilder for f32 {
@@ -354,16 +362,16 @@ impl FromKnackBuilder for f64 {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 
@@ -378,16 +386,16 @@ impl FromKnackBuilder for str {
 
     fn borrow_value(value: &KnackBuilder) -> &Self::Output {
         if let KnackBuilder::Other(val) = value {
-           return val.cast::<Self>()
+            return val.cast::<Self>();
         }
         panic!("not an unsigned byte")
     }
 
     fn borrow_mut_value(value: &mut KnackBuilder) -> &mut Self::Output {
         if let KnackBuilder::Other(buf) = value {
-            return buf.cast_mut::<Self>()
-         }
-         panic!("not an unsigned byte")
+            return buf.cast_mut::<Self>();
+        }
+        panic!("not an unsigned byte")
     }
 }
 
@@ -402,3 +410,4 @@ impl IntoKnackBuilder for Document {
         KnackBuilder::Document(self)
     }
 }
+

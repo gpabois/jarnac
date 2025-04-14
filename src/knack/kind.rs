@@ -1,18 +1,20 @@
 use core::slice;
-use std::{any::Any, convert::Infallible, fmt::Display, ops::Range};
 use phf::phf_map;
+use std::{any::Any, convert::Infallible, fmt::Display, ops::Range};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
-
 
 use crate::tag::DataArea;
 
 use super::{
-    document::{Document, KeyValue}, error::{KnackError as KnackError, KnackErrorKind as KnackErrorKind}, marker::{
-        kernel::{AsKernelMut, AsKernelRef}, 
-        sized::{Sized, VarSized}, 
-        Comparable, 
-        FixedSized
-    }, result::KnackResult as KnackResult, KnackTypeId
+    document::{Document, KeyValue},
+    error::{KnackError, KnackErrorKind},
+    marker::{
+        kernel::{AsKernelMut, AsKernelRef},
+        sized::{Sized, VarSized},
+        Comparable, FixedSized,
+    },
+    result::KnackResult,
+    KnackTypeId,
 };
 
 pub(super) const ANY_TYPE_ID: KnackTypeId = 0;
@@ -31,10 +33,10 @@ pub(super) const F64_TYPE_ID: KnackTypeId = 12;
 pub(super) const STR_TYPE_ID: KnackTypeId = 13;
 pub(super) const DOCUMENT_TYPE_ID: KnackTypeId = 14;
 pub(super) const KV_PAIR_TYPE_ID: KnackTypeId = 15;
-pub(super) const ARRAY_FLAG: KnackTypeId= 128;
+pub(super) const ARRAY_FLAG: KnackTypeId = 128;
 
 pub trait GetKnackKind {
-    type Kind: AsKernelRef<Kernel=KnackKind>;
+    type Kind: AsKernelRef<Kernel = KnackKind>;
 
     fn kind() -> Self::Kind;
 }
@@ -42,20 +44,20 @@ pub trait GetKnackKind {
 pub struct KnackKindDescriptor {
     type_name: &'static str,
     flags: u8,
-    size: Option<u8>
+    size: Option<u8>,
 }
 
 impl KnackKindDescriptor {
-    pub const FLAG_SIZED: u8        = 0b1;
-    pub const FLAG_COMPARABLE: u8   = 0b10;
-    pub const FLAG_SIGNED: u8       = 0b100;
-    pub const FLAG_FLOAT: u8        = 0b1000;
+    pub const FLAG_SIZED: u8 = 0b1;
+    pub const FLAG_COMPARABLE: u8 = 0b10;
+    pub const FLAG_SIGNED: u8 = 0b100;
+    pub const FLAG_FLOAT: u8 = 0b1000;
 
     pub const fn new(type_name: &'static str) -> Self {
         Self {
             type_name,
             flags: 0,
-            size: None
+            size: None,
         }
     }
 
@@ -64,10 +66,10 @@ impl KnackKindDescriptor {
         self
     }
 
-    pub const fn fixed_sized(mut self, size: u8) -> Self {   
-        self.flags |= Self::FLAG_SIZED; 
+    pub const fn fixed_sized(mut self, size: u8) -> Self {
+        self.flags |= Self::FLAG_SIZED;
         self.size = Some(size);
-        self        
+        self
     }
 }
 
@@ -97,27 +99,25 @@ impl DataArea for KnackKind {
 
 impl Display for KnackKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let type_name = KNACK_KIND_DESCRIPTORS.get(&self.0).map(|desc| desc.type_name).unwrap_or("unknown");
+        let type_name = KNACK_KIND_DESCRIPTORS
+            .get(&self.0)
+            .map(|desc| desc.type_name)
+            .unwrap_or("unknown");
         write!(f, "{0}", type_name)
     }
 }
 
 impl From<&u8> for &KnackKind {
     fn from(value: &u8) -> Self {
-        unsafe {
-            std::mem::transmute(&value)
-        }
+        unsafe { std::mem::transmute(&value) }
     }
 }
-
 
 impl TryFrom<&[u8]> for &KnackKind {
     type Error = Infallible;
 
     fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
-        unsafe {
-            std::mem::transmute(&value[0])
-        }
+        unsafe { std::mem::transmute(&value[0]) }
     }
 }
 
@@ -131,17 +131,13 @@ impl KnackKind {
     pub const fn new(id: KnackTypeId) -> Self {
         Self(id)
     }
-    
+
     pub fn assert_eq<K: AsKernelRef<Kernel = KnackKind>>(&self, other: &K) -> KnackResult<()> {
         if other.as_kernel_ref() != self {
-            return Err(
-                KnackError::new(
-                    KnackErrorKind::WrongKind { 
-                        expected: *self, 
-                        got: *other.as_kernel_ref() 
-                    }
-                )
-            )
+            return Err(KnackError::new(KnackErrorKind::WrongKind {
+                expected: *self,
+                got: *other.as_kernel_ref(),
+            }));
         }
 
         Ok(())
@@ -149,11 +145,11 @@ impl KnackKind {
 
     pub fn as_sized(&self) -> Sized<'_, KnackKind> {
         if let Some(fixed) = self.try_as_fixed_sized() {
-            return Sized::Fixed(fixed)
-        } 
+            return Sized::Fixed(fixed);
+        }
 
         if let Some(var) = self.try_as_var_sized() {
-            return Sized::Var(var)
+            return Sized::Var(var);
         }
 
         unreachable!("should be either fixed or var sized")
@@ -161,20 +157,15 @@ impl KnackKind {
 
     pub fn try_as_var_sized(&self) -> Option<&VarSized<KnackKind>> {
         if !self.is_sized() {
-            unsafe {
-                Some(std::mem::transmute(self))
-            }
+            unsafe { Some(std::mem::transmute(self)) }
         } else {
             None
         }
     }
 
-
     pub fn try_as_fixed_sized(&self) -> Option<&FixedSized<KnackKind>> {
         if self.is_sized() {
-            unsafe {
-                Some(std::mem::transmute(self))
-            }
+            unsafe { Some(std::mem::transmute(self)) }
         } else {
             None
         }
@@ -182,9 +173,7 @@ impl KnackKind {
 
     pub fn try_as_comparable(&self) -> Option<&Comparable<KnackKind>> {
         if self.is_comparable() {
-            return unsafe {
-                Some(std::mem::transmute(self))
-            }
+            return unsafe { Some(std::mem::transmute(self)) };
         } else {
             None
         }
@@ -208,33 +197,48 @@ impl KnackKind {
 
     fn is_sized(&self) -> bool {
         KNACK_KIND_DESCRIPTORS
-            .get(&self.0).map(|desc| desc.flags & KnackKindDescriptor::FLAG_SIZED > 0)
+            .get(&self.0)
+            .map(|desc| desc.flags & KnackKindDescriptor::FLAG_SIZED > 0)
             .unwrap_or_default()
     }
 
     fn is_comparable(&self) -> bool {
         KNACK_KIND_DESCRIPTORS
-            .get(&self.0).map(|desc| desc.flags & KnackKindDescriptor::FLAG_COMPARABLE > 0)
+            .get(&self.0)
+            .map(|desc| desc.flags & KnackKindDescriptor::FLAG_COMPARABLE > 0)
             .unwrap_or_default()
     }
-
 }
 
-impl<L> FixedSized<L> where L: AsKernelRef<Kernel = KnackKind> {
-    pub fn new(base: L) -> Self where L: AsKernelMut<Kernel = KnackKind> {
+impl<L> FixedSized<L>
+where
+    L: AsKernelRef<Kernel = KnackKind>,
+{
+    pub fn new(base: L) -> Self
+    where
+        L: AsKernelMut<Kernel = KnackKind>,
+    {
         Self(base)
     }
 }
 
 impl FixedSized<KnackKind> {
-    pub const fn into_inner(self) -> KnackKind { self.0 }
+    pub const fn into_inner(self) -> KnackKind {
+        self.0
+    }
 
     pub fn outer_size(&self) -> usize {
-        return size_of::<KnackKind>() + self.inner_size()
+        return size_of::<KnackKind>() + self.inner_size();
     }
 
     pub fn inner_size(&self) -> usize {
-        return usize::from(KNACK_KIND_DESCRIPTORS.get(&self.0.0).unwrap().size.unwrap())
+        return usize::from(
+            KNACK_KIND_DESCRIPTORS
+                .get(&self.0 .0)
+                .unwrap()
+                .size
+                .unwrap(),
+        );
     }
 
     pub fn as_area(&self) -> Range<usize> {
@@ -242,7 +246,7 @@ impl FixedSized<KnackKind> {
     }
 
     pub const fn type_id(&self) -> KnackTypeId {
-        self.0.0
+        self.0 .0
     }
 }
 
@@ -256,11 +260,7 @@ impl GetKnackKind for u8 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(
-                KnackKind::new(U8_TYPE_ID), 
-            )
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(U8_TYPE_ID)))
     }
 }
 
@@ -268,9 +268,7 @@ impl GetKnackKind for u16 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(U16_TYPE_ID),), 
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(U16_TYPE_ID)))
     }
 }
 
@@ -278,9 +276,7 @@ impl GetKnackKind for u32 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(U32_TYPE_ID),),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(U32_TYPE_ID)))
     }
 }
 
@@ -288,9 +284,7 @@ impl GetKnackKind for u64 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(U64_TYPE_ID),),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(U64_TYPE_ID)))
     }
 }
 
@@ -298,9 +292,7 @@ impl GetKnackKind for u128 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(U128_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(U128_TYPE_ID)))
     }
 }
 
@@ -308,9 +300,7 @@ impl GetKnackKind for i8 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(I8_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(I8_TYPE_ID)))
     }
 }
 
@@ -318,9 +308,7 @@ impl GetKnackKind for i16 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(I16_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(I16_TYPE_ID)))
     }
 }
 
@@ -328,9 +316,7 @@ impl GetKnackKind for i32 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(I32_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(I32_TYPE_ID)))
     }
 }
 
@@ -338,9 +324,7 @@ impl GetKnackKind for i64 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(I64_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(I64_TYPE_ID)))
     }
 }
 
@@ -348,9 +332,7 @@ impl GetKnackKind for i128 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(I128_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(I128_TYPE_ID)))
     }
 }
 
@@ -358,9 +340,7 @@ impl GetKnackKind for f32 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(F32_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(F32_TYPE_ID)))
     }
 }
 
@@ -368,9 +348,7 @@ impl GetKnackKind for f64 {
     type Kind = Comparable<FixedSized<KnackKind>>;
 
     fn kind() -> Self::Kind {
-        Comparable::new(
-            FixedSized::new(KnackKind::new(F64_TYPE_ID), ),
-        )
+        Comparable::new(FixedSized::new(KnackKind::new(F64_TYPE_ID)))
     }
 }
 
@@ -405,3 +383,4 @@ impl GetKnackKind for dyn Any {
         VarSized::new(KnackKind::new(ANY_TYPE_ID))
     }
 }
+
