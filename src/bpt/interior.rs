@@ -392,4 +392,3 @@ where
         &mut self.as_mut_cell().as_mut_content_slice()[range]
     }
 }
-

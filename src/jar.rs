@@ -5,4 +5,3 @@ pub struct JarDescriptor<'buf> {
     _pht: PhantomData<&'buf ()>,
 }
 pub struct JarDescriptorInner {}
-

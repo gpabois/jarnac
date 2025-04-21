@@ -1,12 +1,18 @@
 use std::{
     io::{Read, Seek, Write},
-    ops::DerefMut, sync::Mutex,
+    ops::DerefMut,
+    sync::Mutex,
 };
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use dashmap::DashMap;
 
-use crate::{fs::{FileOpenOptions, FilePtr, IFileSystem}, page::{descriptor::PageDescriptor, PageSize}, result::Result, tag::JarTag};
+use crate::{
+    fs::{FileOpenOptions, FilePtr, IFileSystem},
+    page::{descriptor::PageDescriptor, PageSize},
+    result::Result,
+    tag::JarTag,
+};
 
 /// Gestion du *stress mémoire* sur le système de pagination.
 ///
@@ -64,7 +70,7 @@ impl<Fs: IFileSystem> IBufferStressStrategy for FsPagerStress<Fs> {
             .open(FileOpenOptions::new().create(true).write(true))?;
 
         let loc = u64::from(self.page_size) * u64::try_from(id).unwrap();
-        file.seek(std::io::SeekFrom::Start(u64::try_from(loc).unwrap()))?;
+        file.seek(std::io::SeekFrom::Start(loc))?;
         file.write_u8(src.get_flags())?;
         unsafe {
             file.write_all(src.get_content_ptr().as_ref())?;
@@ -75,16 +81,16 @@ impl<Fs: IFileSystem> IBufferStressStrategy for FsPagerStress<Fs> {
     }
 
     fn retrieve(&self, dest: &mut PageDescriptor<'_>) -> Result<()> {
-        let id = self.pages.get(&dest.tag()).unwrap().to_owned();
+        let id = self.pages.get(dest.tag()).unwrap().to_owned();
         let mut file = self.file.open(FileOpenOptions::new().read(true))?;
 
         let addr = u64::from(self.page_size) * u64::try_from(id).unwrap();
-        file.seek(std::io::SeekFrom::Start(u64::try_from(addr).unwrap()))?;
+        file.seek(std::io::SeekFrom::Start(addr))?;
         dest.set_flags(file.read_u8()?);
         file.read_exact(dest.borrow_mut(true).deref_mut())?;
 
         self.freelist.lock().unwrap().push(id);
-        self.pages.remove(&dest.tag());
+        self.pages.remove(dest.tag());
 
         Ok(())
     }
@@ -99,7 +105,11 @@ pub mod stubs {
 
     use dashmap::DashMap;
 
-    use crate::{page::{AsMutPageSlice, AsRefPageSlice}, result::Result, tag::JarTag};
+    use crate::{
+        page::{AsMutPageSlice, AsRefPageSlice},
+        result::Result,
+        tag::JarTag,
+    };
 
     use super::IBufferStressStrategy;
 
@@ -120,11 +130,9 @@ pub mod stubs {
             let tag = dest.tag();
             let buf = self.0.get(tag).unwrap();
             //println!("récupère {pid} {buf:?}");
-            dest.borrow_mut(false)
-                .as_mut_bytes()
-                .write_all(&buf)?;
+            dest.borrow_mut(false).as_mut_bytes().write_all(&buf)?;
 
-            self.0.remove(&dest.tag());
+            self.0.remove(dest.tag());
             Ok(())
         }
 
@@ -132,8 +140,8 @@ pub mod stubs {
             self.0.contains_key(tag)
         }
     }
-
 }
 
 #[cfg(test)]
 mod test {}
+

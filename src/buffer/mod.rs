@@ -3,7 +3,11 @@ pub mod stress;
 use std::{
     alloc::{alloc_zeroed, dealloc, Layout},
     mem::MaybeUninit,
-    ptr::NonNull, sync::{atomic::{AtomicUsize, Ordering}, Arc, Mutex},
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use dashmap::{DashMap, DashSet};
@@ -11,7 +15,14 @@ use itertools::Itertools;
 use stress::BufferStressStrategy;
 
 use crate::{
-    error::{Error, ErrorKind}, page::{descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr}, MutPage, PageSize, RefPage}, result::Result, tag::JarTag, utils::Flip
+    error::{Error, ErrorKind},
+    page::{
+        descriptor::{PageDescriptor, PageDescriptorInner, PageDescriptorPtr},
+        MutPage, PageSize, PageSlice, RefPage,
+    },
+    result::Result,
+    tag::JarTag,
+    utils::Flip,
 };
 
 pub trait IBufferPool {
@@ -22,7 +33,7 @@ pub trait IBufferPool {
     fn try_get_ref<'buf>(&'buf self, tag: &JarTag) -> Result<Option<RefPage<'buf>>> {
         unsafe {
             let desc = self.try_get_descriptor(tag)?;
-            desc.map(|desc| RefPage::try_new(desc)).flip()
+            desc.map(RefPage::try_new).flip()
         }
     }
 
@@ -30,20 +41,34 @@ pub trait IBufferPool {
     fn try_get_mut<'buf>(&'buf self, tag: &JarTag) -> Result<Option<MutPage<'buf>>> {
         unsafe {
             let desc = self.try_get_descriptor(tag)?;
-            desc.map(|desc| MutPage::try_new(desc)).flip()
+            desc.map(MutPage::try_new).flip()
         }
     }
 
     /// Essaye de récupérer une page stocker dans le tampon.
-    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>>;
+    ///
+    /// # Safety
+    /// Le descripteur permet d'exécuter des fonctions non-sûres.
+    unsafe fn try_get_descriptor<'buf>(
+        &'buf self,
+        tag: &JarTag,
+    ) -> Result<Option<PageDescriptor<'buf>>>;
 }
 
 #[derive(Clone)]
 pub struct SharedBufferPool(Arc<BufferPool>);
 
 impl SharedBufferPool {
-    pub fn new(buffer_size: usize, page_size: PageSize, stress_strategy: BufferStressStrategy) -> Self {
-        Self(Arc::new(BufferPool::new(buffer_size, page_size, stress_strategy)))
+    pub fn new(
+        buffer_size: usize,
+        page_size: PageSize,
+        stress_strategy: BufferStressStrategy,
+    ) -> Self {
+        Self(Arc::new(BufferPool::new(
+            buffer_size,
+            page_size,
+            stress_strategy,
+        )))
     }
 }
 
@@ -52,7 +77,10 @@ impl IBufferPool for SharedBufferPool {
         self.0.alloc(tag)
     }
 
-    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>> {
+    unsafe fn try_get_descriptor<'buf>(
+        &'buf self,
+        tag: &JarTag,
+    ) -> Result<Option<PageDescriptor<'buf>>> {
         self.0.try_get_descriptor(tag)
     }
 }
@@ -84,18 +112,21 @@ pub struct BufferPool {
     stress_strategy: BufferStressStrategy,
 }
 
+unsafe impl Sync for BufferPool {}
+unsafe impl Send for BufferPool {}
+
 impl BufferPool {
     /// Crée un nouveau buffer pool.
-    pub fn new(buffer_size: usize, page_size: PageSize, stress_strategy: BufferStressStrategy) -> Self {
+    pub fn new(
+        buffer_size: usize,
+        page_size: PageSize,
+        stress_strategy: BufferStressStrategy,
+    ) -> Self {
         unsafe {
+            let align: usize =
+                (usize::from(page_size) + size_of::<PageDescriptorInner>()).next_power_of_two();
 
-            let align: usize = (usize::from(page_size) + size_of::<PageDescriptorInner>()).next_power_of_two();
-            
-            let layout = Layout::from_size_align(
-                buffer_size,
-                align,
-            )
-            .unwrap();
+            let layout = Layout::from_size_align(buffer_size, align).unwrap();
 
             let ptr = NonNull::new(alloc_zeroed(layout)).unwrap();
 
@@ -109,7 +140,7 @@ impl BufferPool {
                 stored: Default::default(),
                 freelist: Default::default(),
                 in_memory: Default::default(),
-                stress_strategy
+                stress_strategy,
             }
         }
     }
@@ -117,6 +148,10 @@ impl BufferPool {
     /// Nombre de pages stockées
     pub fn len(&self) -> usize {
         self.stored.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Vérifie si le pool contient une certaine page.
@@ -134,27 +169,28 @@ impl Drop for BufferPool {
 }
 
 impl IBufferPool for BufferPool {
-
     fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>> {
         // Déjà caché
         if self.contains(tag) {
             return Err(Error::new(ErrorKind::PageAlreadyCached(*tag)));
         }
-    
-        self
-            .alloc_from_memory(tag)
-            .inspect(|_| {self.stored.insert(*tag);})
-            .and_then(MutPage::try_new)
 
+        self.alloc_from_memory(tag)
+            .inspect(|_| {
+                self.stored.insert(*tag);
+            })
+            .and_then(MutPage::try_new)
     }
 
     /// Essaye de récupérer une page stocker dans le tampon.
-    unsafe fn try_get_descriptor<'buf>(&'buf self, tag: &JarTag) -> Result<Option<PageDescriptor<'buf>>> {
+    unsafe fn try_get_descriptor<'buf>(
+        &'buf self,
+        tag: &JarTag,
+    ) -> Result<Option<PageDescriptor<'buf>>> {
         // La page est en mémoire, on la renvoie
         if let Some(stored) = self.try_get_from_memory(tag) {
             return Ok(Some(PageDescriptor::new(stored)));
         }
-
 
         // La page a été déchargée, on va essayer de la récupérer.
         if self.stress_strategy.contains(tag) {
@@ -164,7 +200,6 @@ impl IBufferPool for BufferPool {
             return Ok(Some(page));
         }
 
-
         if self.contains(tag) {
             panic!("page #{tag} is stored in the buffer but nowhere to be found");
         }
@@ -172,7 +207,6 @@ impl IBufferPool for BufferPool {
         Ok(None)
     }
 }
-
 
 impl BufferPool {
     /// Alloue de l'espace dans la mémoire du cache pour stocker une page.
@@ -192,16 +226,15 @@ impl BufferPool {
                 return Ok(free);
             }
 
-            
             let res = self.alloc_in_heap(tag);
-            
+
             if let Err(ErrorKind::BufferFull) = res.as_ref().map_err(|err| &err.kind) {
                 // Le cache est plein, on est dans un cas de stress mémoire
                 // On va essayer de trouver de la place.
                 let mut page = self.manage_stress()?;
                 page.initialise(*tag);
                 self.add_in_memory(page.get_raw_ptr());
-                return Ok(page)
+                return Ok(page);
             }
 
             res
@@ -209,15 +242,17 @@ impl BufferPool {
     }
 
     /// Alloue sur le tas restant un emplacement pour stocker une page.
-    /// 
+    ///
     /// Cette fonction doit supposément être thread-safe via l'utilisation
     /// de compteurs atomiques.
     fn alloc_in_heap<'buf>(&'buf self, tag: &JarTag) -> Result<PageDescriptor<'buf>> {
-        let size =  usize::from(self.page_size) + size_of::<PageDescriptorInner>();
-        
+        let size = usize::from(self.page_size) + size_of::<PageDescriptorInner>();
+
         loop {
             let tail = self.tail.load(std::sync::atomic::Ordering::Acquire);
-            let current_tail = self.tail.fetch_add(size, std::sync::atomic::Ordering::Release);
+            let current_tail = self
+                .tail
+                .fetch_add(size, std::sync::atomic::Ordering::Release);
 
             if current_tail >= self.size {
                 return Err(Error::new(ErrorKind::BufferFull));
@@ -231,21 +266,22 @@ impl BufferPool {
                 let new_tail = tail + size;
                 unsafe {
                     let buf_id = self.length.fetch_add(1, Ordering::Release);
-                    let ptr = self.ptr.add(new_tail);        
+                    let ptr = self.ptr.add(new_tail);
                     let mut cell_ptr = ptr.cast::<MaybeUninit<PageDescriptorInner>>();
                     let content_ptr = ptr.add(size_of::<PageDescriptorInner>());
-                    let content = std::mem::transmute(NonNull::slice_from_raw_parts(content_ptr, self.page_size.into()));
+                    let content = std::mem::transmute::<NonNull<[u8]>, NonNull<PageSlice>>(
+                        NonNull::slice_from_raw_parts(content_ptr, self.page_size.into()),
+                    );
                     let ptr = NonNull::new_unchecked(
                         cell_ptr
                             .as_mut()
                             .write(PageDescriptorInner::new(buf_id, *tag, content)),
                     );
 
-                    return Ok(PageDescriptor::new(ptr));      
+                    return Ok(PageDescriptor::new(ptr));
                 }
             }
         }
-
     }
 
     /// Récupère un pointeur vers un tampon d'une page donnée, s'il existe.
@@ -253,14 +289,13 @@ impl BufferPool {
         self.in_memory.get(tag).map(|kv| kv.value().to_owned())
     }
 
-
     /// Récupère un emplacement libre
     unsafe fn pop_free(&self, tag: &JarTag) -> Option<PageDescriptor<'_>> {
         self.freelist
             .lock()
             .unwrap()
             .pop()
-            .map(|ptr| PageDescriptor::new(ptr) )
+            .map(|ptr| PageDescriptor::new(ptr))
             .map(|mut page| {
                 page.initialise(*tag);
                 page
@@ -275,7 +310,9 @@ impl BufferPool {
     /// toutes empruntées, alors l'opération échoue et retourne l'erreur *CacheFull*.
     fn manage_stress(&self) -> Result<PageDescriptor<'_>> {
         // On trouve une page propre non empruntée
-        let maybe_clean_unborrowed_page = self.in_memory.iter()
+        let maybe_clean_unborrowed_page = self
+            .in_memory
+            .iter()
             .map(|kv| kv.value().to_owned())
             .map(|ptr| unsafe { PageDescriptor::new(ptr) })
             .filter(|page| !page.is_dirty() && page.get_ref_counter() <= 1)
@@ -294,7 +331,7 @@ impl BufferPool {
             .in_memory
             .iter()
             .map(|kv| kv.value().to_owned())
-            .map(|ptr| unsafe {PageDescriptor::new(ptr)})
+            .map(|ptr| unsafe { PageDescriptor::new(ptr) })
             .filter(|page| page.get_ref_counter() <= 1)
             .sorted_by_key(|page| page.get_use_counter())
             .next();
@@ -328,8 +365,5 @@ impl BufferPool {
     }
 }
 
-
 #[cfg(test)]
-mod tests {
-
-}
+mod tests {}

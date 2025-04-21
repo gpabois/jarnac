@@ -1,12 +1,15 @@
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::arena::IArena;
-use crate::page::{RefPage, MutPage, PageSize, OptionalPageId};
+use crate::page::{MutPage, OptionalPageId, PageSize, RefPage};
 use crate::tag::JarTag;
 
 pub trait IPager<'pager>: IArena<Ref = RefPage<'pager>, RefMut = MutPage<'pager>> {
     fn tag(&self) -> JarTag;
     fn len(&self) -> u64;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 pub(crate) trait IPagerInternals<'pager>: IPager<'pager> {
@@ -26,7 +29,7 @@ pub struct PagerDescriptor {
     /// Début de la liste chaînée des pages libres
     pub free_head: OptionalPageId,
     ///
-    pub reserved: [u8; 100]
+    pub reserved: [u8; 100],
 }
 
 impl PagerDescriptor {
@@ -36,15 +39,30 @@ impl PagerDescriptor {
             page_size,
             page_count: 0,
             free_head: None.into(),
-            reserved: [0; 100]
+            reserved: [0; 100],
         }
     }
 }
 
 pub mod stub {
-    use std::{cell::{RefCell, UnsafeCell}, collections::HashMap, marker::PhantomData, pin::Pin, ptr::NonNull};
+    use std::{
+        cell::{RefCell, UnsafeCell},
+        collections::HashMap,
+        marker::PhantomData,
+        pin::Pin,
+        ptr::NonNull,
+    };
 
-    use crate::{arena::IArena, page::{descriptor::{PageDescriptor, PageDescriptorInner}, MutPage, PageSlice, RefPage}, result::Result, tag::JarTag, utils::Flip};
+    use crate::{
+        arena::IArena,
+        page::{
+            descriptor::{PageDescriptor, PageDescriptorInner},
+            MutPage, PageSlice, RefPage,
+        },
+        result::Result,
+        tag::JarTag,
+        utils::Flip,
+    };
 
     use super::{IPager, PagerDescriptor};
 
@@ -52,13 +70,12 @@ pub mod stub {
         StubPager::new()
     }
 
-
     /// Paginateur bouchonné.
     pub struct StubPager<'buf, const PAGE_SIZE: usize> {
         descriptor: RefCell<PagerDescriptor>,
         pages: RefCell<Vec<Pin<Box<UnsafeCell<[u8; PAGE_SIZE]>>>>>,
         descriptors: RefCell<HashMap<JarTag, Pin<Box<UnsafeCell<PageDescriptorInner>>>>>,
-        _pht: PhantomData<&'buf ()>
+        _pht: PhantomData<&'buf ()>,
     }
 
     impl<'buf, const PAGE_SIZE: usize> StubPager<'buf, PAGE_SIZE> {
@@ -67,7 +84,7 @@ pub mod stub {
                 descriptor: RefCell::new(PagerDescriptor::new(u16::try_from(PAGE_SIZE).unwrap())),
                 pages: Default::default(),
                 descriptors: Default::default(),
-                _pht: PhantomData
+                _pht: PhantomData,
             }
         }
     }
@@ -85,7 +102,7 @@ pub mod stub {
         fn tag(&self) -> JarTag {
             JarTag::in_jar(0)
         }
-        
+
         fn len(&self) -> u64 {
             self.descriptor.borrow().page_count
         }
@@ -101,30 +118,24 @@ pub mod stub {
                 let content_box = Box::pin(UnsafeCell::new([0; PAGE_SIZE]));
                 let content_ptr = content_box.get().cast::<u8>();
                 self.pages.borrow_mut().push(content_box);
-    
+
                 let content: NonNull<PageSlice> = std::mem::transmute(
-                        NonNull::slice_from_raw_parts(NonNull::new(content_ptr).unwrap(), PAGE_SIZE)
-                    ) 
-                ;
-    
-                let tag = JarTag::in_jar(0).in_page(u64::try_from(buf_id).unwrap());
-    
-                let desc = PageDescriptorInner::new(
-                    buf_id, 
-                    tag,
-                    content
+                    NonNull::slice_from_raw_parts(NonNull::new(content_ptr).unwrap(), PAGE_SIZE),
                 );
-    
+
+                let tag = JarTag::in_jar(0).in_page(u64::try_from(buf_id).unwrap());
+
+                let desc = PageDescriptorInner::new(buf_id, tag, content);
+
                 let desc_box = Box::pin(UnsafeCell::new(desc));
                 desc_box.get().as_mut().unwrap().set_new();
-    
+
                 let desc_ptr = NonNull::new(desc_box.get()).unwrap();
                 self.descriptors.borrow_mut().insert(tag, desc_box);
                 self.descriptor.borrow_mut().page_count += 1;
 
                 MutPage::try_new(PageDescriptor::new(desc_ptr))
             }
-
         }
 
         fn try_borrow_element(&self, tag: &JarTag) -> Result<Option<Self::Ref>> {
@@ -133,11 +144,11 @@ pub mod stub {
         fn try_borrow_mut_element(&self, tag: &JarTag) -> Result<Option<Self::RefMut>> {
             self.get_page_descriptor(tag).map(MutPage::try_new).flip()
         }
-        
+
         fn size_of(&self) -> usize {
             PAGE_SIZE
         }
-        
+
         fn delete_element(&self, tag: &JarTag) -> Result<()> {
             let desc = self.get_page_descriptor(tag).unwrap();
             let can_be_deleted = desc.get_ref_counter() == 0;
@@ -150,7 +161,6 @@ pub mod stub {
 
             Ok(())
         }
-        
-  
     }
 }
+

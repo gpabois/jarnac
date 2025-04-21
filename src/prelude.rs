@@ -1,6 +1,6 @@
-pub use crate::page::slice::{BorrowPageSlice, BorrowMutPageSlice};
 pub use crate::knack::{
-    buf::IntoKnackBuf, 
+    buf::IntoKnackBuf,
+    builder::{FromKnackBuilder, IntoKnackBuilder},
     kind::GetKnackKind,
-    builder::{FromKnackBuilder, IntoKnackBuilder}
 };
+pub use crate::page::slice::{BorrowMutPageSlice, BorrowPageSlice};
