@@ -47,7 +47,7 @@ impl PartialOrd<Knack> for Comparable<Knack> {
         let other = other.try_as_comparable().unwrap();
         let type_id = self.kind().type_id();
 
-        match type_id {
+        match *type_id {
             U8_TYPE_ID => self.cast::<u8>().partial_cmp(other.cast::<u8>()),
             I8_TYPE_ID => self.cast::<i8>().partial_cmp(other.cast::<i8>()),
             U16_TYPE_ID => self.cast::<u16>().partial_cmp(other.cast::<u16>()),

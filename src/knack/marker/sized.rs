@@ -8,7 +8,7 @@ pub trait AsFixedSized: AsKernelRef  {
     fn as_fixed_sized(&self) -> &FixedSized<Self::Kernel>;
 }
 
-impl<T> AsFixedSized for FixedSized<T> where T: AsKernelRef {
+impl<T> AsFixedSized for FixedSized<T> where T: AsKernelRef + ?std::marker::Sized {
     fn as_fixed_sized(&self) -> &FixedSized<Self::Kernel> {
         unsafe {
             std::mem::transmute(self.as_kernel_ref())
@@ -75,12 +75,12 @@ impl<L> AsKernelMut for VarSized<L> where L: AsKernelMut + ?std::marker::Sized{
     }
 }
 
-pub enum Sized<'a, K> {
+pub enum Sized<'a, K> where K: ?std::marker::Sized {
     Fixed(&'a FixedSized<K>),
     Var(&'a VarSized<K>)
 }
 
-impl<K> Sized<'_, K> where K: AsKernelRef<Kernel=KnackKind> {
+impl<K> Sized<'_, K> where K: AsKernelRef<Kernel=KnackKind> + ?std::marker::Sized {
     pub fn is_variable(&self) -> bool {
         matches!(self, Self::Var(_))
     }

@@ -1,9 +1,11 @@
 pub mod comparable;
 pub mod kernel;
 pub mod sized;
+pub mod array;
 
 pub use comparable::{AsComparable, Comparable};
 pub use sized::{AsFixedSized, FixedSized};
+pub use array::{Array, Element};
 
 #[cfg(test)]
 mod tests {

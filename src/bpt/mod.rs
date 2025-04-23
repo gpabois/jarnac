@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
 use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
@@ -9,7 +11,7 @@ use crate::{
     knack::{
         kind::{GetKnackKind, KnackKind},
         marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, Comparable},
-        Knack,
+        Knack, KnackTypeId,
     },
     page::{AsRefPageSlice, MutPage, PageKind, PageSize, RefPageSlice},
     pager::IPager,
@@ -40,9 +42,9 @@ where
         args: BPlusTreeArgs<Key::Kind, Value::Kind>,
     ) -> Result<Self>
     where
-        Key: GetKnackKind,
+        Key: GetKnackKind + 'static,
         Key::Kind: AsFixedSized + AsComparable,
-        Value: GetKnackKind,
+        Value: GetKnackKind + 'static,
     {
         let node_size: PageSize = arena.size_of().try_into().unwrap();
         let valid_definition = args.define(node_size).validate()?;
@@ -336,12 +338,12 @@ impl TryFrom<u8> for BPTreeNodeKind {
 /// Les arguments à passer pour instancier un nouvel arbre B
 pub struct BPlusTreeArgs<K, V>
 where
-    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind>,
-    V: AsKernelRef<Kernel = KnackKind>,
+    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind> + 'static + ?std::marker::Sized,
+    V: AsKernelRef<Kernel = KnackKind> + 'static + ?std::marker::Sized,
 {
     k: Option<CellCapacity>,
-    key: K,
-    value: V,
+    key: &'static K,
+    value: &'static V,
 }
 
 impl<K, V> BPlusTreeArgs<K, V>
@@ -364,8 +366,8 @@ where
 
 impl<K, V> BPlusTreeArgs<K, V>
 where
-    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind>,
-    V: AsKernelRef<Kernel = KnackKind>,
+    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind> + ?std::marker::Sized,
+    V: AsKernelRef<Kernel = KnackKind> + ?std::marker::Sized,
 {
     /// Prend les exigences et transforme cela en une définition des paramètres de l'arbre B+.
     pub fn define(self, page_size: PageSize) -> BPlusTreeDefinition {
@@ -391,11 +393,17 @@ where
             Sized::Var(_) => (BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0),
         };
 
+        let mut key: [u8;2] = [0;2];
+        let mut value: [u8;2] = [0;2];
+
+        self.key.as_kernel_ref().as_bytes().read(&mut key);
+        self.value.as_kernel_ref().as_bytes().read(&mut value);
+
         BPlusTreeDefinition {
             k,
             flags,
-            key: *self.key.as_kernel_ref(),
-            value: *self.value.as_kernel_ref(),
+            key,
+            value,
             in_cell_value_size,
             page_size,
         }
@@ -443,8 +451,8 @@ where
 pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
-    key: KnackKind,
-    value: KnackKind,
+    key: [u8;2],
+    value: [u8;2],
     in_cell_value_size: u16,
     page_size: PageSize,
 }
@@ -453,9 +461,17 @@ impl BPlusTreeDefinition {
     pub const VAL_WILL_SPILL: u8 = 0b1;
     pub const VAL_IS_VAR_SIZED: u8 = 0b10;
 
+    pub fn key_kind(&self) -> &KnackKind {
+        <&KnackKind>::try_from(self.key.as_slice()).unwrap()
+    }
+
+    pub fn value_kind(&self) -> &KnackKind {
+        <&KnackKind>::try_from(self.value.as_slice()).unwrap()  
+    }
+
     pub fn validate(self) -> Result<Valid<BPlusTreeDefinition>> {
         let key_kind = self
-            .key
+            .key_kind()
             .try_as_fixed_sized()
             .expect("the key kind must be fixed sized");
 

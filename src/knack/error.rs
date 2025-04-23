@@ -1,4 +1,4 @@
-use super::kind::KnackKind;
+use super::kind::{KnackKind, KnackKindBuf};
 
 #[derive(Debug)]
 pub struct KnackError {
@@ -19,6 +19,6 @@ impl KnackError {
 
 #[derive(Debug)]
 pub enum KnackErrorKind {
-    WrongKind { got: KnackKind, expected: KnackKind },
+    WrongKind { got: KnackKindBuf, expected: KnackKindBuf },
 }
 

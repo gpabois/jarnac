@@ -131,11 +131,11 @@ impl BPlusTreeDescription {
     }
 
     pub fn value_kind(&self) -> &KnackKind {
-        &self.def.value
+        self.def.value_kind()
     }
 
     pub fn key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
-        unsafe { std::mem::transmute(&self.def.key) }
+        unsafe { std::mem::transmute(self.def.key_kind()) }
     }
 
     pub fn leaf_content_size(&self) -> u16 {

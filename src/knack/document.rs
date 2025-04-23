@@ -129,7 +129,7 @@ impl TryFrom<&Knack> for &DocRef {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         Document::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -140,7 +140,7 @@ impl TryFrom<&mut Knack> for &mut DocRef {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         Document::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }

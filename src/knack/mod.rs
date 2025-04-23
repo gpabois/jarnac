@@ -135,7 +135,7 @@ impl Knack {
     where
         T: GetKnackKind + ?std::marker::Sized,
     {
-        T::kind().as_kernel_ref().assert_eq(self.kind()).is_ok()
+        T::kind().as_kernel_ref().assert_same(self.kind()).is_ok()
     }
 
     pub fn cast<T: FromKnack + ?std::marker::Sized>(&self) -> &T::Output {
@@ -147,7 +147,7 @@ impl Knack {
     }
 
     pub fn kind(&self) -> &KnackKind {
-        unsafe { std::mem::transmute(&self.0[0]) }
+        <&KnackKind>::try_from(&self.0).unwrap()
     }
 
     pub fn get<Path: IntoKnackPath>(&self, path: Path) -> Option<&Knack> {
@@ -185,7 +185,8 @@ impl Knack {
     }
 
     pub fn as_value_bytes(&self) -> &[u8] {
-        &self.0[size_of::<KnackKind>()..]
+        let offset = self.kind().len();
+        &self.0[offset..]
     }
 }
 
@@ -234,7 +235,7 @@ impl TryFrom<&Knack> for &U8 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         u8::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -245,7 +246,7 @@ impl TryFrom<&mut Knack> for &mut U8 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         u8::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -283,7 +284,7 @@ impl TryFrom<&Knack> for &U16 {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        u16::kind().as_kernel_ref().assert_eq(value.kind())?;
+        u16::kind().as_kernel_ref().assert_same(value.kind())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -294,7 +295,7 @@ impl TryFrom<&mut Knack> for &mut U16 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         u16::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -342,7 +343,7 @@ impl TryFrom<&Knack> for &U32 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         u32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -353,7 +354,7 @@ impl TryFrom<&mut Knack> for &mut U32 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         u32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -412,7 +413,7 @@ impl TryFrom<&Knack> for &U64 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         u64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -423,7 +424,7 @@ impl TryFrom<&mut Knack> for &mut U64 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         u64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -472,7 +473,7 @@ impl TryFrom<&Knack> for &U128 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         u128::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -483,7 +484,7 @@ impl TryFrom<&mut Knack> for &mut U128 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         u128::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -532,7 +533,7 @@ impl TryFrom<&Knack> for &I8 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         i8::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -543,7 +544,7 @@ impl TryFrom<&mut Knack> for &mut I8 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         i8::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -591,7 +592,7 @@ impl TryFrom<&Knack> for &I16 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         i16::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -602,7 +603,7 @@ impl TryFrom<&mut Knack> for &mut I16 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         i16::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -651,7 +652,7 @@ impl TryFrom<&Knack> for &I32 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         i32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -662,7 +663,7 @@ impl TryFrom<&mut Knack> for &mut I32 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         i32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -711,7 +712,7 @@ impl TryFrom<&Knack> for &I64 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         i64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -722,7 +723,7 @@ impl TryFrom<&mut Knack> for &mut I64 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         i64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -770,7 +771,7 @@ impl TryFrom<&Knack> for &I128 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         i128::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -781,7 +782,7 @@ impl TryFrom<&mut Knack> for &mut I128 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         i128::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -840,7 +841,7 @@ impl TryFrom<&Knack> for &F32 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         f32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -851,7 +852,7 @@ impl TryFrom<&mut Knack> for &mut F32 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         f32::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -910,7 +911,7 @@ impl TryFrom<&Knack> for &F64 {
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
         f64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -921,7 +922,7 @@ impl TryFrom<&mut Knack> for &mut F64 {
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
         f64::kind()
             .as_kernel_ref()
-            .assert_eq(value.kind().as_kernel_ref())?;
+            .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
@@ -960,7 +961,7 @@ impl TryFrom<&Knack> for &Str {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        str::kind().assert_eq(value.kind().as_kernel_ref())?;
+        str::kind().as_kernel_ref().assert_same(value.kind().as_kernel_ref())?;
         unsafe { Ok(std::mem::transmute(value)) }
     }
 }
@@ -968,7 +969,7 @@ impl TryFrom<&mut Knack> for &mut Str {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        str::kind().assert_eq(value.kind().as_kernel_ref())?;
+        str::kind().as_kernel_ref().assert_same(value.kind().as_kernel_ref())?;
         unsafe { Ok(std::mem::transmute(value)) }
     }
 }
