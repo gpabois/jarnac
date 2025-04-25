@@ -37,14 +37,10 @@ impl<'nodes, Arena> BPlusTree<'nodes, Arena>
 where
     Arena: IPager<'nodes>,
 {
-    pub fn new<Key, Value>(
+    pub fn new(
         arena: &'nodes Arena,
-        args: BPlusTreeArgs<Key::Kind, Value::Kind>,
+        args: BPlusTreeArgs,
     ) -> Result<Self>
-    where
-        Key: GetKnackKind + 'static,
-        Key::Kind: AsFixedSized + AsComparable,
-        Value: GetKnackKind + 'static,
     {
         let node_size: PageSize = arena.size_of().try_into().unwrap();
         let valid_definition = args.define(node_size).validate()?;
@@ -336,45 +332,37 @@ impl TryFrom<u8> for BPTreeNodeKind {
 }
 
 /// Les arguments à passer pour instancier un nouvel arbre B
-pub struct BPlusTreeArgs<K, V>
-where
-    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind> + 'static + ?std::marker::Sized,
-    V: AsKernelRef<Kernel = KnackKind> + 'static + ?std::marker::Sized,
-{
+pub struct BPlusTreeArgs
+where {
     k: Option<CellCapacity>,
-    key: &'static K,
-    value: &'static V,
+    key: &'static KnackKind,
+    value: &'static KnackKind,
 }
 
-impl<K, V> BPlusTreeArgs<K, V>
-where
-    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind>,
-    V: AsKernelRef<Kernel = KnackKind>,
+impl BPlusTreeArgs
 {
     pub fn new<Key, Value>(k: Option<CellCapacity>) -> Self
     where
-        Key: GetKnackKind<Kind = K>,
-        Value: GetKnackKind<Kind = V>,
+        Key: GetKnackKind,
+        Key::Kind: AsComparable + AsFixedSized,
+        Value: GetKnackKind + ?std::marker::Sized,
     {
         Self {
             k,
-            key: Key::kind(),
-            value: Value::kind(),
+            key: Key::kind().as_kernel_ref(),
+            value: Value::kind().as_kernel_ref(),
         }
     }
 }
 
-impl<K, V> BPlusTreeArgs<K, V>
-where
-    K: AsFixedSized<Kernel = KnackKind> + AsComparable<Kernel = KnackKind> + ?std::marker::Sized,
-    V: AsKernelRef<Kernel = KnackKind> + ?std::marker::Sized,
+impl BPlusTreeArgs
 {
     /// Prend les exigences et transforme cela en une définition des paramètres de l'arbre B+.
     pub fn define(self, page_size: PageSize) -> BPlusTreeDefinition {
         let k = self.k.unwrap_or_else(|| self.find_best_k(page_size));
         let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(
             page_size,
-            self.key.as_fixed_sized(),
+            self.key.try_as_fixed_sized().unwrap(),
             k,
         );
 
@@ -409,7 +397,7 @@ where
             .filter(|&k| {
                 let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(
                     page_size,
-                    self.key.as_fixed_sized(),
+                    self.key.try_as_fixed_sized().unwrap(),
                     k,
                 );
 
@@ -423,14 +411,14 @@ where
 
                 let leaf_compliant = BPlusTreeLeaf::<()>::within_available_cell_space_size(
                     page_size,
-                    self.key.as_fixed_sized(),
+                    self.key.try_as_fixed_sized().unwrap(),
                     value_size,
                     k,
                 );
 
                 let interior_compliant = BPlusTreeInterior::<()>::within_available_cell_space_size(
                     page_size,
-                    self.key.as_fixed_sized(),
+                    self.key.try_as_fixed_sized().unwrap(),
                     k,
                 );
 
@@ -493,5 +481,20 @@ impl BPlusTreeDefinition {
         (valid && valid_value_requirements)
             .then_some(Valid(self))
             .ok_or_else(|| Error::new(ErrorKind::InvalidBPlusTreeDefinition))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{pager::stub::StubPager, prelude::IntoKnackBuf};
+
+    use super::{BPlusTree, BPlusTreeArgs};
+
+    #[test]
+    pub fn test_insert() {
+        let nodes = StubPager::<4096>::new();
+        let args = BPlusTreeArgs::new::<u128, str>(None);
+        let mut tree = BPlusTree::new(&nodes, args).unwrap();
+        tree.insert(&18u128.into_knack_buf(), &"test".into_knack_buf()).unwrap();
     }
 }
