@@ -9,7 +9,7 @@ use crate::{
     knack::{
         buf::KnackBuf,
         kind::KnackKind,
-        marker::{kernel::AsKernelRef, AsComparable, Comparable, FixedSized},
+        marker::{kernel::AsKernelRef, AsComparable, AsFixedSized, Comparable, ComparableAndFixedSized, FixedSized},
         Knack,
     },
     page::{
@@ -147,7 +147,7 @@ where
     }
 
     /// Insère un nouveau triplet {gauche | clé | droit}s dans le noeud intérieur.
-    pub fn insert(&mut self, left: JarTag, key: &Comparable<Knack>, right: JarTag) -> Result<()> {
+    pub fn insert(&mut self, left: JarTag, key: &ComparableAndFixedSized<Knack>, right: JarTag) -> Result<()> {
         let maybe_existing_cid = self
             .iter()
             .filter(|cell| cell.left() == Some(left.page_id))
@@ -327,7 +327,7 @@ where
     }
 
     fn key_range(&self) -> Range<usize> {
-        self.kind().as_area().shift(size_of::<PageId>())
+        self.kind().range().shift(size_of::<PageId>())
     }
 
     fn as_left_slice(&self) -> &[u8] {
@@ -338,9 +338,8 @@ where
         &self.as_cell().as_content_slice()[self.key_range()]
     }
 
-    fn kind(&self) -> &Comparable<FixedSized<KnackKind>> {
-        let kind = <&KnackKind>::try_from(self.0[..size_of::<KnackKind>()].as_bytes()).unwrap();
-        unsafe { std::mem::transmute(kind) }
+    fn kind(&self) -> &ComparableAndFixedSized<KnackKind> {
+        <&ComparableAndFixedSized::<_>>::try_from(self.0.as_content_slice().as_bytes()).unwrap()
     }
 }
 
@@ -348,21 +347,14 @@ impl<Slice> BPTreeInteriorCell<Slice>
 where
     Slice: AsMutPageSlice + ?std::marker::Sized,
 {
-    pub fn initialise(&mut self, key: &Comparable<Knack>, left: PageId) {
-        key.kind().as_sized().outer_size().unwrap_or_else(|| {
-            panic!(
-                "expecting key to be a sized-type (kind: {0})",
-                key.kind().as_kernel_ref()
-            )
-        });
-
+    pub fn initialise(&mut self, key: &ComparableAndFixedSized<Knack>, left: PageId) {
         let loc = self.left_range().end;
-        let area = KnackKind::AREA.shift(loc);
+        let area = key.as_fixed_sized().range().shift(loc);
 
         self.as_mut_cell().as_mut_content_slice().as_mut_bytes()[area]
-            .clone_from_slice(key.kind().as_bytes());
+            .clone_from_slice(key.as_kernel_ref().kind().as_bytes());
 
-        self.borrow_mut_key().set(key);
+        self.borrow_mut_key().set(key.as_kernel_ref());
         self.set_left(Some(left));
     }
 

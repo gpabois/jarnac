@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::ops::Deref;
 
 use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
@@ -9,9 +9,9 @@ use crate::{
     cell::CellCapacity,
     error::{Error, ErrorKind},
     knack::{
-        kind::{GetKnackKind, KnackKind},
-        marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, Comparable},
-        Knack, KnackTypeId,
+        kind::{EmcompassingKnackKind, GetKnackKind, KnackKind},
+        marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, ComparableAndFixedSized},
+        Knack,
     },
     page::{AsRefPageSlice, MutPage, PageKind, PageSize, RefPageSlice},
     pager::IPager,
@@ -103,7 +103,7 @@ where
         }
 
         leaf.insert(
-            key.try_as_comparable().expect("key must be comparable"),
+            <&ComparableAndFixedSized::<Knack>>::try_from(key).expect("key must be comparable"),
             value,
             self.arena,
         )
@@ -149,7 +149,7 @@ where
                 self.insert_in_interior(
                     &mut parent,
                     *left.tag(),
-                    key.try_as_comparable().unwrap(),
+                    <&ComparableAndFixedSized::<Knack>>::try_from(key.deref()).unwrap(),
                     *right.tag(),
                 )?;
 
@@ -188,7 +188,7 @@ where
                 self.insert_in_interior(
                     &mut parent,
                     *left.tag(),
-                    key.try_as_comparable().unwrap(),
+                    <&ComparableAndFixedSized::<Knack>>::try_from(key.deref()).unwrap(),
                     *right.tag(),
                 )?;
 
@@ -259,7 +259,7 @@ where
         &mut self,
         interior: &mut BPlusTreeInterior<MutPage<'_>>,
         left: JarTag,
-        key: &Comparable<Knack>,
+        key: &ComparableAndFixedSized<Knack>,
         right: JarTag,
     ) -> Result<()> {
         let jar = self.tag;
@@ -393,17 +393,11 @@ where
             Sized::Var(_) => (BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0),
         };
 
-        let mut key: [u8;2] = [0;2];
-        let mut value: [u8;2] = [0;2];
-
-        self.key.as_kernel_ref().as_bytes().read(&mut key);
-        self.value.as_kernel_ref().as_bytes().read(&mut value);
-
         BPlusTreeDefinition {
             k,
             flags,
-            key,
-            value,
+            key: self.key.as_kernel_ref().to_owned(),
+            value: self.value.as_kernel_ref().to_owned(),
             in_cell_value_size,
             page_size,
         }
@@ -451,8 +445,8 @@ where
 pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
-    key: [u8;2],
-    value: [u8;2],
+    key: EmcompassingKnackKind,
+    value: EmcompassingKnackKind,
     in_cell_value_size: u16,
     page_size: PageSize,
 }
@@ -462,11 +456,11 @@ impl BPlusTreeDefinition {
     pub const VAL_IS_VAR_SIZED: u8 = 0b10;
 
     pub fn key_kind(&self) -> &KnackKind {
-        <&KnackKind>::try_from(self.key.as_slice()).unwrap()
+        self.key.deref()
     }
 
     pub fn value_kind(&self) -> &KnackKind {
-        <&KnackKind>::try_from(self.value.as_slice()).unwrap()  
+        self.value.deref()
     }
 
     pub fn validate(self) -> Result<Valid<BPlusTreeDefinition>> {

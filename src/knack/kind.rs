@@ -1,15 +1,13 @@
-use core::slice;
 use phf::phf_map;
-use std::{any::Any, borrow::Borrow, convert::Infallible, fmt::{Debug, Display}, ops::Range};
+use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use std::{any::Any, borrow::Borrow, convert::Infallible, fmt::{Debug, Display}, io::Read, ops::{Deref, Range}};
 
 
 use super::{
     document::{Document, KeyValue},
     error::{KnackError, KnackErrorKind},
     marker::{
-        kernel::{AsKernelMut, AsKernelRef},
-        sized::{Sized, VarSized},
-        Comparable, FixedSized,
+        kernel::AsKernelRef, sized::{Sized, VarSized}, Comparable, ComparableAndFixedSized, FixedSized
     },
     result::KnackResult,
     KnackTypeId,
@@ -102,6 +100,52 @@ pub(super) static KNACK_KIND_DESCRIPTORS: phf::Map<KnackTypeId, KnackKindDescrip
     14u8 => KnackKindDescriptor::new("fixed-str").comparable().dyn_fixed_sized()
 };
 
+
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+/// Type de knack englobant (taille maximale que peut avoir un type de knack)
+pub struct EmcompassingKnackKind([u8;5]);
+
+impl Debug for EmcompassingKnackKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EmcompassingKnackKind").field(&self.0).finish()
+    }
+}
+
+
+impl Display for EmcompassingKnackKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(Borrow::<KnackKind>::borrow(self), f)
+    }
+}
+
+impl ToOwned for KnackKind {
+    type Owned = EmcompassingKnackKind;
+
+    fn to_owned(&self) -> Self::Owned {
+        unsafe {
+            let mut bytes: &[u8] = std::mem::transmute(self);
+            let mut dest: [u8; 5] = [0;5];
+            bytes.read(dest.as_mut_slice());
+            EmcompassingKnackKind(dest)
+        }
+
+    }
+}
+
+impl Borrow<KnackKind> for EmcompassingKnackKind {
+    fn borrow(&self) -> &KnackKind {    
+        self.deref()
+    }
+}
+
+impl Deref for EmcompassingKnackKind {
+    type Target = KnackKind;
+
+    fn deref(&self) -> &Self::Target {
+        <&KnackKind>::try_from(self.0.as_slice()).unwrap()
+    }
+}
+
 pub struct KnackKindBuf(Vec<u8>);
 
 impl Debug for KnackKindBuf {
@@ -121,18 +165,6 @@ impl Borrow<KnackKind> for KnackKindBuf {
         unsafe {
             std::mem::transmute(self.0.as_slice())
         }
-    }
-}
-
-impl ToOwned for KnackKind {
-    type Owned = KnackKindBuf;
-
-    fn to_owned(&self) -> Self::Owned {
-        unsafe {
-            let bytes: &[u8] = std::mem::transmute(self);
-            KnackKindBuf(bytes.to_vec())
-        }
-
     }
 }
 
@@ -260,6 +292,28 @@ impl KnackKind {
     }
 }
 
+impl TryFrom<&[u8]> for &ComparableAndFixedSized<KnackKind> {
+    type Error = Infallible;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let kind = <&KnackKind>::try_from(value)?;
+        unsafe {
+            Ok(std::mem::transmute(kind))
+        }
+    }
+}
+
+impl TryFrom<&KnackKind> for &ComparableAndFixedSized<KnackKind> {
+    type Error = Infallible;
+
+    fn try_from(kind: &KnackKind) -> Result<Self, Self::Error> {
+        unsafe {
+            Ok(std::mem::transmute(kind))
+        }
+    }
+}
+
+
 impl FixedSized<KnackKind> {
 
     pub fn outer_size(&self) -> usize {
@@ -276,7 +330,7 @@ impl FixedSized<KnackKind> {
         );
     }
 
-    pub fn as_area(&self) -> Range<usize> {
+    pub fn range(&self) -> Range<usize> {
         0..self.outer_size()
     }
 }

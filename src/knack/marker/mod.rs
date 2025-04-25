@@ -7,6 +7,8 @@ pub use comparable::{AsComparable, Comparable};
 pub use sized::{AsFixedSized, FixedSized};
 pub use array::{Array, Element};
 
+pub type ComparableAndFixedSized<T> = Comparable<FixedSized<T>>;
+
 #[cfg(test)]
 mod tests {
     use crate::prelude::IntoKnackBuf;

@@ -7,26 +7,16 @@ use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells},
-    error::Error,
-    knack::{
+    cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, error::Error, knack::{
         kind::KnackKind,
         marker::{
-            kernel::{AsKernelMut, AsKernelRef},
-            sized::Sized,
-            AsComparable, AsFixedSized, Comparable, FixedSized,
+            kernel::{AsKernelMut, AsKernelRef}, sized::Sized, AsComparable, AsFixedSized, Comparable, ComparableAndFixedSized, FixedSized
         },
         Knack, KnackCell,
-    },
-    page::{
+    }, page::{
         AsMutPageSlice, AsRefPage, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId,
         PageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice,
-    },
-    pager::IPager,
-    result::Result,
-    tag::{DataArea, JarTag},
-    utils::Shift,
-    var::{MaybeSpilled, Var},
+    }, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift, var::{MaybeSpilled, Var}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -147,13 +137,13 @@ where
 
     pub fn insert<'a, Pager: IPager<'a> + ?std::marker::Sized>(
         &mut self,
-        key: &Comparable<Knack>,
+        key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
         pager: &Pager,
     ) -> Result<()> {
         let before = self
             .iter()
-            .filter(|&cell| cell.borrow_key().as_comparable() >= key)
+            .filter(|&cell| cell.borrow_key().as_comparable() >= key.as_comparable())
             .map(|cell| cell.cid())
             .last();
 
@@ -199,7 +189,7 @@ where
     fn insert_before<'a, Pager: IPager<'a> + ?std::marker::Sized>(
         &mut self,
         before: &CellId,
-        key: &Knack,
+        key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
         pager: &Pager,
     ) -> Result<CellId> {
@@ -210,7 +200,7 @@ where
 
     fn push<'a, Pager: IPager<'a> + ?std::marker::Sized>(
         &mut self,
-        key: &Knack,
+        key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
         pager: &Pager,
     ) -> Result<CellId> {
@@ -335,15 +325,15 @@ where
     /// Initialise la cellule
     pub fn initialise<'buf, Pager: IPager<'buf> + ?std::marker::Sized>(
         cell: &mut Self,
-        key: &Knack,
+        key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
         pager: &Pager,
     ) -> Result<()> {
-        let area = KnackKind::AREA;
+        let area = key.as_fixed_sized().range();
 
-        cell.0.as_mut_content_slice().as_mut_bytes()[area].clone_from_slice(key.kind().as_bytes());
+        cell.0.as_mut_content_slice().as_mut_bytes()[area].clone_from_slice(key.as_kernel_ref().kind().as_bytes());
 
-        cell.borrow_mut_key().as_kernel_mut().set(key);
+        cell.borrow_mut_key().as_kernel_mut().set(key.as_kernel_ref());
         cell.borrow_mut_value().set(value, pager)?;
 
         Ok(())
@@ -371,7 +361,7 @@ impl<'buf> BPlusTreeLeafCell<RefPageSlice<'buf>> {
     ) -> MaybeSpilled<RefPageSlice<'buf>> {
         match value_kind.as_sized() {
             Sized::Fixed(sized) => {
-                let value_range = sized.as_area().shift(key_kind.outer_size());
+                let value_range = sized.range().shift(key_kind.outer_size());
                 let value_bytes = self.0.into_content_slice().into_page_slice(value_range);
                 KnackCell::from(value_bytes).into()
             }
@@ -414,13 +404,8 @@ where
         &self.0
     }
 
-    pub fn borrow_key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
-        let kernel: &KnackKind = self.as_cell().as_content_slice()[..size_of::<KnackKind>()]
-            .as_bytes()
-            .try_into()
-            .unwrap();
-
-        unsafe { std::mem::transmute(kernel) }
+    pub fn borrow_key_kind(&self) -> &ComparableAndFixedSized<KnackKind> {
+        <&ComparableAndFixedSized::<KnackKind>>::try_from(self.as_cell().as_content_slice().as_bytes()).unwrap()
     }
 
     pub fn borrow_key(&self) -> &Comparable<FixedSized<Knack>> {

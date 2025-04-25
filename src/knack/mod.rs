@@ -17,7 +17,7 @@ pub mod path;
 pub mod prelude;
 pub mod result;
 
-use std::ops::{Deref, DerefMut};
+use std::{convert::Infallible, ops::{Deref, DerefMut, Range}};
 
 use array::Array;
 use buf::KnackBuf;
@@ -25,7 +25,7 @@ use builder::KnackBuilder;
 use document::Document;
 use error::KnackError;
 use kind::{GetKnackKind, KnackKind};
-use marker::{kernel::AsKernelRef, Comparable};
+use marker::{kernel::AsKernelRef, Comparable, ComparableAndFixedSized, FixedSized};
 use path::IntoKnackPath;
 use result::KnackResult;
 use zerocopy::{FromBytes, LittleEndian};
@@ -121,6 +121,16 @@ impl AsRef<[u8]> for Knack {
     }
 }
 
+impl TryFrom<&Knack> for &ComparableAndFixedSized<Knack> {
+    type Error = Infallible;
+
+    fn try_from(value: &Knack) -> Result<Self, Self::Error> {
+        unsafe {
+            Ok(std::mem::transmute(value))
+        }
+    }
+}
+
 impl Knack {
     pub(crate) fn from_ref(bytes: &[u8]) -> &Self {
         unsafe { std::mem::transmute(bytes) }
@@ -187,6 +197,12 @@ impl Knack {
     pub fn as_value_bytes(&self) -> &[u8] {
         let offset = self.kind().len();
         &self.0[offset..]
+    }
+}
+
+impl FixedSized<Knack> {
+    pub fn range(&self) -> Range<usize> {
+        self.0.kind().try_as_fixed_sized().unwrap().range()
     }
 }
 

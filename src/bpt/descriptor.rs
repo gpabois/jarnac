@@ -1,11 +1,11 @@
-use std::{mem::MaybeUninit, ops::DerefMut};
+use std::{mem::MaybeUninit, ops::{Deref, DerefMut}};
 
 use crate::{
     knack::{
-        kind::KnackKind,
-        marker::{AsFixedSized, Comparable, FixedSized},
+        kind::{EmcompassingKnackKind, KnackKind},
+        marker::{AsFixedSized, Comparable, ComparableAndFixedSized, FixedSized},
     },
-    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind},
+    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind, PageSize},
     result::Result,
     tag::DataArea,
     utils::Valid,
@@ -106,7 +106,12 @@ where
 #[repr(C, packed)]
 pub struct BPlusTreeDescription {
     /// Définition de l'arbre B+
-    pub(super) def: BPlusTreeDefinition,
+    k: u8,
+    flags: u8,
+    key: EmcompassingKnackKind,
+    value: EmcompassingKnackKind,
+    in_cell_value_size: u16,
+    page_size: PageSize,
     /// Pointeur vers la racine
     pub(super) root: OptionalPageId,
     /// Nombre d'éléments stockés
@@ -116,32 +121,39 @@ pub struct BPlusTreeDescription {
 impl BPlusTreeDescription {
     pub fn new(def: Valid<BPlusTreeDefinition>) -> Self {
         Self {
-            def: def.into_inner(),
+            k: def.0.k,
+            flags: def.0.flags,
+            key: def.0.key,
+            value: def.0.value,
+            in_cell_value_size: def.0.in_cell_value_size,
+            page_size: def.0.page_size,
             root: None.into(),
             len: 0,
         }
     }
 
     pub fn k(&self) -> u8 {
-        self.def.k
+        self.k
     }
 
     pub fn flags(&self) -> &u8 {
-        &self.def.flags
+        &self.flags
     }
 
     pub fn value_kind(&self) -> &KnackKind {
-        self.def.value_kind()
+        self.value.deref()
     }
 
-    pub fn key_kind(&self) -> &Comparable<FixedSized<KnackKind>> {
-        unsafe { std::mem::transmute(self.def.key_kind()) }
+    pub fn key_kind(&self) -> &ComparableAndFixedSized<KnackKind> {
+        let kind: &KnackKind = self.key.deref();
+
+        <&ComparableAndFixedSized::<KnackKind>>::try_from(kind).unwrap()
     }
 
     pub fn leaf_content_size(&self) -> u16 {
         BPlusTreeLeaf::<()>::compute_cell_content_size(
             self.key_kind().as_fixed_sized(),
-            self.def.in_cell_value_size,
+            self.in_cell_value_size,
         )
     }
 
