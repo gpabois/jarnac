@@ -1,5 +1,5 @@
 use super::array::Array;
-use super::marker::kernel::AsKernelRef;
+use super::marker::kernel::{AsKernelRef, IntoKernel};
 
 use super::{
     buf::{IntoKnackBuf, KnackBuf},
@@ -94,6 +94,8 @@ impl From<&Knack> for KnackBuilder {
 }
 
 impl IntoKnackBuf for KnackBuilder {
+    type Buf = KnackBuf;
+    
     fn into_knack_buf(self) -> KnackBuf {
         match self {
             KnackBuilder::Document(document) => document.into_knack_buf(),
@@ -123,7 +125,7 @@ impl FromKnackBuilder for u8 {
 }
 impl IntoKnackBuilder for u8 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -146,7 +148,7 @@ impl FromKnackBuilder for u16 {
 }
 impl IntoKnackBuilder for u16 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -169,7 +171,7 @@ impl FromKnackBuilder for u32 {
 }
 impl IntoKnackBuilder for u32 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -192,7 +194,7 @@ impl FromKnackBuilder for u64 {
 }
 impl IntoKnackBuilder for u64 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -215,7 +217,7 @@ impl FromKnackBuilder for u128 {
 }
 impl IntoKnackBuilder for u128 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -238,7 +240,7 @@ impl FromKnackBuilder for i8 {
 }
 impl IntoKnackBuilder for i8 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -261,13 +263,13 @@ impl FromKnackBuilder for i16 {
 }
 impl IntoKnackBuilder for i16 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
 impl IntoKnackBuilder for i32 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 impl FromKnackBuilder for i32 {
@@ -307,13 +309,13 @@ impl FromKnackBuilder for i64 {
 }
 impl IntoKnackBuilder for i64 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
 impl IntoKnackBuilder for i128 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 impl FromKnackBuilder for i128 {
@@ -353,7 +355,7 @@ impl FromKnackBuilder for f32 {
 }
 impl IntoKnackBuilder for f32 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 
@@ -377,7 +379,7 @@ impl FromKnackBuilder for f64 {
 
 impl IntoKnackBuilder for f64 {
     fn into_value_builder(self) -> KnackBuilder {
-        KnackBuilder::Other(self.into_knack_buf())
+        KnackBuilder::Other(self.into_knack_buf().into_kernel())
     }
 }
 

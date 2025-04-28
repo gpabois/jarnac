@@ -79,9 +79,10 @@ impl Cells {
         k: CellCapacity,
     ) -> bool {
         let available = Self::compute_available_cell_space_size(size, reserved);
-        Self::compute_available_cell_space_size(content_size, reserved) * u16::from(k) <= available
+        Self::compute_cell_space_size(content_size, k) <= available
     }
 
+    /// Calcule l'espace consommée par toutes les cellules
     pub fn compute_cell_space_size(content_size: PageSize, k: CellCapacity) -> u16 {
         Self::compute_cell_size(content_size) * u16::from(k)
     }
@@ -90,7 +91,8 @@ impl Cells {
     /// reserved: espace réservée avant l'espace dédiée aux cellules.
     /// size: taille de la page
     pub fn compute_available_cell_space_size(size: PageSize, reserved: PageSize) -> PageSize {
-        size - Self::compute_base(reserved)
+        let base = Self::compute_base(reserved);
+        size.saturating_sub(base)
     }
 
     /// Calcule la base de l'espace dédiée aux cellules
@@ -1048,6 +1050,7 @@ mod tests {
 
     use super::CellHeader;
     use crate::knack::kind::GetKnackKind;
+    use crate::knack::marker::AsFixedSized;
     use crate::knack::Knack;
     use crate::{
         arena::IArena, cell::CellPage, page::PageSize, pager::stub::new_stub_pager,
@@ -1133,7 +1136,7 @@ mod tests {
     #[test]
     fn test_content_size() -> Result<(), Box<dyn Error>> {
         let pager = new_stub_pager::<4096>();
-        let content_size = PageSize::try_from(u64::kind().outer_size()).unwrap();
+        let content_size = PageSize::try_from(u64::kind().as_fixed_sized().outer_size()).unwrap();
 
         let mut src = CellPage::new(pager.new_element()?, content_size, 5, 0)?;
 
@@ -1151,7 +1154,7 @@ mod tests {
     #[test]
     fn test_split_at() -> Result<(), Box<dyn Error>> {
         let pager = new_stub_pager::<4096>();
-        let content_size = PageSize::try_from(u64::kind().outer_size()).unwrap();
+        let content_size = PageSize::try_from(u64::kind().as_fixed_sized().outer_size()).unwrap();
 
         let mut src = CellPage::new(pager.new_element()?, content_size, 5, 0)?;
 

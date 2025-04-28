@@ -22,6 +22,33 @@ use crate::{
     utils::Shift,
 };
 
+/// Représente une référence d'un truc dont le contenu peut avoir débordé ailleurs
+pub enum MaybeSpilledRef<'a> {
+    Unspilled(&'a Knack),
+    Spilled(&'a Var<PageSlice>)
+}
+
+impl<'a> MaybeSpilledRef<'a> {
+    /// Transforme une référence vers truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé intégralement
+    /// soit par un truc tamponné [KnackBuf], soit par un truc adossé à une tranche [KnackCell].
+    pub fn assert_loaded<Pager>(self, pager: &Pager) -> Result<CowKnack<&'a PageSlice>>
+    where
+        Pager: IPager<'a>,
+    {
+        match self {
+            Self::Unspilled(knack) => {
+                let slice: &'a PageSlice = unsafe {std::mem::transmute(knack)};
+                Ok(CowKnack::Borrow(KnackCell::from(slice)))
+            },
+            Self::Spilled(var) => {
+                let mut buf: Vec<u8> = Vec::with_capacity(usize::try_from(var.len()).unwrap());
+                var.read(&mut buf, pager)?;
+                Ok(CowKnack::Owned(KnackBuf::from_bytes(buf)))
+            }
+        }
+    }
+}
+
 /// Représente un truc dont le contenu peut avoir débordé ailleurs.
 pub enum MaybeSpilled<Slice>
 where
@@ -35,9 +62,9 @@ impl<Slice> MaybeSpilled<Slice>
 where
     Slice: AsRefPageSlice,
 {
-    /// Transforme le truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé en mémoire
+    /// Transforme le truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé intégralement
     /// soit par un truc tamponné [KnackBuf], soit par un truc adossé à une tranche [KnackCell].
-    pub fn into_cow_knack<'a, Pager>(self, pager: &Pager) -> Result<CowKnack<Slice>>
+    pub fn assert_loaded<'a, Pager>(self, pager: &Pager) -> Result<CowKnack<Slice>>
     where
         Pager: IPager<'a>,
     {
@@ -60,6 +87,7 @@ where
         Self::Unspilled(value)
     }
 }
+
 
 impl<'buf> From<Var<RefPageSlice<'buf>>> for MaybeSpilled<RefPageSlice<'buf>> {
     fn from(value: Var<RefPageSlice<'buf>>) -> Self {

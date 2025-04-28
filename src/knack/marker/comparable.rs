@@ -1,16 +1,7 @@
-use std::ops::Deref;
 
-use super::{kernel::{AsKernelMut, AsKernelRef}, sized::VarSized, FixedSized};
+use super::{kernel::{AsKernelMut, AsKernelRef, IntoKernel}, sized::VarSized, FixedSized};
 
 pub struct Comparable<T>(pub(crate) T) where T: ?std::marker::Sized;
-
-impl<T> Deref for Comparable<T> where T: ?std::marker::Sized {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
 
 pub trait AsComparable: AsKernelRef {
     fn as_comparable(&self) -> &Comparable<Self::Kernel>;
@@ -37,6 +28,14 @@ impl<T> AsComparable for VarSized<T> where T: AsComparable {
         unsafe {
             std::mem::transmute(self.as_kernel_ref())
         }
+    }
+}
+
+impl<L> IntoKernel for Comparable<L> where L: IntoKernel {
+    type Kernel = L::Kernel;
+
+    fn into_kernel(self) -> Self::Kernel {
+        self.0.into_kernel()
     }
 }
 

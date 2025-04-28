@@ -1,6 +1,12 @@
 use super::super::kind::KnackKind;
 use super::super::Knack;
 
+pub trait IntoKernel {
+    type Kernel;
+
+    fn into_kernel(self) -> Self::Kernel;
+}
+
 pub trait AsKernelRef { 
     type Kernel: ?std::marker::Sized;
 

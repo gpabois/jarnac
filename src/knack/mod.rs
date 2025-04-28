@@ -49,6 +49,7 @@ pub trait FromKnack: GetKnackKind {
     fn try_mut_from_knack(value: &mut Knack) -> KnackResult<&mut Self::Output>;
 }
 
+/// Valeur détenue dans une tranche de page.
 pub struct KnackCell<Slice>(Slice)
 where
     Slice: AsRefPageSlice;

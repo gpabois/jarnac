@@ -3,18 +3,53 @@ use std::{borrow::{Borrow, BorrowMut}, io::Write, ops::{Deref, DerefMut}};
 use byteorder::WriteBytesExt;
 use zerocopy::IntoBytes;
 
-use super::marker::kernel::AsKernelRef;
+use super::marker::{kernel::{AsKernelRef, IntoKernel}, ComparableAndFixedSized};
 
 use super::{builder::KnackBuilder, document::KeyValue, kind::GetKnackKind, Knack};
 
-
 pub trait IntoKnackBuf {
-    fn into_knack_buf(self) -> KnackBuf;
+    type Buf: Borrow<Knack>;
+
+    fn into_knack_buf(self) -> Self::Buf;
 }
 
-impl<U> IntoKnackBuf for U where KnackBuf: From<U> {
-    fn into_knack_buf(self) -> KnackBuf {
-        KnackBuf::from(self)
+impl IntoKernel for KnackBuf {
+    type Kernel = Self;
+
+    fn into_kernel(self) -> Self::Kernel {
+        self
+    }
+}
+
+impl AsKernelRef for KnackBuf {
+    type Kernel = Self;
+
+    fn as_kernel_ref(&self) -> &Self::Kernel {
+        self
+    }
+}
+
+impl Borrow<Knack> for ComparableAndFixedSized<KnackBuf> {
+    fn borrow(&self) -> &Knack {
+        self.as_kernel_ref().borrow()
+    }
+} 
+
+impl Borrow<ComparableAndFixedSized<Knack>> for ComparableAndFixedSized<KnackBuf> {
+    fn borrow(&self) -> &ComparableAndFixedSized<Knack> {
+        let knack_ref: &Knack = self.as_kernel_ref().borrow();
+        unsafe  {
+            std::mem::transmute(knack_ref)
+        }
+    }
+} 
+
+impl Deref for ComparableAndFixedSized<KnackBuf> {
+    type Target = Knack;
+
+    fn deref(&self) -> &Self::Target {
+        let knack: &Knack = self.borrow();
+        knack
     }
 }
 
@@ -82,12 +117,33 @@ impl From<(String, KnackBuilder)> for KnackBuf {
         Self(buf)
     }
 }
+
+impl IntoKnackBuf for u8 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<u8> for KnackBuf {
     fn from(value: u8) -> Self {    
         let mut buf: Vec<u8> = vec![];
         buf.write_all(u8::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_u8(value).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for u16 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<u16> for KnackBuf {
@@ -98,12 +154,32 @@ impl From<u16> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for u32 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<u32> for KnackBuf {
     fn from(value: u32) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(u32::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for u64 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<u64> for KnackBuf {
@@ -114,12 +190,32 @@ impl From<u64> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for u128 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<u128> for KnackBuf {
     fn from(value: u128) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(u128::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for i8 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<i8> for KnackBuf {
@@ -130,12 +226,32 @@ impl From<i8> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for i16 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<i16> for KnackBuf {
     fn from(value: i16) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(i16::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for i32 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<i32> for KnackBuf {
@@ -146,12 +262,32 @@ impl From<i32> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for i64 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<i64> for KnackBuf {
     fn from(value: i64) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(i64::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for i128 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<i128> for KnackBuf {
@@ -162,12 +298,32 @@ impl From<i128> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for f32 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
+    }
+}
 impl From<f32> for KnackBuf {
     fn from(value: f32) -> Self {
         let mut buf: Vec<u8> = vec![];
         buf.write_all(f32::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
+    }
+}
+impl IntoKnackBuf for f64 {
+    type Buf = ComparableAndFixedSized<KnackBuf>;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        unsafe {
+            std::mem::transmute(buf)
+        }
     }
 }
 impl From<f64> for KnackBuf {
@@ -178,9 +334,25 @@ impl From<f64> for KnackBuf {
         Self(buf)
     }
 }
+impl IntoKnackBuf for String {
+    type Buf = KnackBuf;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        buf
+    }
+}
 impl From<String> for KnackBuf {
     fn from(value: String) -> Self {
         Self::from(value.as_str())
+    }
+}
+impl IntoKnackBuf for &str {
+    type Buf = KnackBuf;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        let buf = KnackBuf::from(self);
+        buf
     }
 }
 impl From<&str> for KnackBuf {
@@ -189,5 +361,18 @@ impl From<&str> for KnackBuf {
         buf.write_all(str::kind().as_kernel_ref().as_bytes()).unwrap();
         buf.write_all(&value.as_bytes()).unwrap();
         Self(buf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::IntoKnackBuf;
+
+    #[test]
+    fn test_str() {
+        let knack = &"test".into_knack_buf();
+
+        assert!(knack.is::<str>());
+        assert_eq!(knack.cast::<str>(), "test");
     }
 }

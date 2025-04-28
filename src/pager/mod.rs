@@ -71,7 +71,7 @@ pub mod stub {
     }
 
     /// Paginateur bouchonné.
-    pub struct StubPager<'buf, const PAGE_SIZE: usize> {
+    pub struct StubPager<'buf, const PAGE_SIZE: usize = 4096> {
         descriptor: RefCell<PagerDescriptor>,
         pages: RefCell<Vec<Pin<Box<UnsafeCell<[u8; PAGE_SIZE]>>>>>,
         descriptors: RefCell<HashMap<JarTag, Pin<Box<UnsafeCell<PageDescriptorInner>>>>>,

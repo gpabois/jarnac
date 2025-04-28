@@ -3,6 +3,8 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use std::{any::Any, borrow::Borrow, convert::Infallible, fmt::{Debug, Display}, io::Read, ops::{Deref, Range}};
 
 
+use crate::var::Var;
+
 use super::{
     document::{Document, KeyValue},
     error::{KnackError, KnackErrorKind},
@@ -125,7 +127,7 @@ impl ToOwned for KnackKind {
         unsafe {
             let mut bytes: &[u8] = std::mem::transmute(self);
             let mut dest: [u8; 5] = [0;5];
-            bytes.read(dest.as_mut_slice());
+            bytes.read(dest.as_mut_slice()).unwrap();
             EmcompassingKnackKind(dest)
         }
 
@@ -171,6 +173,41 @@ impl Borrow<KnackKind> for KnackKindBuf {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct KnackKind([u8]);
+
+impl Deref for Comparable<KnackKind> {
+    type Target = KnackKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+impl Deref for FixedSized<KnackKind> {
+    type Target = KnackKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+impl Deref for VarSized<KnackKind> {
+    type Target = KnackKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+
+impl Deref for ComparableAndFixedSized<KnackKind> {
+    type Target = KnackKind;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 impl Display for KnackKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

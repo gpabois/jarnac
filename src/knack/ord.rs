@@ -1,13 +1,14 @@
+use std::ops::Deref;
+use std::borrow::Borrow;
+
 use super::{
-    kind::{
+    buf::KnackBuf, kind::{
         KnackKind, F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
         I8_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID,
-    },
-    marker::{
+    }, marker::{
         kernel::{AsKernelMut, AsKernelRef},
-        Comparable,
-    },
-    Knack,
+        Comparable, ComparableAndFixedSized,
+    }, Knack
 };
 
 impl<L> Comparable<L>
@@ -25,11 +26,27 @@ where
     }
 }
 
+impl Deref for Comparable<Knack> {
+    type Target = Knack;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 impl Comparable<Knack> {
     pub fn kind(&self) -> &Comparable<KnackKind> {
         self.0.kind().try_as_comparable().unwrap()
     }
 }
+
+impl PartialEq<Comparable<KnackBuf>> for Comparable<Knack> {
+    fn eq(&self, other: &Comparable<KnackBuf>) -> bool {
+        let knack: &Knack = other.as_kernel_ref().borrow();
+        self.eq(knack)
+    }
+}
+
 
 impl PartialEq<Knack> for Comparable<Knack> {
     fn eq(&self, other: &Knack) -> bool {

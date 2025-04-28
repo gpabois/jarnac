@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{marker::PhantomData, ops::Deref, borrow::Borrow};
 
 use descriptor::BPTreeDescriptor;
 use interior::{BPlusTreeInterior, BPlusTreeInteriorMut, BPlusTreeInteriorRef};
@@ -6,24 +6,42 @@ use leaf::{BPlusTreeLeaf, BPlusTreeLeafMut, BPlusTreeLeafRef};
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    cell::CellCapacity,
-    error::{Error, ErrorKind},
-    knack::{
+    cell::CellCapacity, error::{Error, ErrorKind}, knack::{
         kind::{EmcompassingKnackKind, GetKnackKind, KnackKind},
         marker::{kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, ComparableAndFixedSized},
         Knack,
-    },
-    page::{AsRefPageSlice, MutPage, PageKind, PageSize, RefPageSlice},
-    pager::IPager,
-    result::Result,
-    tag::JarTag,
-    utils::Valid,
-    var::{MaybeSpilled, VarMeta},
+    }, page::{AsRefPageSlice, MutPage, PageKind, PageSize, RefPageSlice}, pager::IPager, prelude::IntoKnackBuf, result::Result, tag::JarTag, utils::Valid, var::{MaybeSpilled, VarMeta}
 };
 
 pub mod descriptor;
 pub mod interior;
 pub mod leaf;
+
+pub struct KnownBPlusTree<'nodes, Key, Value, Arena>
+where
+    Arena: IPager<'nodes>,
+{
+    _pht: PhantomData<(Key,Value)>,
+    inner: BPlusTree<'nodes, Arena>
+}
+
+impl<'nodes, Key, Value, Arena> KnownBPlusTree<'nodes, Key, Value, Arena> 
+where
+    Arena: IPager<'nodes>,
+    Key: IntoKnackBuf,
+    Value: IntoKnackBuf
+{
+    pub fn search(&self, key: Key) -> Result<Option<MaybeSpilled<RefPageSlice<'nodes>>>> {
+        let k = key.into_knack_buf();
+        self.inner.search(k.borrow())
+    }
+
+    pub fn insert(&mut self, key: Key, value: Value) -> Result<()> {
+        let k = key.into_knack_buf();
+        let v = value.into_knack_buf();
+        self.inner.insert(k.borrow(), v.borrow())
+    }
+}
 
 pub struct BPlusTree<'nodes, Arena>
 where
@@ -59,7 +77,7 @@ where
             return self.borrow_leaf(&tag).map(|leaf| {
                 leaf.into_value(
                     key,
-                    self.as_descriptor().key_kind(),
+                    self.as_descriptor().key_kind().as_fixed_sized(),
                     self.as_descriptor().value_kind(),
                 )
             });
@@ -101,6 +119,7 @@ where
         leaf.insert(
             <&ComparableAndFixedSized::<Knack>>::try_from(key).expect("key must be comparable"),
             value,
+            self.as_descriptor().as_description(),
             self.arena,
         )
         .inspect(|_| self.as_mut_descriptor().inc_len())
@@ -331,12 +350,13 @@ impl TryFrom<u8> for BPTreeNodeKind {
     }
 }
 
+#[derive(Clone, Copy)]
 /// Les arguments à passer pour instancier un nouvel arbre B
 pub struct BPlusTreeArgs
 where {
     k: Option<CellCapacity>,
-    key: &'static KnackKind,
-    value: &'static KnackKind,
+    key_kind: &'static KnackKind,
+    value_kind: &'static KnackKind,
 }
 
 impl BPlusTreeArgs
@@ -349,8 +369,8 @@ impl BPlusTreeArgs
     {
         Self {
             k,
-            key: Key::kind().as_kernel_ref(),
-            value: Value::kind().as_kernel_ref(),
+            key_kind: Key::kind().as_kernel_ref(),
+            value_kind: Value::kind().as_kernel_ref(),
         }
     }
 }
@@ -360,13 +380,14 @@ impl BPlusTreeArgs
     /// Prend les exigences et transforme cela en une définition des paramètres de l'arbre B+.
     pub fn define(self, page_size: PageSize) -> BPlusTreeDefinition {
         let k = self.k.unwrap_or_else(|| self.find_best_k(page_size));
+        
         let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(
             page_size,
-            self.key.try_as_fixed_sized().unwrap(),
+            self.key_kind.try_as_fixed_sized().unwrap(),
             k,
         );
 
-        let (flags, in_cell_value_size) = match self.value.as_kernel_ref().as_sized() {
+        let (flags, in_cell_value_size) = match self.value_kind.as_sized() {
             Sized::Fixed(sized) => {
                 let value_size = u16::try_from(sized.outer_size()).unwrap();
                 let will_spill = value_size > available_value_size;
@@ -375,17 +396,17 @@ impl BPlusTreeArgs
                     will_spill
                         .then_some(BPlusTreeDefinition::VAL_IS_VAR_SIZED)
                         .unwrap_or_default(),
-                    value_size,
+                    std::cmp::min(value_size, available_value_size),
                 )
             }
-            Sized::Var(_) => (BPlusTreeDefinition::VAL_IS_VAR_SIZED, 0),
+            Sized::Var(_) => (BPlusTreeDefinition::VAL_IS_VAR_SIZED, available_value_size),
         };
 
         BPlusTreeDefinition {
             k,
             flags,
-            key: self.key.as_kernel_ref().to_owned(),
-            value: self.value.as_kernel_ref().to_owned(),
+            key: self.key_kind.as_kernel_ref().to_owned(),
+            value: self.value_kind.as_kernel_ref().to_owned(),
             in_cell_value_size,
             page_size,
         }
@@ -393,32 +414,35 @@ impl BPlusTreeArgs
 
     /// On trouve MAX(K) pour K e [1..255] tel qu'on puisse rentrer dans un noeud intérieur et un noeud feuille.
     pub fn find_best_k(&self, page_size: PageSize) -> CellCapacity {
-        (1..CellCapacity::MAX)
+        (2..CellCapacity::MAX)
             .filter(|&k| {
                 let available_value_size = BPlusTreeLeaf::<()>::compute_available_value_space_size(
                     page_size,
-                    self.key.try_as_fixed_sized().unwrap(),
+                    self.key_kind.try_as_fixed_sized().unwrap(),
                     k,
                 );
 
                 let value_size = self
-                    .value
-                    .as_kernel_ref()
+                    .value_kind
                     .try_as_fixed_sized()
                     .map(|fxd| u16::try_from(fxd.outer_size()).unwrap())
                     .unwrap_or_else(|| available_value_size)
                     .min(available_value_size);
 
+                if self.value_kind.try_as_var_sized().is_some() && usize::from(value_size) <= size_of::<VarMeta>() {
+                    return false
+                }
+
                 let leaf_compliant = BPlusTreeLeaf::<()>::within_available_cell_space_size(
                     page_size,
-                    self.key.try_as_fixed_sized().unwrap(),
+                    self.key_kind.try_as_fixed_sized().unwrap(),
                     value_size,
                     k,
                 );
 
                 let interior_compliant = BPlusTreeInterior::<()>::within_available_cell_space_size(
                     page_size,
-                    self.key.try_as_fixed_sized().unwrap(),
+                    self.key_kind.try_as_fixed_sized().unwrap(),
                     k,
                 );
 
@@ -429,7 +453,7 @@ impl BPlusTreeArgs
     }
 }
 
-#[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
+#[derive(FromBytes, IntoBytes, KnownLayout, Immutable, Debug)]
 pub struct BPlusTreeDefinition {
     k: u8,
     flags: u8,
@@ -486,6 +510,7 @@ impl BPlusTreeDefinition {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Borrow;
     use crate::{pager::stub::StubPager, prelude::IntoKnackBuf};
 
     use super::{BPlusTree, BPlusTreeArgs};
@@ -494,7 +519,21 @@ mod tests {
     pub fn test_insert() {
         let nodes = StubPager::<4096>::new();
         let args = BPlusTreeArgs::new::<u128, str>(None);
+
+        let def = args.define(4096);
+        println!("{:#?}", def);
+
+        let key = 18u128.into_knack_buf();
+        
         let mut tree = BPlusTree::new(&nodes, args).unwrap();
-        tree.insert(&18u128.into_knack_buf(), &"test".into_knack_buf()).unwrap();
+        tree.insert(key.borrow(), &"test".into_knack_buf()).unwrap();
+
+        let maybe_value = tree.search(key.borrow()).unwrap();
+        assert!(maybe_value.is_some());
+        let maybe_spilled = maybe_value.unwrap();
+        
+        let value = maybe_spilled.assert_loaded(&nodes).unwrap();
+        assert_eq!(value.cast::<str>(), "test")
+         
     }
 }

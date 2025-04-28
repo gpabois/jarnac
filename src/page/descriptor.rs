@@ -153,7 +153,7 @@ impl PageDescriptor<'_> {
         self.as_ref_inner()
             .rw_counter
             .fetch_add(1, SyncOrdering::Release)
-            > 0
+            >= 0
     }
 
     pub fn release_read_lock(&self) {

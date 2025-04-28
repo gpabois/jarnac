@@ -1,8 +1,16 @@
 use crate::knack::kind::KnackKind;
 
-use super::{kernel::{AsKernelMut, AsKernelRef}, Comparable};
+use super::{kernel::{AsKernelMut, AsKernelRef, IntoKernel}, Comparable};
 
 pub struct FixedSized<T>(pub(crate) T) where T: ?std::marker::Sized;
+
+impl<L> IntoKernel for FixedSized<L> where L: IntoKernel {
+    type Kernel = L::Kernel;
+
+    fn into_kernel(self) -> Self::Kernel {
+        self.0.into_kernel()
+    }
+}
 
 pub trait AsFixedSized: AsKernelRef  {
     fn as_fixed_sized(&self) -> &FixedSized<Self::Kernel>;
@@ -49,6 +57,14 @@ impl<T> VarSized<T> {
 
 pub trait AsVarSized: AsKernelRef {
     fn as_var_sized(&self) -> &VarSized<Self::Kernel>;
+}
+
+impl<L> IntoKernel for VarSized<L> where L: IntoKernel {
+    type Kernel = L::Kernel;
+
+    fn into_kernel(self) -> Self::Kernel {
+        self.0.into_kernel()
+    }
 }
 
 impl<T> AsVarSized for Comparable<T> where T: AsVarSized

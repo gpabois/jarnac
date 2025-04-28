@@ -139,7 +139,7 @@ where
         page.as_mut_bytes()[0] = PageKind::BPlusTreeInterior as u8;
         CellPage::new(
             page,
-            BPlusTreeInterior::<()>::compute_cell_content_size(desc.key_kind()),
+            BPlusTreeInterior::<()>::compute_cell_content_size(desc.key_kind().as_fixed_sized()),
             desc.k(),
             BPlusTreeInterior::<()>::reserved_space(),
         )
@@ -237,17 +237,35 @@ where
 }
 
 impl BPlusTreeInterior<()> {
+    /// Calcule la taille du contenu d'une cellule (sans les métadonnées)
     pub fn compute_cell_content_size(key: &FixedSized<KnackKind>) -> PageSize {
         u16::try_from(size_of::<PageId>() + key.outer_size()).unwrap()
     }
 
+    pub fn is_compliant(
+        page_size: PageSize,
+        key: &FixedSized<KnackKind>,
+        k: CellCapacity,) -> bool {
+        
+        let cell_size_is_gt_zero = Self::compute_cell_content_size(key) > 0;
+        let within = Self::within_available_cell_space_size(page_size, key, k);
+
+        cell_size_is_gt_zero && within
+    }
+
+    /// Vérifie que le nombre de cellules demandées rentrent dans l'espace disponible
     pub fn within_available_cell_space_size(
         page_size: PageSize,
         key: &FixedSized<KnackKind>,
         k: CellCapacity,
     ) -> bool {
         let content_size = Self::compute_cell_content_size(key);
-        Cells::within_available_cell_space_size(page_size, Self::reserved_space(), content_size, k)
+        Cells::within_available_cell_space_size(
+            page_size, 
+            Self::reserved_space(), 
+            content_size, 
+            k
+        )
     }
 
     pub fn reserved_space() -> u16 {
@@ -327,7 +345,7 @@ where
     }
 
     fn key_range(&self) -> Range<usize> {
-        self.kind().range().shift(size_of::<PageId>())
+        self.kind().as_fixed_sized().range().shift(size_of::<PageId>())
     }
 
     fn as_left_slice(&self) -> &[u8] {

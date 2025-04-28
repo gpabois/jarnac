@@ -103,6 +103,8 @@ impl IntoKnackBuf for Array {
     fn into_knack_buf(self) -> KnackBuf {
         todo!()
     }
+    
+    type Buf = KnackBuf;
 }
 
 impl FromKnack for Array {

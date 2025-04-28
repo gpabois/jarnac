@@ -144,6 +144,10 @@ impl BPlusTreeDescription {
         self.value.deref()
     }
 
+    pub fn value_will_spill(&self) -> bool {
+        self.flags() & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0
+    }
+
     pub fn key_kind(&self) -> &ComparableAndFixedSized<KnackKind> {
         let kind: &KnackKind = self.key.deref();
 

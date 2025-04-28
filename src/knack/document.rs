@@ -180,6 +180,14 @@ impl FromKnack for Document {
     }
 }
 
+impl IntoKnackBuf for (String, KnackBuilder) {
+    type Buf = KnackBuf;
+
+    fn into_knack_buf(self) -> Self::Buf {
+        KnackBuf::from(self)
+    }
+}
+
 impl FromIterator<(String, KnackBuilder)> for Document {
     fn from_iter<T: IntoIterator<Item = (String, KnackBuilder)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
@@ -219,6 +227,8 @@ impl Document {
 }
 
 impl IntoKnackBuf for Document {
+    type Buf = KnackBuf;
+    
     fn into_knack_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![];
 
@@ -231,6 +241,8 @@ impl IntoKnackBuf for Document {
 
         KnackBuf::from_bytes(buf)
     }
+    
+
 }
 
 #[cfg(test)]

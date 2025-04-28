@@ -1,6 +1,5 @@
 use std::{
-    mem::transmute,
-    ops::{Div, Index, IndexMut, Range, RangeFrom},
+    io::Read, mem::transmute, ops::{Div, Index, IndexMut, Range, RangeFrom}
 };
 
 use zerocopy::FromBytes;
@@ -10,13 +9,13 @@ use crate::{
     cell::{Cell, CellCapacity, CellId, CellPage, Cells, WithCells}, error::Error, knack::{
         kind::KnackKind,
         marker::{
-            kernel::{AsKernelMut, AsKernelRef}, sized::Sized, AsComparable, AsFixedSized, Comparable, ComparableAndFixedSized, FixedSized
+            kernel::AsKernelRef, sized::Sized, AsComparable, AsFixedSized, Comparable, ComparableAndFixedSized, FixedSized
         },
         Knack, KnackCell,
     }, page::{
         AsMutPageSlice, AsRefPage, AsRefPageSlice, IntoRefPageSlice, MutPage, OptionalPageId,
         PageId, PageKind, PageSize, PageSlice, RefPage, RefPageSlice,
-    }, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift, var::{MaybeSpilled, Var}
+    }, pager::IPager, result::Result, tag::{DataArea, JarTag}, utils::Shift, var::{MaybeSpilled, MaybeSpilledRef, Var}
 };
 
 use super::descriptor::BPlusTreeDescription;
@@ -139,6 +138,7 @@ where
         &mut self,
         key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
+        desc: &BPlusTreeDescription,
         pager: &Pager,
     ) -> Result<()> {
         let before = self
@@ -148,8 +148,8 @@ where
             .last();
 
         match before {
-            Some(before) => self.insert_before(&before, key, value, pager)?,
-            None => self.push(key, value, pager)?,
+            Some(before) => self.insert_before(&before, key, value, desc, pager)?,
+            None => self.push(key, value, desc, pager)?,
         };
 
         Ok(())
@@ -191,10 +191,11 @@ where
         before: &CellId,
         key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
+        desc: &BPlusTreeDescription,
         pager: &Pager,
     ) -> Result<CellId> {
         let cid = self.0.insert_before(before)?;
-        BPlusTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
+        BPlusTreeLeafCell::initialise(&mut self[&cid], key, value, desc, pager)?;
         Ok(cid)
     }
 
@@ -202,10 +203,11 @@ where
         &mut self,
         key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
+        desc: &BPlusTreeDescription,
         pager: &Pager,
     ) -> Result<CellId> {
         let cid = self.0.push()?;
-        BPlusTreeLeafCell::initialise(&mut self[&cid], key, value, pager)?;
+        BPlusTreeLeafCell::initialise(&mut self[&cid], key, value, desc, pager)?;
         Ok(cid)
     }
 
@@ -255,6 +257,7 @@ where
 }
 
 impl BPlusTreeLeaf<()> {
+    /// Calcule la taille du contenu d'une cellule.
     pub fn compute_cell_content_size(key: &FixedSized<KnackKind>, value_size: u16) -> u16 {
         u16::try_from(key.outer_size()).unwrap() + value_size
     }
@@ -265,13 +268,28 @@ impl BPlusTreeLeaf<()> {
         k: CellCapacity,
     ) -> u16 {
         let key_size = u16::try_from(key.outer_size()).unwrap();
+
         let max_cell_size =
             Cells::compute_available_cell_content_size(page_size, Self::reserved_space(), k);
-        max_cell_size - key_size
+        
+        max_cell_size.saturating_sub(key_size)
     }
 
+    /// Espace réservée dans l'entête de la page.
     pub fn reserved_space() -> u16 {
         u16::try_from(size_of::<BPTreeLeafMeta>()).unwrap()
+    }
+
+    pub fn is_compliant(
+        page_size: PageSize,    
+        key: &FixedSized<KnackKind>,     
+        value_size: u16,
+        k: CellCapacity,) -> bool {
+        
+        let cell_size_is_gt_zero = Self::compute_cell_content_size(key, value_size) > 0;
+        let within = Self::within_available_cell_space_size(page_size, key, value_size, k);
+
+        cell_size_is_gt_zero && within
     }
 
     pub fn within_available_cell_space_size(
@@ -327,28 +345,36 @@ where
         cell: &mut Self,
         key: &ComparableAndFixedSized<Knack>,
         value: &Knack,
+        desc: &BPlusTreeDescription,
         pager: &Pager,
     ) -> Result<()> {
         let area = key.as_fixed_sized().range();
 
-        cell.0.as_mut_content_slice().as_mut_bytes()[area].clone_from_slice(key.as_kernel_ref().kind().as_bytes());
-
-        cell.borrow_mut_key().as_kernel_mut().set(key.as_kernel_ref());
-        cell.borrow_mut_value().set(value, pager)?;
+        cell.0.as_mut_content_slice().as_mut_bytes()[area].clone_from_slice(key.as_kernel_ref().as_bytes());
+        cell.set_value(value, desc, pager)?;
 
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(crate) fn borrow_mut_key(&mut self) -> &mut Comparable<FixedSized<Knack>> {
-        let range = self.key_area();
+        let range: Range<usize> = self.key_area();
         let bytes = &mut self.0.as_mut_content_slice()[range];
         unsafe { transmute(Knack::from_mut(bytes)) }
     }
 
-    pub fn borrow_mut_value(&mut self) -> &mut Var<PageSlice> {
+    /// Ecris une valeur dans la cellule de la feuille.
+    pub fn set_value<'a, Pager>(&mut self, value: &Knack, desc: &BPlusTreeDescription, pager: &Pager)  -> Result<()> where Pager: IPager<'a> + ?std::marker::Sized {
         let range = self.value_area();
         let bytes = &mut self.0.as_mut_content_slice()[range];
-        Var::from_mut_slice(bytes)
+        
+        if desc.value_will_spill() {
+            Var::from_mut_slice(bytes).set(value, pager)?;
+        } else {
+            value.as_bytes().read(bytes)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -404,20 +430,57 @@ where
         &self.0
     }
 
-    pub fn borrow_key_kind(&self) -> &ComparableAndFixedSized<KnackKind> {
+    pub fn key_kind(&self) -> &ComparableAndFixedSized<KnackKind> {
         <&ComparableAndFixedSized::<KnackKind>>::try_from(self.as_cell().as_content_slice().as_bytes()).unwrap()
     }
 
-    pub fn borrow_key(&self) -> &Comparable<FixedSized<Knack>> {
+    pub fn borrow_key(&self) -> &ComparableAndFixedSized<Knack> {
         let slice = &self.as_cell().as_content_slice()[self.key_area()];
         unsafe { std::mem::transmute(Knack::from_ref(slice)) }
     }
 
+    pub fn borrow_value<'leaf>(&'leaf self, desc: &BPlusTreeDescription) -> MaybeSpilledRef<'leaf> {
+        let range = self.value_area();
+        let bytes = &self.0.as_content_slice()[range];
+        if desc.value_will_spill() {
+            MaybeSpilledRef::Spilled(Var::from_ref_slice(bytes))
+        } else {
+            MaybeSpilledRef::Unspilled(<&Knack>::from(bytes))
+        }
+        
+    }
+
     pub fn key_area(&self) -> Range<usize> {
-        0..self.borrow_key_kind().as_fixed_sized().outer_size()
+        0..self.key_kind().as_fixed_sized().outer_size()
     }
 
     fn value_area(&self) -> RangeFrom<usize> {
         return self.key_area().end..;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Borrow;
+    use crate::{arena::IArena, bpt::{descriptor::BPlusTreeDescription, BPlusTreeArgs}, knack::marker::AsComparable, pager::stub::StubPager, prelude::IntoKnackBuf};
+
+    use super::BPlusTreeLeaf;
+
+    #[test]
+    fn test_insert() {
+        let pager = StubPager::<4096>::new();
+        let desc = BPlusTreeArgs::new::<u64, str>(None).define(4096).validate().map(BPlusTreeDescription::new).unwrap();
+
+        let mut leaf = pager.new_element().and_then(|page| BPlusTreeLeaf::new(page, &desc)).unwrap();
+
+        let key = 18u128.into_knack_buf();
+        let value = "test".into_knack_buf();
+
+        leaf.insert(key.borrow(), &value, &desc, &pager).unwrap();
+        let cell = leaf.iter().find(|&cell| cell.borrow_key().as_comparable() == key.as_comparable()).unwrap();
+
+        let value = cell.borrow_value(&desc).assert_loaded(&pager).unwrap();
+        println!("{}", value.cast::<str>());
+
     }
 }
