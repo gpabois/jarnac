@@ -22,7 +22,7 @@ use std::{convert::Infallible, ops::{Deref, DerefMut, Range}};
 use array::Array;
 use buf::KnackBuf;
 use builder::KnackBuilder;
-use document::Document;
+use document::DocBuilder;
 use error::KnackError;
 use kind::{GetKnackKind, KnackKind};
 use marker::{kernel::AsKernelRef, Comparable, ComparableAndFixedSized, FixedSized};
@@ -181,8 +181,8 @@ impl Knack {
         match pth.pop() {
             None => Some(self),
             Some(attr_name) => {
-                if self.is::<Document>() {
-                    self.cast::<Document>()
+                if self.is::<DocBuilder>() {
+                    self.cast::<DocBuilder>()
                         .get_field(&attr_name)
                         .and_then(|v| v.get(pth))
                 } else if self.is::<Array>() {

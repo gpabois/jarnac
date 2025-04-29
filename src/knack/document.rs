@@ -83,8 +83,8 @@ impl KeyValue {
     }
 }
 
-pub struct DocRef([u8]);
-impl DocRef {
+pub struct Document([u8]);
+impl Document {
     const KV_BASE: usize = 1;
 
     pub fn iter(&self) -> DocAttributesIter<'_> {
@@ -105,7 +105,7 @@ impl DocRef {
         todo!()
     }
 
-    pub fn to_owned(&self) -> Document {
+    pub fn to_owned(&self) -> DocBuilder {
         self.iter()
             .map(|kv| {
                 (
@@ -116,29 +116,29 @@ impl DocRef {
             .collect()
     }
 }
-impl Deref for DocRef {
+impl Deref for Document {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl TryFrom<&Knack> for &DocRef {
+impl TryFrom<&Knack> for &Document {
     type Error = KnackError;
 
     fn try_from(value: &Knack) -> std::result::Result<Self, Self::Error> {
-        Document::kind()
+        DocBuilder::kind()
             .as_kernel_ref()
             .assert_same(value.kind().as_kernel_ref())?;
 
         unsafe { Ok(std::mem::transmute(value)) }
     }
 }
-impl TryFrom<&mut Knack> for &mut DocRef {
+impl TryFrom<&mut Knack> for &mut Document {
     type Error = KnackError;
 
     fn try_from(value: &mut Knack) -> std::result::Result<Self, Self::Error> {
-        Document::kind()
+        DocBuilder::kind()
             .as_kernel_ref()
             .assert_same(value.kind().as_kernel_ref())?;
 
@@ -147,7 +147,7 @@ impl TryFrom<&mut Knack> for &mut DocRef {
 }
 
 pub struct DocAttributesIter<'a> {
-    doc: &'a DocRef,
+    doc: &'a Document,
     base: usize,
 }
 impl<'a> Iterator for DocAttributesIter<'a> {
@@ -166,10 +166,10 @@ impl<'a> Iterator for DocAttributesIter<'a> {
 }
 
 #[derive(Default)]
-pub struct Document(HashMap<String, KnackBuilder>);
+pub struct DocBuilder(HashMap<String, KnackBuilder>);
 
-impl FromKnack for Document {
-    type Output = DocRef;
+impl FromKnack for DocBuilder {
+    type Output = Document;
 
     fn try_ref_from_knack(value: &Knack) -> KnackResult<&Self::Output> {
         value.try_into()
@@ -188,13 +188,13 @@ impl IntoKnackBuf for (String, KnackBuilder) {
     }
 }
 
-impl FromIterator<(String, KnackBuilder)> for Document {
+impl FromIterator<(String, KnackBuilder)> for DocBuilder {
     fn from_iter<T: IntoIterator<Item = (String, KnackBuilder)>>(iter: T) -> Self {
         Self(iter.into_iter().collect())
     }
 }
 
-impl<Q> Index<Q> for Document
+impl<Q> Index<Q> for DocBuilder
 where
     Q: IntoKnackPath,
 {
@@ -205,7 +205,7 @@ where
     }
 }
 
-impl Document {
+impl DocBuilder {
     /// Insère une paire clé/valeur dans le document.
     pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
         let value = value.into_value_builder();
@@ -226,13 +226,13 @@ impl Document {
     }
 }
 
-impl IntoKnackBuf for Document {
+impl IntoKnackBuf for DocBuilder {
     type Buf = KnackBuf;
     
     fn into_knack_buf(self) -> KnackBuf {
         let mut buf: Vec<u8> = vec![];
 
-        buf.write_all(&Document::kind().as_kernel_ref().as_bytes())
+        buf.write_all(&DocBuilder::kind().as_kernel_ref().as_bytes())
             .unwrap();
 
         for kv in self.0.into_iter().map(IntoKnackBuf::into_knack_buf) {
@@ -241,25 +241,23 @@ impl IntoKnackBuf for Document {
 
         KnackBuf::from_bytes(buf)
     }
-    
-
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::knack::document::Document;
+    use crate::knack::document::DocBuilder;
 
     #[test]
     pub fn test_insert() {
-        let mut doc = Document::default();
+        let mut doc = DocBuilder::default();
 
-        let mut sub = Document::default();
+        let mut sub = DocBuilder::default();
         sub.insert("bar", "hello world !");
         sub.insert("barbar", 128u8);
 
         doc.insert("foo", sub);
 
-        assert!(doc["foo"].is::<Document>());
+        assert!(doc["foo"].is::<DocBuilder>());
         assert!(doc["foo.bar"].cast::<str>() == "hello world !");
         assert!(doc["foo.barbar"].cast::<u8>() == &128u8);
     }

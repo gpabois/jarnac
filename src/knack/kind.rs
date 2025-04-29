@@ -6,7 +6,7 @@ use std::{any::Any, borrow::Borrow, convert::Infallible, fmt::{Debug, Display}, 
 use crate::var::Var;
 
 use super::{
-    document::{Document, KeyValue},
+    document::{DocBuilder, KeyValue},
     error::{KnackError, KnackErrorKind},
     marker::{
         kernel::AsKernelRef, sized::{Sized, VarSized}, Comparable, ComparableAndFixedSized, FixedSized
@@ -532,7 +532,7 @@ impl GetKnackKind for KeyValue {
     }
 }
 
-impl GetKnackKind for Document {
+impl GetKnackKind for DocBuilder {
     type Kind = VarSized<KnackKind>;
 
     fn kind() -> &'static Self::Kind {

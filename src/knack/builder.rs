@@ -3,7 +3,7 @@ use super::marker::kernel::{AsKernelRef, IntoKernel};
 
 use super::{
     buf::{IntoKnackBuf, KnackBuf},
-    document::Document,
+    document::DocBuilder,
     path::IntoKnackPath,
     GetKnackKind, Knack, KnackKind, Str, F32, F64, I128, I16, I32, I64, I8, U128, U16, U32, U64,
 };
@@ -21,7 +21,7 @@ pub trait FromKnackBuilder {
 
 /// Type utilisé pour construire des valeurs stockables en base.
 pub enum KnackBuilder {
-    Document(Document),
+    Document(DocBuilder),
     Array(Array),
     Str(String),
     Other(KnackBuf),
@@ -67,7 +67,7 @@ impl KnackBuilder {
 
     pub fn kind(&self) -> &KnackKind {
         match self {
-            KnackBuilder::Document(_) => Document::kind().as_kernel_ref(),
+            KnackBuilder::Document(_) => DocBuilder::kind().as_kernel_ref(),
             KnackBuilder::Array(_) => todo!(),
             KnackBuilder::Str(_) => str::kind().as_kernel_ref(),
             KnackBuilder::Other(value_buf) => value_buf.kind(),
@@ -75,16 +75,16 @@ impl KnackBuilder {
     }
 }
 
-impl From<Document> for KnackBuilder {
-    fn from(value: Document) -> Self {
+impl From<DocBuilder> for KnackBuilder {
+    fn from(value: DocBuilder) -> Self {
         Self::Document(value)
     }
 }
 
 impl From<&Knack> for KnackBuilder {
     fn from(value: &Knack) -> Self {
-        if value.is::<Document>() {
-            return Self::Document(value.cast::<Document>().to_owned());
+        if value.is::<DocBuilder>() {
+            return Self::Document(value.cast::<DocBuilder>().to_owned());
         }
         if value.is::<str>() {
             return Self::Str(value.cast::<str>().to_owned());
@@ -407,7 +407,7 @@ impl IntoKnackBuilder for &str {
     }
 }
 
-impl IntoKnackBuilder for Document {
+impl IntoKnackBuilder for DocBuilder {
     fn into_value_builder(self) -> KnackBuilder {
         KnackBuilder::Document(self)
     }
