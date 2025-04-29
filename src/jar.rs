@@ -23,6 +23,7 @@ pub struct JarMeta {
 pub struct JarDescription<'a>(DocCow<'a>);
 
 impl JarDescription<'_> {
+    /// Créé une nouvelle description du pot.
     pub fn new(name: &str) -> Self {
         let mut doc = DocBuilder::default();
         
