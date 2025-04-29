@@ -15,6 +15,23 @@ use super::{
     FromKnack, GetKnackKind, Knack, KnackBuilder,
 };
 
+pub enum DocCow<'a> {
+    Owned(DocBuilder),
+    Borrow(&'a Document)
+}
+
+impl From<DocBuilder> for DocCow<'_> {
+    fn from(value: DocBuilder) -> Self {
+        DocCow::Owned(value)
+    }
+}
+
+impl<'a> From<&'a Document> for DocCow<'a> {
+    fn from(value: &'a Document) -> Self {
+        DocCow::Borrow(value)
+    }
+}
+
 pub struct KeyValue([u8]);
 
 impl Deref for KeyValue {
@@ -84,6 +101,7 @@ impl KeyValue {
 }
 
 pub struct Document([u8]);
+
 impl Document {
     const KV_BASE: usize = 1;
 
@@ -116,6 +134,7 @@ impl Document {
             .collect()
     }
 }
+
 impl Deref for Document {
     type Target = [u8];
 
@@ -208,7 +227,7 @@ where
 impl DocBuilder {
     /// Insère une paire clé/valeur dans le document.
     pub fn insert<V: IntoKnackBuilder>(&mut self, key: &str, value: V) {
-        let value = value.into_value_builder();
+        let value = value.into_knack_builder();
         self.0.insert(key.to_string(), value);
     }
 
