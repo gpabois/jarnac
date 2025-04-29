@@ -1,9 +1,9 @@
-use std::{borrow::{Borrow, BorrowMut}, io::Write, ops::{Deref, DerefMut}};
+use std::{borrow::{Borrow, BorrowMut}, io::Write, ops::{Deref, DerefMut, Range}};
 
 use byteorder::WriteBytesExt;
 use zerocopy::IntoBytes;
 
-use super::marker::{kernel::{AsKernelRef, IntoKernel}, ComparableAndFixedSized};
+use super::marker::{kernel::{AsKernelMut, AsKernelRef, IntoKernel}, AsFixedSized, ComparableAndFixedSized, FixedSized};
 
 use super::{builder::KnackBuilder, document::KeyValue, kind::GetKnackKind, Knack};
 
@@ -29,6 +29,12 @@ impl AsKernelRef for KnackBuf {
     }
 }
 
+impl BorrowMut<Knack> for ComparableAndFixedSized<KnackBuf> {
+    fn borrow_mut(&mut self) -> &mut Knack {
+        self.as_kernel_mut().borrow_mut()
+    }
+}
+
 impl Borrow<Knack> for ComparableAndFixedSized<KnackBuf> {
     fn borrow(&self) -> &Knack {
         self.as_kernel_ref().borrow()
@@ -50,6 +56,23 @@ impl Deref for ComparableAndFixedSized<KnackBuf> {
     fn deref(&self) -> &Self::Target {
         let knack: &Knack = self.borrow();
         knack
+    }
+}
+
+impl DerefMut for ComparableAndFixedSized<KnackBuf> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        let knack: &mut Knack = &mut self.0.0;
+        knack
+    }
+}
+
+impl FixedSized<KnackBuf> {
+    pub fn range(&self) -> Range<usize> {
+        let knack: &Knack = self.0.borrow();
+        unsafe {
+            FixedSized::from_ref_unchecked(knack).range()
+        }
+
     }
 }
 
@@ -131,7 +154,7 @@ impl IntoKnackBuf for u8 {
 impl From<u8> for KnackBuf {
     fn from(value: u8) -> Self {    
         let mut buf: Vec<u8> = vec![];
-        buf.write_all(u8::kind().as_kernel_ref().as_bytes()).unwrap();
+        buf.write_all(u8::kind().as_bytes()).unwrap();
         buf.write_u8(value).unwrap();
         Self(buf)
     }
@@ -149,7 +172,7 @@ impl IntoKnackBuf for u16 {
 impl From<u16> for KnackBuf {
     fn from(value: u16) -> Self {
         let mut buf: Vec<u8> = vec![];
-        buf.write_all(u16::kind().as_kernel_ref().as_bytes()).unwrap();
+        buf.write_all(u16::kind().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
@@ -167,7 +190,7 @@ impl IntoKnackBuf for u32 {
 impl From<u32> for KnackBuf {
     fn from(value: u32) -> Self {
         let mut buf: Vec<u8> = vec![];
-        buf.write_all(u32::kind().as_kernel_ref().as_bytes()).unwrap();
+        buf.write_all(u32::kind().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }
@@ -185,7 +208,7 @@ impl IntoKnackBuf for u64 {
 impl From<u64> for KnackBuf {
     fn from(value: u64) -> Self {
         let mut buf: Vec<u8> = vec![];
-        buf.write_all(u64::kind().as_kernel_ref().as_bytes()).unwrap();
+        buf.write_all(u64::kind().as_bytes()).unwrap();
         buf.write_all(&value.to_le_bytes()).unwrap();
         Self(buf)
     }

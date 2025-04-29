@@ -47,6 +47,13 @@ impl PartialEq<Comparable<KnackBuf>> for Comparable<Knack> {
     }
 }
 
+impl PartialEq<Comparable<Knack>> for Comparable<Knack> {
+    fn eq(&self, other: &Comparable<Knack>) -> bool {
+        let knack: &Knack = other.as_kernel_ref();
+        self.eq(knack)
+    }
+}
+
 
 impl PartialEq<Knack> for Comparable<Knack> {
     fn eq(&self, other: &Knack) -> bool {

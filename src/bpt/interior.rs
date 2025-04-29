@@ -1,4 +1,4 @@
-use std::ops::{Div, Index, IndexMut, Range};
+use std::{fmt::Display, ops::{Div, Index, IndexMut, Range}};
 
 use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
@@ -56,11 +56,32 @@ where
     }
 }
 
+impl<Page> Display for BPlusTreeInterior<Page> where Page: AsRefPageSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BPlusTreeInterior[")?;
+        self.iter()
+        .try_for_each(|cell| {
+            cell.left().unwrap().fmt(f)?;
+            write!(f, " | ")?;
+            cell.borrow_key().fmt(f)?;
+            write!(f, " | ")
+        })?;
+
+        if let Some(tail) = self.tail() {
+            write!(f, "{tail}")?;
+        }
+
+        write!(f, "]")?;
+        Ok(())
+    }
+}
+
 impl<'buf> TryFrom<RefPage<'buf>> for BPlusTreeInterior<RefPage<'buf>> {
     type Error = Error;
 
     fn try_from(page: RefPage<'buf>) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
+        
         PageKind::BPlusTreeInterior
             .assert(kind)
             .map(move |_| Self(CellPage::from(page)))
@@ -72,7 +93,8 @@ impl<'buf> TryFrom<MutPage<'buf>> for BPlusTreeInterior<MutPage<'buf>> {
 
     fn try_from(page: MutPage<'buf>) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
-        PageKind::BPlusTreeLeaf
+        
+        PageKind::BPlusTreeInterior
             .assert(kind)
             .map(move |_| Self(CellPage::from(page)))
     }
@@ -83,7 +105,7 @@ impl<'a, 'buf> TryFrom<&'a mut MutPage<'buf>> for BPlusTreeInterior<&'a mut MutP
 
     fn try_from(page: &'a mut MutPage<'buf>) -> Result<Self> {
         let kind: PageKind = page.as_ref().as_bytes()[0].try_into()?;
-        PageKind::BPlusTreeLeaf
+        PageKind::BPlusTreeInterior
             .assert(kind)
             .map(move |_| Self(CellPage::from(page)))
     }
@@ -96,7 +118,7 @@ where
     pub fn search_child(&self, key: &Comparable<Knack>) -> PageId {
         let maybe_child: Option<PageId> = self
             .iter()
-            .find(|&interior| interior.borrow_key().as_comparable() >= key.as_kernel_ref())
+            .find(|&interior| interior.borrow_key().as_comparable() >= key)
             .map(|interior| interior.left())
             .unwrap_or_else(|| self.as_meta().tail());
 
@@ -135,6 +157,7 @@ impl<Page> BPlusTreeInterior<Page>
 where
     Page: AsMutPageSlice,
 {
+    /// Crée un nouveau noeud intérieur.
     pub fn new(mut page: Page, desc: &BPlusTreeDescription) -> Result<Self> {
         page.as_mut_bytes()[0] = PageKind::BPlusTreeInterior as u8;
         CellPage::new(
@@ -188,6 +211,7 @@ where
     where
         P: AsMutPageSlice,
     {
+        // Divise par la taille actuelle + 1
         let at = self.0.len().div(2) + 1;
 
         self.0.split_at_into(&mut dest.0, at)?;
@@ -326,38 +350,60 @@ impl<Slice> BPTreeInteriorCell<Slice>
 where
     Slice: AsRefPageSlice + ?std::marker::Sized,
 {
+    /// Emrpunte la clé en référence.
     pub fn borrow_key(&self) -> &Comparable<FixedSized<Knack>> {
-        unsafe { std::mem::transmute(Knack::from_ref(self.as_key_slice())) }
+        unsafe {
+            ComparableAndFixedSized::<Knack>::from_ref_unchecked(
+                Knack::from_ref(
+                    self.as_key_slice()
+                )
+            )
+        }
     }
 
+    /// Retourne le pointeur vers le noeud à gauche.
     pub fn left(&self) -> Option<PageId> {
         OptionalPageId::read_from_bytes(self.as_left_slice())
             .unwrap()
             .into()
     }
 
+    /// Retourne la cellule brute
     fn as_cell(&self) -> &Cell<Slice> {
         &self.0
     }
 
+    /// Retourne l'intervalle où se situe le pointeur vers le noeud à gauche.
     fn left_range(&self) -> Range<usize> {
         return 0..size_of::<OptionalPageId>();
     }
 
+    /// Retourne l'intervalle où se situe la clé
     fn key_range(&self) -> Range<usize> {
-        self.kind().as_fixed_sized().range().shift(size_of::<PageId>())
+        let base = self.left_range().end;
+        self.kind().as_fixed_sized().range().shift(base)
     }
 
+    /// Retourne la tranche contenant le pointeur vers le noeud à gauche
     fn as_left_slice(&self) -> &[u8] {
         &self.as_cell().as_content_slice().as_bytes()[self.left_range()]
     }
 
+    /// Retourne la tranche contenant la clé stockée
     fn as_key_slice(&self) -> &[u8] {
-        &self.as_cell().as_content_slice()[self.key_range()]
+        let krange = self.key_range();
+
+        &self
+            .as_cell()
+            .as_content_slice()[krange]
     }
 
+    /// Retourne le type de clé
+    /// 
+    /// NOTE: Peut-être pas si nécessaire en passant une référence vers la description du BPlusTree.
     fn kind(&self) -> &ComparableAndFixedSized<KnackKind> {
-        <&ComparableAndFixedSized::<_>>::try_from(self.0.as_content_slice().as_bytes()).unwrap()
+        let base = self.left_range().end;
+        <&ComparableAndFixedSized::<_>>::try_from(&self.0.as_content_slice().as_bytes()[base..]).unwrap()
     }
 }
 
@@ -369,10 +415,11 @@ where
         let loc = self.left_range().end;
         let area = key.as_fixed_sized().range().shift(loc);
 
-        self.as_mut_cell().as_mut_content_slice().as_mut_bytes()[area]
-            .clone_from_slice(key.as_kernel_ref().kind().as_bytes());
+        self.as_mut_cell()
+            .as_mut_content_slice()
+            .as_mut_bytes()[area]
+            .clone_from_slice(key.as_kernel_ref().as_bytes());
 
-        self.borrow_mut_key().set(key.as_kernel_ref());
         self.set_left(Some(left));
     }
 
@@ -400,5 +447,32 @@ where
     fn as_mut_key_slice(&mut self) -> &mut [u8] {
         let range = self.key_range();
         &mut self.as_mut_cell().as_mut_content_slice()[range]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Borrow;
+    use crate::{arena::IArena, bpt::{descriptor::BPlusTreeDescription, BPlusTreeArgs}, knack::marker::AsFixedSized, pager::stub::StubPager, prelude::IntoKnackBuf, tag::JarTag};
+
+    use super::BPlusTreeInterior;
+
+    #[test]
+    fn test_insert() {
+        let pager = StubPager::<4096>::new();
+        let desc = BPlusTreeArgs::new::<u64, str>(None).define(4096).validate().map(BPlusTreeDescription::new).unwrap();
+        
+        let mut interior = pager.new_element().and_then(|page| BPlusTreeInterior::new(page, &desc)).unwrap();
+        let k0 = 128u64.into_knack_buf();
+        let k1 = 111u64.into_knack_buf();
+        let k2 = 132u64.into_knack_buf();
+
+        println!("{:#?}", k0.as_fixed_sized().range());
+
+        interior.insert(JarTag::new(0, 10, 0), k0.borrow(), JarTag::new(0, 11, 0)).unwrap();
+        interior.insert(JarTag::new(0, 9, 0), k1.borrow(), JarTag::new(0, 10, 0)).unwrap();
+        interior.insert(JarTag::new(0, 11, 0), k2.borrow(), JarTag::new(0, 13, 0)).unwrap();
+
+        println!("{}", interior);
     }
 }

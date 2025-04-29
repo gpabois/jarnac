@@ -12,6 +12,9 @@ pub struct JarTag {
 }
 
 impl JarTag {
+    pub(crate) fn new(jar_id: JarId, page_id: PageId, cell_id: CellId) -> Self {
+        Self {jar_id,page_id,cell_id}
+    }
     pub fn in_jar(jar_id: JarId) -> Self {
         Self {
             jar_id,

@@ -459,7 +459,7 @@ where
             let cid: CellId = self.as_mut_meta().inc_len();
 
             assert!(
-                cid < self.capacity(),
+                cid <= self.capacity(),
                 "allocated cell {cid} overflows capacity {0} ({1:?})",
                 self.capacity(),
                 self.as_meta()

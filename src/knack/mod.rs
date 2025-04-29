@@ -74,7 +74,7 @@ where
     }
 }
 
-pub enum CowKnack<Slice>
+pub enum MaybeOwnedKnack<Slice>
 where
     Slice: AsRefPageSlice,
 {
@@ -82,7 +82,7 @@ where
     Owned(KnackBuf),
 }
 
-impl<Slice> Deref for CowKnack<Slice>
+impl<Slice> Deref for MaybeOwnedKnack<Slice>
 where
     Slice: AsRefPageSlice,
 {
@@ -90,8 +90,8 @@ where
 
     fn deref(&self) -> &Self::Target {
         match self {
-            CowKnack::Borrow(knack_cell) => knack_cell.deref(),
-            CowKnack::Owned(knack_buf) => knack_buf.deref(),
+            MaybeOwnedKnack::Borrow(knack_cell) => knack_cell.deref(),
+            MaybeOwnedKnack::Owned(knack_buf) => knack_buf.deref(),
         }
     }
 }
@@ -122,6 +122,12 @@ impl AsRef<[u8]> for Knack {
     }
 }
 
+impl ComparableAndFixedSized<Knack> {
+    pub unsafe fn from_ref_unchecked(value: &Knack) -> &ComparableAndFixedSized<Knack> {
+        std::mem::transmute(value)
+    }
+}
+
 impl TryFrom<&Knack> for &ComparableAndFixedSized<Knack> {
     type Error = Infallible;
 
@@ -129,6 +135,14 @@ impl TryFrom<&Knack> for &ComparableAndFixedSized<Knack> {
         unsafe {
             Ok(std::mem::transmute(value))
         }
+    }
+}
+
+impl Deref for ComparableAndFixedSized<Knack> {
+    type Target = Knack;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_kernel_ref()
     }
 }
 
@@ -202,8 +216,15 @@ impl Knack {
 }
 
 impl FixedSized<Knack> {
+    unsafe fn from_ref_unchecked(value: &Knack) -> &FixedSized<Knack> {
+        std::mem::transmute(value)
+    }
+
     pub fn range(&self) -> Range<usize> {
-        self.0.kind().try_as_fixed_sized().unwrap().range()
+        self.0.kind()
+            .try_as_fixed_sized()
+            .unwrap()
+            .range()
     }
 }
 

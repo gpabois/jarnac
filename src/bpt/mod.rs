@@ -103,8 +103,7 @@ where
             Some(pid) => pid,
             None => {
                 let new_leaf = self.new_leaf()?;
-                self.as_mut_descriptor()
-                    .set_root(Some(new_leaf.tag().page_id));
+                self.as_mut_descriptor().set_root(Some(new_leaf.tag().page_id));
                 *new_leaf.tag()
             }
         };
@@ -121,8 +120,12 @@ where
             value,
             self.as_descriptor().as_description(),
             self.arena,
-        )
-        .inspect(|_| self.as_mut_descriptor().inc_len())
+        )?;
+
+
+        self.as_mut_descriptor().inc_len();
+        
+        Ok(())
     }
 
     /// Divise un noeud
@@ -499,7 +502,11 @@ impl BPlusTreeDefinition {
         let valid_value_requirements = if self.flags & BPlusTreeDefinition::VAL_IS_VAR_SIZED > 0 {
             self.in_cell_value_size >= u16::try_from(size_of::<VarMeta>()).unwrap()
         } else {
-            true
+            if self.value_kind().try_as_fixed_sized().unwrap().outer_size() > self.in_cell_value_size.into() {
+                false
+            } else {
+                true
+            }
         };
 
         (valid && valid_value_requirements)
@@ -511,17 +518,16 @@ impl BPlusTreeDefinition {
 #[cfg(test)]
 mod tests {
     use std::borrow::Borrow;
-    use crate::{pager::stub::StubPager, prelude::IntoKnackBuf};
+    use rand::Rng;
+
+    use crate::{knack::{marker::kernel::{AsKernelRef, IntoKernel}, U128}, pager::stub::StubPager, prelude::IntoKnackBuf};
 
     use super::{BPlusTree, BPlusTreeArgs};
 
     #[test]
-    pub fn test_insert() {
+    pub fn test_insert_var_sized_value() {
         let nodes = StubPager::<4096>::new();
         let args = BPlusTreeArgs::new::<u128, str>(None);
-
-        let def = args.define(4096);
-        println!("{:#?}", def);
 
         let key = 18u128.into_knack_buf();
         
@@ -535,5 +541,46 @@ mod tests {
         let value = maybe_spilled.assert_loaded(&nodes).unwrap();
         assert_eq!(value.cast::<str>(), "test")
          
+    }
+
+    #[test]
+    pub fn test_insert_fixed_sized_value() {
+        let pager = StubPager::<4096>::new();
+        let args = BPlusTreeArgs::new::<u128, u64>(None);
+
+        let key = 18u128.into_knack_buf();
+        let value = 19u64.into_knack_buf();
+        
+        let mut tree = BPlusTree::new(&pager, args).unwrap();
+        tree.insert(key.borrow(), &value.into_kernel()).unwrap();
+
+        let maybe_value = tree.search(key.borrow()).unwrap();
+        assert!(maybe_value.is_some());
+        let maybe_spilled = maybe_value.unwrap();
+        
+        let value = maybe_spilled.assert_loaded(&pager).unwrap();
+        assert_eq!(value.cast::<u64>(), &19u64)
+    }
+
+    #[test]
+    fn test_multiple_insert() {
+        let mut rng = rand::rng();
+        let pager = StubPager::<4096>::new();
+        let args = BPlusTreeArgs::new::<u128, u64>(None);
+
+        let mut tree = BPlusTree::new(&pager, args).unwrap();
+
+        let mut key = 0u128.into_knack_buf();
+
+        let values: Vec<_> = (0..1000usize).map(|_| rng.random_range(0..u64::MAX)).map(|i| i.into_knack_buf()).collect();
+
+        for i in 0..1000u128 {
+            key.cast_mut::<u128>().set(i);
+            tree.insert(key.borrow(), &values[usize::try_from(i).unwrap()].as_kernel_ref()).inspect_err(|err| println!("{:#?}", err.backtrace)).unwrap();
+        }
+
+        let idx = 477u128;
+        let value = tree.search(&477u128.into_knack_buf()).unwrap().unwrap().into_unspilled();
+        assert_eq!(value.cast::<u64>(), values[usize::try_from(idx).unwrap()].cast::<u64>());
     }
 }

@@ -9,12 +9,12 @@ use std::{
 use zerocopy::FromBytes;
 use zerocopy_derive::*;
 
-use crate::page::{
+use crate::{error::{Error, ErrorKind}, page::{
     AsMutPageSlice, AsRefPageSlice, IntoRefPageSlice, OptionalPageId, PageId, PageKind,
     RefPageSlice,
-};
+}};
 use crate::{
-    knack::{buf::KnackBuf, CowKnack, Knack, KnackCell},
+    knack::{buf::KnackBuf, MaybeOwnedKnack, Knack, KnackCell},
     page::{AsRefPage, InPage, PageSize, PageSlice},
     pager::IPager,
     result::Result,
@@ -31,19 +31,19 @@ pub enum MaybeSpilledRef<'a> {
 impl<'a> MaybeSpilledRef<'a> {
     /// Transforme une référence vers truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé intégralement
     /// soit par un truc tamponné [KnackBuf], soit par un truc adossé à une tranche [KnackCell].
-    pub fn assert_loaded<Pager>(self, pager: &Pager) -> Result<CowKnack<&'a PageSlice>>
+    pub fn assert_loaded<Pager>(self, pager: &Pager) -> Result<MaybeOwnedKnack<&'a PageSlice>>
     where
         Pager: IPager<'a>,
     {
         match self {
             Self::Unspilled(knack) => {
                 let slice: &'a PageSlice = unsafe {std::mem::transmute(knack)};
-                Ok(CowKnack::Borrow(KnackCell::from(slice)))
+                Ok(MaybeOwnedKnack::Borrow(KnackCell::from(slice)))
             },
             Self::Spilled(var) => {
                 let mut buf: Vec<u8> = Vec::with_capacity(usize::try_from(var.len()).unwrap());
                 var.read(&mut buf, pager)?;
-                Ok(CowKnack::Owned(KnackBuf::from_bytes(buf)))
+                Ok(MaybeOwnedKnack::Owned(KnackBuf::from_bytes(buf)))
             }
         }
     }
@@ -64,19 +64,30 @@ where
 {
     /// Transforme le truc qui a peut-être débordé en un truc dont on est certain qu'il est chargé intégralement
     /// soit par un truc tamponné [KnackBuf], soit par un truc adossé à une tranche [KnackCell].
-    pub fn assert_loaded<'a, Pager>(self, pager: &Pager) -> Result<CowKnack<Slice>>
+    pub fn assert_loaded<'a, Pager>(self, pager: &Pager) -> Result<MaybeOwnedKnack<Slice>>
     where
         Pager: IPager<'a>,
     {
         match self {
-            MaybeSpilled::Unspilled(knack_cell) => Ok(CowKnack::Borrow(knack_cell)),
+            MaybeSpilled::Unspilled(knack_cell) => Ok(MaybeOwnedKnack::Borrow(knack_cell)),
             MaybeSpilled::Spilled(var) => {
                 let mut buf: Vec<u8> = Vec::with_capacity(usize::try_from(var.len()).unwrap());
                 var.read(&mut buf, pager)?;
-                Ok(CowKnack::Owned(KnackBuf::from_bytes(buf)))
+                Ok(MaybeOwnedKnack::Owned(KnackBuf::from_bytes(buf)))
             }
         }
     }
+
+    pub fn try_into_unspilled(self) -> Result<MaybeOwnedKnack<Slice>> {
+        match self {
+            MaybeSpilled::Unspilled(knack) => Ok(MaybeOwnedKnack::Borrow(knack)),
+            _ => Err(Error::new(ErrorKind::SpilledVar))
+        }   
+    }
+
+    pub fn into_unspilled(self) -> MaybeOwnedKnack<Slice> {
+        self.try_into_unspilled().unwrap()
+    } 
 }
 
 impl<Slice> From<KnackCell<Slice>> for MaybeSpilled<Slice>
@@ -129,7 +140,7 @@ where
     Slice: AsRefPageSlice + ?Sized,
 {
     pub const HEADER_RANGE: Range<usize> = 1..(1 + size_of::<VarMeta>());
-    pub const DATA_BASE: usize = 1 + size_of::<VarMeta>();
+    pub const DATA_BASE: usize = size_of::<VarMeta>();
 
     pub(crate) fn from_ref_slice(slice: &Slice) -> &Self {
         unsafe { std::mem::transmute(slice) }

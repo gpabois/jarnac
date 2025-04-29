@@ -107,6 +107,12 @@ where
         self.as_meta().get_parent()
     }
 
+    pub fn search_cell<Key>(&self, key: &Key) -> Option<&BPlusTreeLeafCell<PageSlice>> 
+        where Key: AsComparable<Kernel=Knack>
+    {
+        self.iter().find(|cell| cell.borrow_key().as_comparable() == key.as_comparable())
+    }
+
     fn borrow_cell(&self, cid: &CellId) -> Option<&BPlusTreeLeafCell<PageSlice>> {
         self.0
             .borrow_cell(cid)
@@ -366,6 +372,7 @@ where
     /// Ecris une valeur dans la cellule de la feuille.
     pub fn set_value<'a, Pager>(&mut self, value: &Knack, desc: &BPlusTreeDescription, pager: &Pager)  -> Result<()> where Pager: IPager<'a> + ?std::marker::Sized {
         let range = self.value_area();
+
         let bytes = &mut self.0.as_mut_content_slice()[range];
         
         if desc.value_will_spill() {
@@ -454,8 +461,8 @@ where
         0..self.key_kind().as_fixed_sized().outer_size()
     }
 
-    fn value_area(&self) -> RangeFrom<usize> {
-        return self.key_area().end..;
+    fn value_area(&self) -> Range<usize> {
+        return self.key_area().end..usize::from(self.0.as_content_slice().len());
     }
 }
 
@@ -480,7 +487,7 @@ mod tests {
         let cell = leaf.iter().find(|&cell| cell.borrow_key().as_comparable() == key.as_comparable()).unwrap();
 
         let value = cell.borrow_value(&desc).assert_loaded(&pager).unwrap();
-        println!("{}", value.cast::<str>());
+        assert_eq!(value.cast::<str>(), "test");
 
     }
 }
