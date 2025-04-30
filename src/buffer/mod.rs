@@ -27,6 +27,8 @@ use crate::{
 
 pub trait IBufferPool {
     /// Alloue de l'espace pour tamponner une page.
+    /// 
+    /// Retourne une erreur si la page est déjà tamponnée.
     fn alloc<'buf>(&'buf self, tag: &JarTag) -> Result<MutPage<'buf>>;
 
     /// Récupère une référence vers la page si elle est stockée dans le tampon.
@@ -109,7 +111,7 @@ pub struct BufferPool {
     in_memory: DashMap<JarTag, PageDescriptorPtr>,
     /// Stratégie de gestion du stress mémoire
     /// Employé si le tampon est plein
-    stress_strategy: BufferStressStrategy,
+    stress: BufferStressStrategy,
 }
 
 unsafe impl Sync for BufferPool {}
@@ -140,7 +142,7 @@ impl BufferPool {
                 stored: Default::default(),
                 freelist: Default::default(),
                 in_memory: Default::default(),
-                stress_strategy,
+                stress: stress_strategy,
             }
         }
     }
@@ -193,19 +195,19 @@ impl IBufferPool for BufferPool {
     ) -> Result<Option<PageDescriptor<'buf>>> {
         // La page est en mémoire, on la renvoie
         if let Some(stored) = self.try_get_from_memory(tag) {
-            return Ok(Some(PageDescriptor::new(stored)));
+            return Ok(Some(PageDescriptor::from_raw_ptr(stored)));
         }
 
         // La page a été déchargée, on va essayer de la récupérer.
-        if self.stress_strategy.contains(tag) {
+        if self.stress.contains(tag) {
             let mut page = self.alloc_from_memory(tag)?;
             assert_eq!(page.tag(), tag);
-            self.stress_strategy.retrieve(&mut page)?;
+            self.stress.retrieve(&mut page)?;
             return Ok(Some(page));
         }
 
         if self.contains(tag) {
-            panic!("page #{tag} is stored in the buffer but nowhere to be found");
+            panic!("page {tag} should be stored in the buffer pool but nowhere to be found");
         }
 
         Ok(None)
@@ -282,7 +284,8 @@ impl BufferPool {
                             .write(PageDescriptorInner::new(buf_id, *tag, content)),
                     );
 
-                    return Ok(PageDescriptor::new(ptr));
+                    self.add_in_memory(ptr);
+                    return Ok(PageDescriptor::from_raw_ptr(ptr));
                 }
             }
         }
@@ -290,7 +293,10 @@ impl BufferPool {
 
     /// Récupère un pointeur vers un tampon d'une page donnée, s'il existe.
     fn try_get_from_memory(&self, tag: &JarTag) -> Option<PageDescriptorPtr> {
-        self.in_memory.get(tag).map(|kv| kv.value().to_owned())
+        self
+            .in_memory
+            .get(tag)
+            .map(|kv| kv.value().to_owned())
     }
 
     /// Récupère un emplacement libre
@@ -299,7 +305,7 @@ impl BufferPool {
             .lock()
             .unwrap()
             .pop()
-            .map(|ptr| PageDescriptor::new(ptr))
+            .map(|ptr| PageDescriptor::from_raw_ptr(ptr))
             .map(|mut page| {
                 page.initialise(*tag);
                 page
@@ -318,7 +324,7 @@ impl BufferPool {
             .in_memory
             .iter()
             .map(|kv| kv.value().to_owned())
-            .map(|ptr| unsafe { PageDescriptor::new(ptr) })
+            .map(|ptr| unsafe { PageDescriptor::from_raw_ptr(ptr) })
             .filter(|page| !page.is_dirty() && page.get_ref_counter() <= 1)
             .sorted_by_key(|page| page.get_use_counter())
             .next();
@@ -335,14 +341,14 @@ impl BufferPool {
             .in_memory
             .iter()
             .map(|kv| kv.value().to_owned())
-            .map(|ptr| unsafe { PageDescriptor::new(ptr) })
+            .map(|ptr| unsafe { PageDescriptor::from_raw_ptr(ptr) })
             .filter(|page| page.get_ref_counter() <= 1)
             .sorted_by_key(|page| page.get_use_counter())
             .next();
 
         // on va décharger une page en mémoire
         if let Some(dischargeable) = maybe_dirty_unborrowed_page {
-            self.stress_strategy.discharge(&dischargeable)?;
+            self.stress.discharge(&dischargeable)?;
             unsafe {
                 self.remove_from_memory(dischargeable.get_raw_ptr());
             }
@@ -370,4 +376,17 @@ impl BufferPool {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use crate::tag::JarTag;
+
+    use super::{stress::stubs::StressStub, BufferPool, IBufferPool};
+
+    #[test]
+    pub fn test_alloc() {
+        let buf_pool = BufferPool::new(4_000_000, 4096, StressStub::default().into_boxed());
+        let tag = &JarTag::in_jar(100).in_page(90);
+        buf_pool.alloc(&tag).unwrap();
+
+        assert!(buf_pool.try_get_ref(tag).unwrap().is_some())
+    }
+}

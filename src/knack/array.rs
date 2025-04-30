@@ -1,5 +1,7 @@
 use std::ops::Deref;
 
+use itertools::Itertools;
+
 use crate::utils::Shift;
 
 use super::{
@@ -73,9 +75,33 @@ impl super::marker::Array<KnackKind> {
     }
 }
 
-pub struct ArrayRef([u8]);
+pub struct Array([u8]);
 
-impl ArrayRef {
+impl FromKnack for Array {
+    type Output = Self;
+
+    fn try_ref_from_knack(value: &Knack) -> super::result::KnackResult<&Self::Output> {
+        todo!()
+    }
+
+    fn try_mut_from_knack(value: &mut Knack) -> super::result::KnackResult<&mut Self::Output> {
+        todo!()
+    }
+}
+
+impl GetKnackKind for Array {
+    type Kind = KnackKind;
+
+    fn kind() -> &'static Self::Kind {
+        unsafe {
+            let raw: &'static [u8] = &[ANY_TYPE_ID | ARRAY_FLAG];
+            std::mem::transmute(raw)
+        }
+    }
+}
+
+
+impl Array {
     pub fn get<'array>(&'array self, index: &usize) -> Option<&'array Knack> {
         if let Sized::Fixed(desc) = self.element_kind().as_sized() {
             let offset = index * desc.outer_size();
@@ -97,18 +123,37 @@ impl ArrayRef {
     }
 }
 
-pub struct Array(Vec<KnackBuilder>);
+/// Constructeur d'une liste de trucs
+pub struct ArrayBuilder(Vec<KnackBuilder>);
 
-impl IntoKnackBuf for Array {
-    fn into_knack_buf(self) -> KnackBuf {
-        todo!()
+impl ArrayBuilder {
+    pub fn kinds(&self) -> Vec<&KnackKind> {
+        self.0.iter().map(|kb| kb.kind()).dedup().collect()
     }
-    
-    type Buf = KnackBuf;
 }
 
-impl FromKnack for Array {
-    type Output = ArrayRef;
+impl IntoKnackBuf for ArrayBuilder {
+    type Buf = KnackBuf;
+
+    fn into_knack_buf(self) -> KnackBuf {
+        let kinds = self.kinds();
+
+        // Il s'agit d'une liste d'un seul type
+        // de taille fixe,
+        // on peut avoir une structure simplifiée
+        if kinds.len() == 1 && kinds[0].try_as_fixed_sized().is_some() {
+            let element_kind = kinds[0].try_as_fixed_sized().unwrap();
+            
+        } else {
+
+        }
+
+        todo!("implement into_knack_buf for ArrayBuilder");
+    }
+}
+
+impl FromKnack for ArrayBuilder {
+    type Output = Array;
 
     fn try_ref_from_knack(value: &super::Knack) -> super::result::KnackResult<&Self::Output> {
         todo!()
@@ -121,18 +166,8 @@ impl FromKnack for Array {
     }
 }
 
-impl GetKnackKind for Array {
-    type Kind = KnackKind;
 
-    fn kind() -> &'static Self::Kind {
-        unsafe {
-            let raw: &'static [u8] = &[ANY_TYPE_ID | ARRAY_FLAG];
-            std::mem::transmute(raw)
-        }
-    }
-}
-
-impl Deref for Array {
+impl Deref for ArrayBuilder {
     type Target = [KnackBuilder];
 
     fn deref(&self) -> &Self::Target {

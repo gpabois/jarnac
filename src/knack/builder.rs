@@ -1,4 +1,3 @@
-use super::array::Array;
 use super::marker::kernel::{AsKernelRef, IntoKernel};
 
 use super::{
@@ -111,7 +110,7 @@ impl IntoKnackBuf for KnackBuilder {
     fn into_knack_buf(self) -> KnackBuf {
         match self {
             KnackBuilder::Document(document) => document.into_knack_buf(),
-            KnackBuilder::Array(array) => todo!("implement into knack buf for vec of knack builders"),
+            KnackBuilder::Array(_array) => todo!("implement into knack buf for vec of knack builders"),
             KnackBuilder::Str(string) => string.into_knack_buf(),
             KnackBuilder::Other(value) => value,
         }

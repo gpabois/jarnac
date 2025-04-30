@@ -3,7 +3,6 @@ use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 use std::{any::Any, borrow::Borrow, convert::Infallible, fmt::{Debug, Display}, io::Read, ops::{Deref, Range}};
 
 
-use crate::var::Var;
 
 use super::{
     document::{DocBuilder, KeyValue},
@@ -29,6 +28,7 @@ pub(super) const I128_TYPE_ID: KnackTypeId = 10;
 pub(super) const F32_TYPE_ID: KnackTypeId = 11;
 pub(super) const F64_TYPE_ID: KnackTypeId = 12;
 pub(super) const STR_TYPE_ID: KnackTypeId = 13;
+#[allow(dead_code)]
 pub(super) const FIXED_STR_TYPE_ID: KnackTypeId = 14;
 pub(super) const DOCUMENT_TYPE_ID: KnackTypeId = 15;
 pub(super) const KV_PAIR_TYPE_ID: KnackTypeId = 16;

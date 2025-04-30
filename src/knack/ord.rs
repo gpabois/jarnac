@@ -6,25 +6,10 @@ use super::{
         KnackKind, F32_TYPE_ID, F64_TYPE_ID, I128_TYPE_ID, I16_TYPE_ID, I32_TYPE_ID, I64_TYPE_ID,
         I8_TYPE_ID, U128_TYPE_ID, U16_TYPE_ID, U32_TYPE_ID, U64_TYPE_ID, U8_TYPE_ID,
     }, marker::{
-        kernel::{AsKernelMut, AsKernelRef},
-        Comparable, ComparableAndFixedSized,
+        kernel::AsKernelRef,
+        Comparable,
     }, Knack
 };
-
-impl<L> Comparable<L>
-where
-    L: AsKernelRef<Kernel = KnackKind>,
-{
-    /// offset-size : xx [111:offset] [111:size]
-    /// Size is a power of 2
-    /// Offset is a power of 2
-    pub(crate) fn new(base: L) -> Self
-    where
-        L: AsKernelMut<Kernel = KnackKind>,
-    {
-        Self(base)
-    }
-}
 
 impl Deref for Comparable<Knack> {
     type Target = Knack;

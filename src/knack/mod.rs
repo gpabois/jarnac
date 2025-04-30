@@ -19,7 +19,7 @@ pub mod result;
 
 use std::{convert::Infallible, ops::{Deref, DerefMut, Range}};
 
-use array::Array;
+use array::{Array, ArrayBuilder};
 use buf::KnackBuf;
 use builder::KnackBuilder;
 use document::DocBuilder;
@@ -35,7 +35,7 @@ use crate::page::{AsRefPageSlice, PageSlice};
 pub type KnackTypeId = u8;
 pub type KnackSize = u16;
 
-pub trait FromKnack: GetKnackKind {
+pub trait FromKnack {
     type Output: ?std::marker::Sized;
 
     fn ref_from_knack(value: &Knack) -> &Self::Output {

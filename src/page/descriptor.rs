@@ -15,7 +15,7 @@ pub struct PageDescriptor<'buf> {
 
 impl Clone for PageDescriptor<'_> {
     fn clone(&self) -> Self {
-        unsafe { Self::new(self.ptr) }
+        unsafe { Self::from_raw_ptr(self.ptr) }
     }
 }
 
@@ -37,7 +37,7 @@ impl Drop for PageDescriptor<'_> {
 
 impl PageDescriptor<'_> {
     /// Crée un nouveau descripteur de page.
-    pub(crate) unsafe fn new(data: NonNull<PageDescriptorInner>) -> Self {
+    pub(crate) unsafe fn from_raw_ptr(data: NonNull<PageDescriptorInner>) -> Self {
         let page = Self {
             _pht: PhantomData,
             ptr: data,

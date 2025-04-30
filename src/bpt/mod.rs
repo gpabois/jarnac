@@ -520,7 +520,7 @@ mod tests {
     use std::borrow::Borrow;
     use rand::Rng;
 
-    use crate::{knack::{marker::kernel::{AsKernelRef, IntoKernel}, U128}, pager::stub::StubPager, prelude::IntoKnackBuf};
+    use crate::{knack::marker::kernel::{AsKernelRef, IntoKernel}, pager::stub::StubPager, prelude::IntoKnackBuf};
 
     use super::{BPlusTree, BPlusTreeArgs};
 

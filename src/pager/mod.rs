@@ -8,7 +8,7 @@ use crate::buffer::{BufferPool, IBufferPool};
 use crate::free::{pop_free_page, push_free_page};
 use crate::page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageSize, RefPage};
 use crate::result::Result;
-use crate::tag::JarTag;
+use crate::tag::{JarId, JarTag};
 
 pub trait IPager<'pager>: IArena<Ref = RefPage<'pager>, RefMut = MutPage<'pager>> {
     /// Le tag (page_id: 0, cell_id: 0)
@@ -26,28 +26,28 @@ pub trait IPager<'pager>: IArena<Ref = RefPage<'pager>, RefMut = MutPage<'pager>
 /// Interface permettant de manipuler un pager
 pub struct Pager<'buf> {
     pool: &'buf BufferPool,
-    tag: JarTag
+    id: JarId
 }
 
 impl<'buf> Pager<'buf> {
     /// Créé un nouveau pager
-    pub fn new(tag: JarTag, pool: &'buf BufferPool) -> Result<Self> {
-        let pager = Self {tag, pool};
+    pub fn new(id: JarId, pool: &'buf BufferPool) -> Result<Self> {
+        let pager = Self {id, pool};
         
-        let mut desc = pool.alloc(&tag.in_page(0)).map(PagerDescriptor)?;
+        let mut desc = pool.alloc(&JarTag::in_jar(id).in_page(0)).map(PagerDescriptor)?;
         desc.new(pool.page_size());
 
         Ok(pager)
     }
 
     fn get_descriptor(&self) -> PagerDescriptor<RefPage<'buf>> {
-        self.borrow_element(&self.tag.in_page(0))
+        self.borrow_element(&self.tag().in_page(0))
         .map(PagerDescriptor)
         .unwrap()
     }
 
     fn get_mut_descriptor(&self) -> PagerDescriptor<MutPage<'buf>> {
-        self.borrow_mut_element(&self.tag.in_page(0))
+        self.borrow_mut_element(&self.tag().in_page(0))
         .map(PagerDescriptor)
         .unwrap()
     }
@@ -59,7 +59,7 @@ impl<'buf> Pager<'buf> {
 
 impl<'buf> IPager<'buf> for Pager<'buf> {
     fn tag(&self) -> JarTag {
-        self.tag
+        JarTag::in_jar(self.id)
     }
 
     fn len(&self) -> u64 {
@@ -77,7 +77,7 @@ impl<'buf> IArena for Pager<'buf> {
         } else {
             let pid = self.get_descriptor().as_description().len();
             self.get_mut_descriptor().as_mut_description().inc_len();
-            let tag = self.tag.in_page(pid);
+            let tag = self.tag().in_page(pid);
             self.pool.alloc(&tag)
         }
     }
@@ -224,7 +224,7 @@ pub mod stub {
         fn get_page_descriptor(&self, tag: &JarTag) -> Option<PageDescriptor<'buf>> {
             self.descriptors.borrow().get(tag).map(|desc| unsafe {
                 let ptr = NonNull::new(desc.get()).unwrap();
-                PageDescriptor::new(ptr)
+                PageDescriptor::from_raw_ptr(ptr)
             })
         }
     }
@@ -265,7 +265,7 @@ pub mod stub {
                 self.descriptors.borrow_mut().insert(tag, desc_box);
                 self.descriptor.borrow_mut().page_count += 1;
 
-                MutPage::try_new(PageDescriptor::new(desc_ptr))
+                MutPage::try_new(PageDescriptor::from_raw_ptr(desc_ptr))
             }
         }
 
@@ -295,3 +295,18 @@ pub mod stub {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use crate::{arena::IArena, buffer::{stress::stubs::StressStub, BufferPool}};
+
+    use super::Pager;
+
+    #[test]
+    fn test_new_element() {
+        let buf_pool = BufferPool::new(4_000_000, 4096, StressStub::default().into_boxed());
+        let pager = Pager::new(0, &buf_pool).unwrap();
+        let page = pager.new_element().unwrap();
+
+        assert!(buf_pool.contains(page.tag()));
+    }
+}

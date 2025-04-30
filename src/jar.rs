@@ -1,6 +1,6 @@
 use zerocopy::LE;
 
-use crate::{knack::{builder::KnackBuilder, document::{DocBuilder, DocCow, Document}}, page::PageId, pager::Pager, prelude::IntoKnackBuf, tag::JarId};
+use crate::{knack::document::{DocBuilder, DocCow}, page::PageId, pager::Pager, tag::JarId};
 
 pub struct Jar<'buf>(Pager<'buf>);
 

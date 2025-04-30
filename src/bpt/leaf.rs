@@ -1,5 +1,5 @@
 use std::{
-    io::Read, mem::transmute, ops::{Div, Index, IndexMut, Range, RangeFrom}
+    io::Read, mem::transmute, ops::{Div, Index, IndexMut, Range}
 };
 
 use zerocopy::FromBytes;

@@ -119,7 +119,7 @@ impl Document {
             .next()
     }
 
-    pub fn get<Path: IntoKnackPath>(&self, key: Path) -> &Knack {
+    pub fn get<Path: IntoKnackPath>(&self, _key: Path) -> &Knack {
         todo!()
     }
 

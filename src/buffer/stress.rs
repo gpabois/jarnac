@@ -117,6 +117,12 @@ pub mod stubs {
     /// Bouchon récupérant les décharges du cache
     pub struct StressStub(DashMap<JarTag, Vec<u8>>);
 
+    impl StressStub {
+        pub fn into_boxed(self) -> Box<dyn IBufferStressStrategy> {
+            Box::new(self)
+        }
+    }
+
     impl IBufferStressStrategy for StressStub {
         fn discharge(&self, src: &super::PageDescriptor<'_>) -> Result<()> {
             let mut buf = Vec::<u8>::new();

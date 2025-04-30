@@ -3,7 +3,7 @@ use std::{borrow::{Borrow, BorrowMut}, io::Write, ops::{Deref, DerefMut, Range}}
 use byteorder::WriteBytesExt;
 use zerocopy::IntoBytes;
 
-use super::marker::{kernel::{AsKernelMut, AsKernelRef, IntoKernel}, AsFixedSized, ComparableAndFixedSized, FixedSized};
+use super::marker::{kernel::{AsKernelMut, AsKernelRef, IntoKernel}, ComparableAndFixedSized, FixedSized};
 
 use super::{builder::KnackBuilder, document::KeyValue, kind::GetKnackKind, Knack};
 
