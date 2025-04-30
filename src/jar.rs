@@ -1,7 +1,8 @@
 use zerocopy::LE;
 
-use crate::{knack::{builder::KnackBuilder, document::{DocBuilder, DocCow, Document}}, page::PageId, prelude::IntoKnackBuf, tag::JarId};
+use crate::{knack::{builder::KnackBuilder, document::{DocBuilder, DocCow, Document}}, page::PageId, pager::Pager, prelude::IntoKnackBuf, tag::JarId};
 
+pub struct Jar<'buf>(Pager<'buf>);
 
 #[repr(C, packed)]
 /// Metadonnées d'un pot

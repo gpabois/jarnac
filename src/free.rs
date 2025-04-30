@@ -2,11 +2,9 @@ use zerocopy::TryFromBytes;
 use zerocopy_derive::*;
 
 use crate::{
-    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind},
-    pager::IPagerInternals,
-    result::Result,
-    tag::{DataArea, JarTag},
+    page::{AsMutPageSlice, AsRefPageSlice, InPage, OptionalPageId, PageId, PageKind}, pager::{IPager, PagerDescription}, result::Result, tag::{DataArea, JarTag}
 };
+
 
 pub struct FreePage<Page>(Page)
 where
@@ -67,8 +65,9 @@ impl DataArea for FreePageMeta {
 }
 
 /// Empile une nouvelle page libre dans la liste chaînée
-pub(super) fn push_free_page<'a, Pager: IPagerInternals<'a>>(
+pub(super) fn push_free_page<'buf, Pager: IPager<'buf>>(
     pager: &Pager,
+    desc: &mut PagerDescription,
     tag: &JarTag,
 ) -> Result<()> {
     let mut page = pager.borrow_mut_element(tag)?;
@@ -76,19 +75,22 @@ pub(super) fn push_free_page<'a, Pager: IPagerInternals<'a>>(
 
     FreePage::new(&mut page)?;
 
-    pager.set_free_head(Some(*tag));
+    desc.set_free_head(Some(tag.page_id));
 
     Ok(())
 }
 
 /// Dépile une page libre dans la liste chaînée
-pub(super) fn pop_free_page<'pager, Pager: IPagerInternals<'pager>>(
+pub(super) fn pop_free_page<'pager, Pager: IPager<'pager>>(
     pager: &Pager,
+    desc: &mut PagerDescription
 ) -> Result<Option<JarTag>> {
-    if let Some(next) = pager.get_free_head() {
+    
+    if let Some(next) = desc.get_free_head() {
+        let next = pager.tag().in_page(next);
         let page = pager.borrow_element(&next).and_then(FreePage::try_from)?;
         let new_head = page.get_next();
-        pager.set_free_head(new_head.map(|pid| pager.tag().in_page(pid)));
+        desc.set_free_head(new_head);
         return Ok(Some(next));
     }
 

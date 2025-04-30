@@ -1,46 +1,177 @@
+use std::mem::MaybeUninit;
+
+use zerocopy::FromBytes;
 use zerocopy_derive::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::arena::IArena;
-use crate::page::{MutPage, OptionalPageId, PageSize, RefPage};
+use crate::buffer::{BufferPool, IBufferPool};
+use crate::free::{pop_free_page, push_free_page};
+use crate::page::{AsMutPageSlice, AsRefPageSlice, MutPage, OptionalPageId, PageId, PageSize, RefPage};
+use crate::result::Result;
 use crate::tag::JarTag;
 
 pub trait IPager<'pager>: IArena<Ref = RefPage<'pager>, RefMut = MutPage<'pager>> {
+    /// Le tag (page_id: 0, cell_id: 0)
     fn tag(&self) -> JarTag;
+    
+    /// Nombre de pages stockées 
     fn len(&self) -> u64;
+    
+    /// Aucune page n'est stockée
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-pub(crate) trait IPagerInternals<'pager>: IPager<'pager> {
-    fn get_free_head(&self) -> Option<JarTag>;
-    fn set_free_head(&self, tag: Option<JarTag>);
+/// Interface permettant de manipuler un pager
+pub struct Pager<'buf> {
+    pool: &'buf BufferPool,
+    tag: JarTag
+}
+
+impl<'buf> Pager<'buf> {
+    /// Créé un nouveau pager
+    pub fn new(tag: JarTag, pool: &'buf BufferPool) -> Result<Self> {
+        let pager = Self {tag, pool};
+        
+        let mut desc = pool.alloc(&tag.in_page(0)).map(PagerDescriptor)?;
+        desc.new(pool.page_size());
+
+        Ok(pager)
+    }
+
+    fn get_descriptor(&self) -> PagerDescriptor<RefPage<'buf>> {
+        self.borrow_element(&self.tag.in_page(0))
+        .map(PagerDescriptor)
+        .unwrap()
+    }
+
+    fn get_mut_descriptor(&self) -> PagerDescriptor<MutPage<'buf>> {
+        self.borrow_mut_element(&self.tag.in_page(0))
+        .map(PagerDescriptor)
+        .unwrap()
+    }
+
+    fn load_page(&self, _tag: &JarTag) -> Result<()> {
+        todo!("implement page loading")
+    }
+}
+
+impl<'buf> IPager<'buf> for Pager<'buf> {
+    fn tag(&self) -> JarTag {
+        self.tag
+    }
+
+    fn len(&self) -> u64 {
+        self.get_descriptor().as_description().len()
+    }
+}
+
+impl<'buf> IArena for Pager<'buf> {
+    type Ref = RefPage<'buf>;
+    type RefMut = MutPage<'buf>;
+
+    fn new_element(&self) -> Result<Self::RefMut> {
+        if let Some(tag) = pop_free_page(self, self.get_mut_descriptor().as_mut_description())? {
+            self.borrow_mut_element(&tag)
+        } else {
+            let pid = self.get_descriptor().as_description().len();
+            self.get_mut_descriptor().as_mut_description().inc_len();
+            let tag = self.tag.in_page(pid);
+            self.pool.alloc(&tag)
+        }
+    }
+
+    fn delete_element(&self, tag: &JarTag) -> Result<()> {
+        push_free_page(
+            self, 
+            self.get_mut_descriptor().as_mut_description(), 
+            tag
+        )
+    }
+
+    fn try_borrow_element(&self, tag: &JarTag) -> Result<Option<Self::Ref>> {
+        if !self.pool.contains(tag) {
+            self.load_page(tag)?;
+        }
+
+        self.pool.try_get_ref(tag)
+    }
+
+    fn try_borrow_mut_element(&self, tag: &JarTag) -> crate::result::Result<Option<Self::RefMut>> {
+        if !self.pool.contains(tag) {
+            self.load_page(tag)?;
+        }
+
+        self.pool.try_get_mut(tag)
+    }
+
+    fn size_of(&self) -> usize {
+        usize::from(self.get_descriptor().as_description().page_size)
+    }
+}
+
+pub struct PagerDescriptor<Page>(Page) where Page: AsRefPageSlice;
+
+impl<Page> PagerDescriptor<Page> where Page: AsRefPageSlice {
+    pub fn as_description(&self) -> &PagerDescription {
+        PagerDescription::ref_from_bytes(&self.0.as_bytes()[0..size_of::<PagerDescription>()]).unwrap()
+    }
+}
+
+impl<Page> PagerDescriptor<Page> where Page: AsMutPageSlice {
+    pub fn new(&mut self, page_size: PageSize) {
+        self.as_uninit_description().write(PagerDescription::new(page_size));
+    }
+
+    pub fn as_mut_description(&mut self) -> &mut PagerDescription {
+        PagerDescription::mut_from_bytes(&mut self.0.as_mut_bytes()[0..size_of::<PagerDescription>()]).unwrap()
+    }
+
+    pub fn as_uninit_description(&mut self) -> &mut MaybeUninit<PagerDescription> {
+        unsafe {
+            std::mem::transmute(self.as_mut_description())
+        }
+    }
 }
 
 #[derive(FromBytes, IntoBytes, KnownLayout, Immutable)]
 #[repr(C, packed)]
-pub struct PagerDescriptor {
-    /// Nombre magique
-    magic_number: u16,
+pub struct PagerDescription {
     /// Taille d'une page
     pub page_size: PageSize,
     /// Nombre de pages stockées dans le pager
     pub page_count: u64,
     /// Début de la liste chaînée des pages libres
     pub free_head: OptionalPageId,
-    ///
+    /// Données réservées
     pub reserved: [u8; 100],
 }
 
-impl PagerDescriptor {
+impl PagerDescription {
     pub fn new(page_size: PageSize) -> Self {
         Self {
-            magic_number: 0xD00D,
             page_size,
             page_count: 0,
             free_head: None.into(),
             reserved: [0; 100],
         }
+    }
+
+    pub fn get_free_head(&self) -> Option<PageId> {
+        self.free_head.into()
+    }
+
+    pub fn set_free_head(&mut self, head: Option<PageId>) {
+        self.free_head = head.into();
+    }
+
+    pub fn inc_len(&mut self) {
+        self.page_count += 1
+    }
+
+    pub fn len(&self) -> u64 {
+        self.page_count
     }
 }
 
@@ -64,7 +195,7 @@ pub mod stub {
         utils::Flip,
     };
 
-    use super::{IPager, PagerDescriptor};
+    use super::{IPager, PagerDescription};
 
     pub fn new_stub_pager<'buf, const PAGE_SIZE: usize>() -> StubPager<'buf, PAGE_SIZE> {
         StubPager::new()
@@ -72,7 +203,7 @@ pub mod stub {
 
     /// Paginateur bouchonné.
     pub struct StubPager<'buf, const PAGE_SIZE: usize = 4096> {
-        descriptor: RefCell<PagerDescriptor>,
+        descriptor: RefCell<PagerDescription>,
         pages: RefCell<Vec<Pin<Box<UnsafeCell<[u8; PAGE_SIZE]>>>>>,
         descriptors: RefCell<HashMap<JarTag, Pin<Box<UnsafeCell<PageDescriptorInner>>>>>,
         _pht: PhantomData<&'buf ()>,
@@ -81,7 +212,7 @@ pub mod stub {
     impl<'buf, const PAGE_SIZE: usize> StubPager<'buf, PAGE_SIZE> {
         pub fn new() -> Self {
             Self {
-                descriptor: RefCell::new(PagerDescriptor::new(u16::try_from(PAGE_SIZE).unwrap())),
+                descriptor: RefCell::new(PagerDescription::new(u16::try_from(PAGE_SIZE).unwrap())),
                 pages: Default::default(),
                 descriptors: Default::default(),
                 _pht: PhantomData,

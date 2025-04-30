@@ -145,6 +145,10 @@ impl BufferPool {
         }
     }
 
+    pub fn page_size(&self) -> PageSize {
+        self.page_size
+    }
+
     /// Nombre de pages stockées
     pub fn len(&self) -> usize {
         self.stored.len()
